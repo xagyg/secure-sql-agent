@@ -1,0 +1,80 @@
+# Security policy: who may see what.
+#
+# Owned by security / IT, reviewed separately from the semantic model
+# (config/semantic/northwind/), which can never widen access. Loaded at startup by
+# sqlagent/controls/security_policy.py. Any problem in this file stops the
+# server from starting (fail closed).
+#
+# Rules:
+#   - Nothing is visible unless a role allows it ("default: deny").
+#   - allow / deny are patterns on "schema.table" (fnmatch: * ? [..]); a
+#     name without a schema is in "public". deny beats allow within a role.
+#   - deny_columns hides columns on tables the role allows. Its table keys
+#     may also be patterns ("erp.*": [tax_file_no]). A key the role's allow
+#     list doesn't cover is an error, so a typo can't leave a column visible.
+#   - With several roles, a table is visible if any role allows it, and a
+#     column on it is hidden only if every role that allows the table hides it.
+#   - Wildcards are expanded once at startup against the tables that exist,
+#     and every role's resolved tables are printed. Prefer explicit names:
+#     with "erp.*", a table added to the database later becomes visible at
+#     the next restart without anyone deciding it should be.
+#
+# This file defines roles. Who holds a role comes from the identity
+# provider at sign-in (group_roles below), not from a list of people here.
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - narrow, read-only view of Northwind
+    allow:
+      - public.customers
+      - public.orders
+      - public.order_details
+      - public.products
+      - public.categories
+      - public.suppliers
+      - public.employees
+      - public.shippers
+    deny_columns:
+      public.customers: [phone, fax, address]
+      public.employees: [home_phone]
+
+  # The local command-line REPL (main.py). The name also gives this role
+  # its affinity to the Sales domain (config/semantic/northwind/domains.yaml).
+  sales:
+    description: Local development - all of Northwind except personal phone numbers
+    allow:
+      - public.customers
+      - public.orders
+      - public.order_details
+      - public.products
+      - public.categories
+      - public.suppliers
+      - public.employees
+      - public.employee_territories
+      - public.region
+      - public.shippers
+      - public.territories
+      - public.customer_demographics
+      - public.customer_customer_demo
+    deny_columns:
+      public.customers: [phone]
+      public.employees: [home_phone]
+
+  # Example of wildcards on an ERP schema (not used by the demo):
+  #
+  # hr_analyst:
+  #   allow: ["semantic.employees_v", "erp.emp_*"]
+  #   deny:  ["erp.emp_salary_hist"]          # explicit deny beats the wildcard
+  #   deny_columns:
+  #     "erp.emp_*": [tax_file_no, bank_account]
+
+# Identity-provider group -> roles. The groups a user belongs to come from
+# their sign-in (e.g. token claims); SecurityPolicy.roles_for_groups()
+# turns them into roles.
+group_roles:
+  Northwind-Sales: [sales]
+  Public-Demo: [demo]

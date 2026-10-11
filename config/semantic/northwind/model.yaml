@@ -1,0 +1,125 @@
+# Semantic model for the Northwind demo database.
+#
+# What the data MEANS: labels, aliases, relationships and terms. This file
+# grants no access - that is config/security/northwind.yaml. Anything here that
+# names a table or column the role can't see is skipped at startup and
+# never shown to the model.
+#
+# All files in this folder are merged (domains are in domains.yaml). On an
+# ERP, split it further, e.g. one file per domain, so each area's owners
+# review their own vocabulary. See README.md "Semantic model".
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Discovery: which tables and views to read from the database.
+# Patterns are matched against "schema.table" (fnmatch: * and ?). A pattern
+# without a schema is in "public". "*.*" means every schema.
+# ---------------------------------------------------------------------------
+sources:
+  include: ["public.*"]
+  exclude: []
+  # Northwind has real foreign keys. Most ERPs don't: set this to false
+  # and declare the joins under "relationships" instead.
+  use_database_foreign_keys: true
+
+# Used when a question names no table, e.g. "show me Nancy's information".
+fallback_tables:
+  - customers
+  - orders
+  - order_details
+  - products
+  - categories
+  - suppliers
+  - employees
+
+# ---------------------------------------------------------------------------
+# Tables and columns.
+#
+#   label        The business name. Needed when the physical name is cryptic
+#                (cust_mst, F0101): shown to the model next to the real name
+#                and matched like an alias. Northwind's names are readable,
+#                so it has none.
+#   aliases      Other words people use. Multi-word aliases are joined with
+#                "_" ("sales_rep") and match only when every word is in the
+#                question. Plurals are handled, so the singular is enough.
+#   description  Optional; shown to the model.
+#
+# Keys are "schema.table" (a bare name is in public). Column keys are the
+# physical column names. Only list words the name doesn't already contain.
+# ---------------------------------------------------------------------------
+tables:
+  public.employees:
+    aliases: [staff, sales_rep, account_manager, salesperson, salespeople, worker]
+    columns:
+      # Also used by sql_diagnostics when the model writes "phone" for
+      # employees: it maps back to home_phone (restricted for most roles).
+      home_phone:  {aliases: [phone]}
+      hire_date:   {aliases: [start_date]}
+      birth_date:  {aliases: [birthday, dob, date_of_birth]}
+      reports_to:  {aliases: [manager, supervisor]}
+      postal_code: {aliases: [postcode, zip, zip_code]}
+
+  public.customers:
+    aliases: [client, buyer]
+    columns:
+      postal_code: {aliases: [postcode, zip, zip_code]}
+
+  public.suppliers:
+    aliases: [vendor, provider]
+    columns:
+      postal_code: {aliases: [postcode, zip, zip_code]}
+
+  public.order_details:
+    aliases: [line_item]
+
+  public.products:
+    aliases: [sku, stock, inventory, goods]
+    columns:
+      units_in_stock: {aliases: [stock_level, on_hand]}
+
+  public.shippers:
+    aliases: [carrier, courier]
+
+  public.orders:
+    columns:
+      required_date:    {aliases: [due_date]}
+      freight:          {aliases: [shipping_cost]}
+      ship_postal_code: {aliases: [postcode, zip, zip_code]}
+
+# ---------------------------------------------------------------------------
+# Relationships the database doesn't declare. Northwind has real foreign
+# keys, so none are needed. On an ERP without them, for example:
+#
+#   relationships:
+#     - from: erp.sales_order_line(company_id, order_no)
+#       to:   erp.sales_order_header(company_id, order_no)
+#       cardinality: many_to_one        # many_to_one | one_to_one | one_to_many
+#     - from: erp.sales_order_header(salesperson_id)
+#       to:   semantic.employees_v(employee_id)
+#
+# A relationship is used only when both tables and all its columns are
+# visible to the role.
+# ---------------------------------------------------------------------------
+relationships: []
+
+# ---------------------------------------------------------------------------
+# Terms: words that pick ROWS. Give either
+#   column:    a boolean column (best - define the rule once, in a view), or
+#   predicate: a SQL condition on the table's own columns.
+# The definition is shown to the model when the table is in the schema
+# context. A predicate is guidance for the model, not injected into the
+# SQL: "employees who are NOT terminated" must still work.
+# ---------------------------------------------------------------------------
+terms:
+  shipped_late:
+    table: public.orders
+    predicate: shipped_date > required_date
+    aliases: [late, late_shipment, late_delivery, delayed]
+    description: shipped after the date the customer required
+
+  low_stock:
+    table: public.products
+    predicate: units_in_stock <= reorder_level
+    aliases: [reorder, needs_reordering, running_low]
+    description: at or below the reorder level

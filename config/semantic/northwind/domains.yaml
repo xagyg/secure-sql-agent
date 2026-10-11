@@ -1,0 +1,94 @@
+# Domains of Discourse for the Northwind demo (see sqlagent/adaptive/domains.py
+# for how they are scored). A domain only changes WHERE the schema search
+# starts; it never changes what a user may see.
+#
+# Keys per domain:
+#   label            Name shown in logs and the UI.
+#   aliases          Words that name the domain, matched against the question
+#                    (What) and the [where=...] tag (Where). Multi-word
+#                    aliases are joined with "_".
+#   tables           Bare names (public schema) or "schema.table". A table may
+#                    be in several domains.
+#   roles            role -> affinity (0..1): how strongly holding that role
+#                    suggests this domain. Case-insensitive.
+#   where            Locations / screens / functions in this domain.
+#   hops             Relationship depth when expanding from the anchors (0-3).
+#                    The walk uses the full relationship graph, so it can
+#                    cross into other domains.
+#   fallback_tables  Used when the question names no table.
+#
+# Illustrative for Northwind. On an ERP each domain would be owned by the
+# people who know that area of the business.
+
+version: 1
+
+domains:
+  sales:
+    label: Sales
+    aliases: [sales, selling, revenue, customer_service, crm]
+    tables: [customers, orders, order_details, products, employees,
+             customer_demographics, customer_customer_demo]
+    roles: {sales: 1.0, sales_rep: 1.0, sales_manager: 1.0, finance: 0.4}
+    where: [order_entry, sales_order_entry, sales_workbench,
+            customer_enquiry, customer_maintenance]
+    hops: 1
+    fallback_tables: [customers, orders, order_details, employees, products]
+
+  purchasing:
+    label: Purchasing & Inventory
+    aliases: [purchasing, procurement, buying, inventory, stock_control, warehouse]
+    tables: [suppliers, products, categories]
+    roles: {buyer: 1.0, warehouse: 0.8, finance: 0.3}
+    where: [purchase_order_entry, supplier_maintenance, stock_control,
+            inventory_enquiry, product_maintenance]
+    hops: 1
+    fallback_tables: [suppliers, products, categories]
+
+  logistics:
+    label: Shipping & Logistics
+    aliases: [shipping, logistics, freight, dispatch, delivery]
+    tables: [shippers, orders]
+    roles: {dispatcher: 1.0, warehouse: 0.6}
+    where: [dispatch, shipping_desk, freight_enquiry]
+    hops: 1
+    fallback_tables: [shippers, orders]
+
+  hr:
+    label: Human Resources
+    aliases: [hr, human_resources, people, personnel]
+    tables: [employees, employee_territories, territories, region]
+    roles: {hr_officer: 1.0, sales_manager: 0.3}
+    where: [hr_enquiry, staff_records, employee_maintenance, territory_maintenance]
+    hops: 1
+    fallback_tables: [employees, employee_territories, territories, region]
+
+  finance:
+    label: Financials
+    aliases: [finance, financials, accounting, accounts, accounts_receivable,
+              invoicing, billing]
+    tables: [orders, order_details, customers]
+    roles: {finance: 1.0, ar_clerk: 1.0}
+    where: [financials_data_entry, invoice_entry, ar_enquiry, credit_control]
+    hops: 1
+    fallback_tables: [orders, order_details, customers]
+
+# Friendly names for role codes, so the [who=...] tag can use business words.
+# Keys are the canonical role names used in domains.*.roles.
+role_aliases:
+  buyer:         [purchasing_officer, procurement_officer, purchaser]
+  sales_rep:     [sales_representative, account_manager, salesperson]
+  sales_manager: [head_of_sales]
+  hr_officer:    [hr, human_resources, people_officer]
+  finance:       [accountant, finance_officer]
+  ar_clerk:      [accounts_receivable_clerk, credit_controller]
+  dispatcher:    [shipping_clerk, logistics_coordinator]
+  warehouse:     [warehouse_manager, storeman, stock_controller]
+
+# Function / screen codes mapped to location names used in domains.*.where,
+# so "[where=PUR0410]" works as well as "[where=purchase order entry]".
+function_aliases:
+  PUR0410: [purchase_order_entry]
+  SAL0100: [sales_order_entry]
+  HR0200:  [staff_records]
+  FIN0300: [financials_data_entry]
+  SHP0050: [dispatch]
