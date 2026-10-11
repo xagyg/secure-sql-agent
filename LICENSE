@@ -1,18 +1,57 @@
 Copyright (c) 2026 Brad Long. All rights reserved.
 
-Permission is granted to view this source code for evaluation and reference 
-purposes only. This permission does not grant any right to copy, modify, 
-adapt, distribute, sublicense, or incorporate the software, in whole or in 
-part, into any other software, product, or service without the prior written 
-permission of the copyright holder.
+1. PERMITTED VIEWING AND EVALUATION
 
-Any other use of this software requires prior written permission from the 
-copyright holder.
+Permission is granted to view this source code, and to download and run
+it locally, solely for personal evaluation and reference purposes. This
+permission does not grant any right to modify, adapt, distribute,
+sublicense, deploy, or incorporate the software, in whole or in part,
+into any other software, product, or service. Forking this repository
+on GitHub does not grant any additional rights under this licence.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT 
-PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY 
-CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+2. RESTRICTED USE
 
-For permission requests, contact: bradlongphd@gmail.com
+Any use of this software beyond that permitted in section 1 requires the
+prior written permission of the copyright holder. Permission may be
+granted for specific purposes and subject to conditions determined by
+the copyright holder. No permission is granted by implication, estoppel,
+or otherwise, except as required by applicable law.
+
+3. COPYRIGHT ACKNOWLEDGEMENT
+
+Unless otherwise agreed in writing, any use authorised by the copyright
+holder must include an acknowledgement substantially in the following
+form:
+
+    "Copyright (c) 2026 Brad Long. Used with permission."
+
+This acknowledgement must be retained in copies or derivative works of
+the software and, where reasonably practicable, included in associated
+documentation or other appropriate attribution notices.
+
+4. OWNERSHIP
+
+All rights, title, and interest in the software remain with the
+copyright holder, except for rights expressly granted in writing. No
+transfer of ownership is implied by permission to use the software.
+
+5. DISCLAIMER OF WARRANTY AND LIMITATION OF LIABILITY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL
+THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+6. GOVERNING LAW
+
+This licence is governed by the laws of Queensland, Australia.
+
+7. PERMISSION REQUESTS
+
+To request permission to use, copy, modify, distribute, or incorporate
+this software into another work, contact:
+
+    Brad Long
+    Email: bradlongphd@gmail.com
