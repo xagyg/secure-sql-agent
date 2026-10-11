@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite the paper below."
+title: "Secure SQL Agent"
+type: software
+authors:
+  - family-names: Long
+    given-names: Brad
+repository-code: "https://github.com/xagyg/secure-sql-agent"
+
+preferred-citation:
+  type: report
+  title: "Secure SQL Agent: Invariant-Bounded Conversational Access to Enterprise Data"
+  authors:
+    - family-names: Long
+      given-names: Brad
+  year: 2026
+  url: "https://github.com/xagyg/secure-sql-agent/blob/main/docs/secure-sql-agent-paper.pdf"
