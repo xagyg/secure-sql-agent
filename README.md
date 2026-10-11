@@ -138,10 +138,8 @@ tests/                     unit tests (no database or model needed)
 | `tests/`                                | Unit tests; `tests/fixtures.py` holds a static Northwind schema                         |
 | `api.py`                                | FastAPI wrapper for the public demo                                                     |
 | `main.py`                               | Interactive command-line REPL for local use                                             |
-| `index.html`                            | Browser front end for the public demo                                                   |
 | `run.ps1`                               | Starts the API or local REPL on Windows (assumes Ollama is already running)             |
 | `run_with_ollama.ps1`                   | Restarts Ollama with the recommended server settings, then runs `run.ps1`               |
-| `ngrok.ps1`                             | Publishes the API through an ngrok tunnel                                               |
 | `demo_enabled.flag`                     | Turns the public demo on (see below)                                                    |
 
 ---
@@ -289,21 +287,19 @@ No ngrok connection is required for local API testing.
 
 ## Public demo
 
-Once the API is working locally, it can optionally be exposed through ngrok for the public web demo.
+The live demo is a static web page (`index.html`, hosted on a separate website) that calls this API through an [ngrok](https://ngrok.com) tunnel to the local server:
 
-Start the API:
-
-```powershell
-.\run.ps1
+```text
+Browser (web page) → ngrok tunnel → FastAPI on 127.0.0.1:8000 → Ollama / PostgreSQL (local only)
 ```
 
-Then, in another PowerShell window:
+The web page and the tunnel script (`ngrok.ps1`) are specific to that deployment and are **not included in this repository**. The API supports this setup as-is, so to do the same with your own front end:
 
-```powershell
-.\ngrok.ps1
-```
+1. Start the API with `.\run.ps1`.
+2. In another window, open a tunnel to it, for example `ngrok http 8000`.
+3. Point your page at the ngrok URL and set `DEMO_ALLOWED_ORIGIN` in `run.ps1` to your page's origin. It is currently set to the original demo's site.
 
-The front end (`index.html`) is hosted separately and calls the API at the ngrok URL. CORS is limited to the origins in `DEMO_ALLOWED_ORIGIN`.
+`run.ps1` sets `DEMO_TRUSTED_PROXY_HOPS=1` because ngrok is the one proxy in front of the API; change it if you use a different setup. CORS is limited to the origins in `DEMO_ALLOWED_ORIGIN`.
 
 ### Endpoints
 
