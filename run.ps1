@@ -72,9 +72,14 @@ $env:DEMO_MAX_CONCURRENCY = "1"
 $env:DEMO_AGENT_TIMEOUT = "120"
 $env:DEMO_MAX_SLOT_HOLD = "150"
 
-# The page is served from longbrothers.net but the API is on the ngrok
-# domain, so the browser needs CORS permission for the site's origin.
-$env:DEMO_ALLOWED_ORIGIN = "https://longbrothers.net,https://www.longbrothers.net"
+# The page is served from a different site than the API (which is on the
+# ngrok domain), so the browser needs CORS permission for the site's origin.
+# Set your site's origin(s) once, comma-separated, e.g.:
+#     setx DEMO_ALLOWED_ORIGIN "https://example.com,https://www.example.com"
+# If unset, the API allows same-origin requests only (fine for local testing).
+if (-not $env:DEMO_ALLOWED_ORIGIN) {
+    $env:DEMO_ALLOWED_ORIGIN = [Environment]::GetEnvironmentVariable("DEMO_ALLOWED_ORIGIN", "User")
+}
 
 # ngrok is the one proxy in front of the API and adds X-Forwarded-For.
 $env:DEMO_TRUSTED_PROXY_HOPS = "1"

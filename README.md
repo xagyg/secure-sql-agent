@@ -297,7 +297,9 @@ The web page and the tunnel script (`ngrok.ps1`) are specific to that deployment
 
 1. Start the API with `.\run.ps1`.
 2. In another window, open a tunnel to it, for example `ngrok http 8000`.
-3. Point your page at the ngrok URL and set `DEMO_ALLOWED_ORIGIN` in `run.ps1` to your page's origin. It is currently set to the original demo's site.
+3. Point your page at the ngrok URL and set your page's origin once as a Windows user environment variable (then open a new PowerShell window):
+   `setx DEMO_ALLOWED_ORIGIN "https://example.com,https://www.example.com"`
+   If it's unset, the API allows same-origin requests only.
 
 `run.ps1` sets `DEMO_TRUSTED_PROXY_HOPS=1` because ngrok is the one proxy in front of the API; change it if you use a different setup. CORS is limited to the origins in `DEMO_ALLOWED_ORIGIN`.
 
