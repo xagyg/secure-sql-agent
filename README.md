@@ -485,3 +485,33 @@ This is a research demonstration, not a production system.
 * The in-memory rate limiter treats each IPv6 address separately, so a client with a large IPv6 range could spread requests across addresses.
 * The table and column names in `config/security/northwind.yaml` and `config/semantic/northwind/` assume snake_case Northwind naming. Check them against your schema (`\dt public.*`) before running. Startup logs every name it can't find.
 * The local REPL and API use the same underlying agent and security controls; the API adds the HTTP-specific rate limiting, concurrency, timeout and audit controls.
+
+---
+
+## Citing
+
+If you use this work, please cite the paper. If you used or built on the code itself, you can cite the software as well (or instead).
+
+**The paper** (also available from GitHub's *Cite this repository* button in the sidebar):
+
+```bibtex
+@misc{long2026securesqlagent,
+  author       = {Long, Brad},
+  title        = {Secure {SQL} Agent: Invariant-Bounded Conversational Access to Enterprise Data},
+  year         = {2026},
+  howpublished = {\url{https://github.com/xagyg/secure-sql-agent/blob/main/docs/secure-sql-agent-paper.pdf}}
+}
+```
+
+**The software:**
+
+```bibtex
+@software{long2026securesqlagent_software,
+  author = {Long, Brad},
+  title  = {Secure {SQL} Agent},
+  year   = {2026},
+  url    = {https://github.com/xagyg/secure-sql-agent}
+}
+```
+
+`@software` needs biblatex; with classic BibTeX, change it to `@misc` and replace `url = {...}` with `howpublished = {\url{...}}`.
