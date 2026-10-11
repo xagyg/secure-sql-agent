@@ -59,6 +59,16 @@ if (-not $env:PG_PASSWORD) {
 }
 
 # --- API limits ------------------------------------------------------------
+# Agent runs allowed at once. Keep this equal to OLLAMA_NUM_PARALLEL (1 by
+# default; see run_with_ollama.ps1 and the README). If it is higher, extra
+# runs are admitted but then wait inside Ollama, where the wait counts
+# against DEMO_AGENT_TIMEOUT and can end in a 504. At 1, the queue stays in
+# the API: a second visitor waits up to DEMO_QUEUE_WAIT seconds (default 5)
+# and then gets a prompt "busy" reply. To make visitors wait longer for a
+# turn, raise DEMO_QUEUE_WAIT rather than this. If you raise NUM_PARALLEL,
+# raise this to match, but note each extra Ollama slot uses more GPU memory
+# and can push the model partly onto the CPU, slowing every request.
+$env:DEMO_MAX_CONCURRENCY = "1"
 $env:DEMO_AGENT_TIMEOUT = "120"
 $env:DEMO_MAX_SLOT_HOLD = "150"
 
