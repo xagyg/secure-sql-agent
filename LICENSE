@@ -19,15 +19,23 @@ or otherwise, except as required by applicable law.
 
 3. COPYRIGHT ACKNOWLEDGEMENT
 
-Unless otherwise agreed in writing, any use authorised by the copyright
-holder must include an acknowledgement substantially in the following
-form:
+Unless otherwise agreed in writing, any use, copying, modification, or
+distribution of this software authorised by the copyright holder must
+include an acknowledgement substantially in one of the following forms,
+as appropriate:
+
+  For copies or redistribution of the original software:
 
     "Copyright (c) 2026 Brad Long. Used with permission."
 
-This acknowledgement must be retained in copies or derivative works of
-the software and, where reasonably practicable, included in associated
-documentation or other appropriate attribution notices.
+  For software that includes, or is derived from, this software:
+
+    "This work includes or is derived from software
+     Copyright (c) 2026 Brad Long. Used with permission."
+
+The applicable acknowledgement must be retained in copies and derivative
+works of the software and, where reasonably practicable, included in
+associated documentation or other appropriate attribution notices.
 
 4. OWNERSHIP
 
