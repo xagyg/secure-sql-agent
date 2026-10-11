@@ -366,7 +366,7 @@ setx OLLAMA_NUM_PARALLEL 1
 
 The server it starts keeps running after the script exits, and logs to `logs\ollama-serve*.log`. To go back to the tray app, stop it (`Get-Process ollama | Stop-Process`) and start Ollama as usual.
 
-Match `DEMO_MAX_CONCURRENCY` (below) to `OLLAMA_NUM_PARALLEL`. With the defaults (2 and 1), a second visitor's run is admitted by the API but waits inside Ollama, and because each run makes two or more model calls, that wait counts against `DEMO_AGENT_TIMEOUT`. Setting `DEMO_MAX_CONCURRENCY=1` keeps the queue in the API, where `DEMO_QUEUE_WAIT` gives a prompt "busy" reply instead of a timeout.
+Keep `DEMO_MAX_CONCURRENCY` (below) equal to `OLLAMA_NUM_PARALLEL`. Both default to 1, which keeps the queue in the API: a second visitor waits up to `DEMO_QUEUE_WAIT` seconds for a free slot, then gets a prompt "busy" reply. If the API allowed more runs than Ollama answers at once, the extra runs would be admitted but then wait inside Ollama, and because each run makes two or more model calls, that wait would count against `DEMO_AGENT_TIMEOUT` and could end in a timeout. To let visitors wait longer for a turn, raise `DEMO_QUEUE_WAIT`. If you raise `OLLAMA_NUM_PARALLEL`, raise `DEMO_MAX_CONCURRENCY` to match, bearing in mind that each extra slot uses more GPU memory.
 
 ### Demo API
 
@@ -377,7 +377,7 @@ Match `DEMO_MAX_CONCURRENCY` (below) to `OLLAMA_NUM_PARALLEL`. With the defaults
 | `DEMO_MAX_QUESTION_CHARS`               | `300`                     | Question length limit                                                                                |
 | `DEMO_IP_RPM` / `DEMO_IP_RPD`           | `10` / `150`              | Per-IP requests per minute / day                                                                     |
 | `DEMO_SESSION_RPM` / `DEMO_SESSION_RPD` | `4` / `40`                | Per-session requests per minute / day                                                                |
-| `DEMO_MAX_CONCURRENCY`                  | `2`                       | Agent runs (Ollama calls) in flight at once                                                          |
+| `DEMO_MAX_CONCURRENCY`                  | `1`                       | Agent runs (Ollama calls) in flight at once                                                          |
 | `DEMO_QUEUE_WAIT`                       | `5`                       | Seconds to wait for a free slot before replying "busy"                                               |
 | `DEMO_AGENT_TIMEOUT`                    | `25` (`120` in `run.ps1`) | Seconds before a request times out                                                                   |
 | `DEMO_MAX_SLOT_HOLD`                    | `90` (`150` in `run.ps1`) | Hard cap on how long a stuck run holds a slot                                                        |
