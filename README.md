@@ -48,7 +48,7 @@ What and Where are normalised to 0–1 across domains and weighted 0.45 / 0.35 /
 
 * **Clear winner** (≥ 0.25 and ≥ 0.15 ahead): search that domain.
 * **Too close to call**: search the top two domains together.
-* **No signal**: search the whole schema, exactly as before.
+* **No signal**: search the default domain.
 
 Inside the chosen domain, anchor tables are found by the usual table search, then the relationship walk follows the **full** foreign-key graph to the domain's hop limit, so it can cross into neighbouring domains. A table outside the domain that the question names in full is always kept. Vague questions ("show me Nancy's details") use the domain's own fallback tables.
 
