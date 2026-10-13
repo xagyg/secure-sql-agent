@@ -14,7 +14,7 @@ The demo runs against a PostgreSQL copy of the **Northwind** sample database.
 
 ```text
 Question
-  → Domain routing        Who / What / Where pick a Domain of Discourse (see below)
+  → Domain routing        picks where in the schema to start looking (Who / What / Where)
   → Schema discovery      only tables/columns the user is authorised to see are given to the model
   → Ollama (generate SQL)
   → Structural safety     single statement, read-only SELECT, no nested writes (AST-based, via sqlglot)
@@ -32,65 +32,7 @@ If the query fails, the agent diagnoses the database error (with schema-revealin
 
 Blocked requests return a short, generic message and rule label (for example `read-only`, `restricted data`, `not available`) that never names a table or column. The detailed reason stays in the server console and audit log.
 
-### Domains of Discourse
-
-The whole authorised schema is the agent's *Universe of Discourse*. `config/semantic/northwind/domains.yaml` defines named subsets of it, *Domains of Discourse* (Sales, Purchasing & Inventory, Shipping & Logistics, Human Resources, Financials), each with the words, roles and locations that point towards it.
-
-For every question the agent scores each domain on three signals and combines them:
-
-| Signal | Source | How it scores |
-| ------ | ------ | ------------- |
-| **What** | The question | Domain named in the question (`in purchasing`), plus how well the domain's best three tables match the question's words (top table counts in full, 2nd half, 3rd a quarter) |
-| **Where** | `[where=...]` at the end of the question | The most specific location phrase matched (`purchase order entry` beats `order entry`). Function codes such as `PUR0410` map to location names via `function_aliases` |
-| **Who** | The user's roles (or `[who=...]` in the demo) | The strongest role affinity for the domain. Friendly role names via `role_aliases` |
-
-What and Where are normalised to 0–1 across domains and weighted 0.45 / 0.35 / 0.20 (What / Where / Who). An absent signal's weight is shared among the others. The domain used on the previous turn gets a 0.10 bonus so follow-ups stay put.
-
-* **Clear winner** (≥ 0.25 and ≥ 0.15 ahead): search that domain.
-* **Too close to call**: search the top two domains together.
-* **No signal**: search the default domain.
-
-Inside the chosen domain, anchor tables are found by the usual table search, then the relationship walk follows the **full** foreign-key graph to the domain's hop limit, so it can cross into neighbouring domains. A table outside the domain that the question names in full is always kept. Vague questions ("show me Nancy's details") use the domain's own fallback tables.
-
-Examples:
-
-```text
-what was the last order?                                  → Sales + Financials (blended)
-what was the last order? [where=financials data entry]    → Financials
-what was the last order? [where=shipping desk]            → Shipping & Logistics
-show me the latest one [where=PUR0410]                    → Purchasing & Inventory
-what was the last order? [who=accountant]                 → Financials
-```
-
-Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog, so an unauthorised table is never in a domain, and every control below still runs on the generated SQL. The tags are stripped before the question reaches the LLM or the conversation history. `[who=...]` affects routing only and is controlled by `ALLOW_WHO_TAG`; turn it off outside the demo.
-
-The chosen domain is printed as a `[domain]` line in the console with each signal's score, and shown as a tag next to the answer in the browser. Run the routing tests (no database or model needed) with:
-
-```bash
-python -m unittest tests.test_domains -v
-```
-
-Or run every test in the project (also no database or model needed):
-
-```bash
-python -m unittest discover tests -v
-```
-
----
-
-## Defence in depth
-
-| Layer                | Where                                    | What it does                                                                                                                                                    |
-| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security policy      | `config/security/northwind.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
-| Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
-| Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
-| Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
-| Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
-| Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
-| Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
-| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps at 1,000 rows / 5 MB                                                                                                   |
-| Public API           | `api.py`                                 | Rate limits, concurrency gate, timeouts, input-length cap, audit log                                                                                            |
+Each security layer, and the file that implements it, is listed in the [Appendix: Defence in depth](#appendix-defence-in-depth).
 
 ---
 
@@ -228,6 +170,20 @@ Show me all columns for every customer.
 ```
 
 The important property is that the model does **not** enforce the security boundary. Generated SQL is parsed, authorised and rewritten by deterministic code before it can reach PostgreSQL.
+
+### Unit tests
+
+Run every test in the project (no database or model needed):
+
+```bash
+python -m unittest discover tests -v
+```
+
+Or just the domain routing tests:
+
+```bash
+python -m unittest tests.test_domains -v
+```
 
 ---
 
@@ -457,6 +413,26 @@ terms:                             # words that pick rows
 * **Terms** are shown to the model in a `TERMS` section and point routing at their table. A predicate may use only the table's own columns (no subqueries) and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
 * **Loading.** A structural error (unknown key, wrong type, a name defined twice) stops startup. A name that isn't in the database is skipped with a log line. No folder at all means an empty model: everything is discovered and there is no vocabulary.
 
+### Domains of Discourse (`config/semantic/<database>/domains.yaml`)
+
+Named subsets of the schema (Sales, Purchasing & Inventory, Shipping & Logistics, Human Resources, Financials for Northwind). For each question the agent picks the best-matching domain from three signals and starts its table search there:
+
+* **What:** the words in the question.
+* **Where:** the user's working context, such as the screen or function they asked from. In a real deployment the calling application supplies this.
+* **Who:** the user's roles, which come from their identity.
+
+The demo has no host application or sign-in, so it simulates the last two with tags at the end of a question:
+
+```text
+what was the last order? [where=shipping desk]   → Shipping & Logistics
+show me the latest one [where=PUR0410]           → Purchasing & Inventory (function code)
+what was the last order? [who=accountant]        → Financials
+```
+
+Tags are stripped before the question reaches the LLM. `[who=...]` only affects routing, never access, and is controlled by `ALLOW_WHO_TAG`; turn it off outside the demo.
+
+Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog and every control in the [Appendix](#appendix-defence-in-depth) still runs. The chosen domain is printed as a `[domain]` line in the console.
+
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
 | `SQLAGENT_SECURITY_FILE` | `config/security/northwind.yaml` | Security policy |
@@ -513,3 +489,20 @@ If you use this work, please cite the paper. If you used or built on the code it
 ```
 
 `@software` needs biblatex; with classic BibTeX, change it to `@misc` and replace `url = {...}` with `howpublished = {\url{...}}`.
+
+---
+
+## Appendix: Defence in depth
+
+| Layer                | Where                                    | What it does                                                                                                                                                    |
+| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security policy      | `config/security/northwind.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
+| Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
+| Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
+| Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
+| Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
+| Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
+| Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
+| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps at 1,000 rows / 5 MB                                                                                                   |
+| Public API           | `api.py`                                 | Rate limits, concurrency gate, timeouts, input-length cap, audit log                                                                                            |
+
