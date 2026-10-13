@@ -32,7 +32,23 @@ If the query fails, the agent diagnoses the database error (with schema-revealin
 
 Blocked requests return a short, generic message and rule label (for example `read-only`, `restricted data`, `not available`) that never names a table or column. The detailed reason stays in the server console and audit log.
 
-Each security layer, and the file that implements it, is listed in the [Appendix: Defence in depth](#appendix-defence-in-depth).
+---
+
+## Defence in depth
+
+Each layer, and the file that implements it:
+
+| Layer                | Where                                    | What it does                                                                                                                                                    |
+| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security policy      | `config/security/northwind.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
+| Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
+| Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
+| Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
+| Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
+| Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
+| Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
+| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps at 1,000 rows / 5 MB                                                                                                   |
+| Public API           | `api.py`                                 | Rate limits, concurrency gate, timeouts, input-length cap, audit log                                                                                            |
 
 ---
 
@@ -431,7 +447,7 @@ what was the last order? [who=accountant]        → Financials
 
 Tags are stripped before the question reaches the LLM. `[who=...]` only affects routing, never access, and is controlled by `ALLOW_WHO_TAG`; turn it off outside the demo.
 
-Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog and every control in the [Appendix](#appendix-defence-in-depth) still runs. The chosen domain is printed as a `[domain]` line in the console.
+Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog and every layer in [Defence in depth](#defence-in-depth) still runs. The chosen domain is printed as a `[domain]` line in the console.
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
@@ -489,20 +505,3 @@ If you use this work, please cite the paper. If you used or built on the code it
 ```
 
 `@software` needs biblatex; with classic BibTeX, change it to `@misc` and replace `url = {...}` with `howpublished = {\url{...}}`.
-
----
-
-## Appendix: Defence in depth
-
-| Layer                | Where                                    | What it does                                                                                                                                                    |
-| -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security policy      | `config/security/northwind.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
-| Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
-| Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
-| Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
-| Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
-| Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
-| Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
-| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps at 1,000 rows / 5 MB                                                                                                   |
-| Public API           | `api.py`                                 | Rate limits, concurrency gate, timeouts, input-length cap, audit log                                                                                            |
-
