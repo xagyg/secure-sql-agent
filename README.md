@@ -28,8 +28,6 @@ Question
   → Answer
 ```
 
-If the query fails, the agent diagnoses the database error (with schema-revealing `DETAIL`/`HINT` text removed) and asks the model for one corrected attempt, which goes through the same checks.
-
 Blocked requests return a short, generic message and rule label (for example `read-only`, `restricted data`, `not available`) that never names a table or column. The detailed reason stays in the server console and audit log.
 
 ---
