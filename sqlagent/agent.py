@@ -25,10 +25,16 @@ from sqlagent.controls.messages import (
     WITHHELD_NOTE,
     WITHHELD_RULE,
     block_rule,
+    clarify_message,
+    overview_message,
     rule_label,
     rule_message,
 )
-from sqlagent.controls.question_policy import follow_up_asks_restricted, mentions_denied_column
+from sqlagent.controls.question_policy import (
+    follow_up_asks_restricted,
+    is_overview_question,
+    mentions_denied_column,
+)
 from sqlagent.controls.result_policy import apply_result_policy
 from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
 from sqlagent.adaptive.llm import (
@@ -157,6 +163,22 @@ def _sanitize_sql_error_for_llm(error_text):
     ).strip()
 
 
+def _available_areas(catalog):
+    """
+    The Domain of Discourse labels this role can see (domains with at
+    least one authorised table). Labels are generic ("Sales"), never
+    table names, so they are safe to show the user.
+    """
+    resolver = getattr(catalog, "domain_resolver", None)
+    if resolver is None:
+        return []
+    return [
+        domain["label"]
+        for key, domain in resolver.domains.items()
+        if resolver.domain_tables.get(key)
+    ]
+
+
 def run_agent(question, catalog, history, security):
     """
     Complete agent cycle:
@@ -225,6 +247,20 @@ def run_agent(question, catalog, history, security):
 
     if not question:
         result = _result("Please add a question to go with the context tag.")
+        result["domain"] = None
+        return result
+
+    # ---------------------------------------------------------
+    # A question about the database itself ("What does Northwind
+    # have?"). Answered from the areas this role can see; no model
+    # call, no SQL.
+    # ---------------------------------------------------------
+    if is_overview_question(question):
+        print("\n[agent] Question about the database itself; "
+              "listing the available areas.")
+        message = overview_message(_available_areas(catalog))
+        print(f"\n[answer] {message}")
+        result = _result(message)
         result["domain"] = None
         return result
 
@@ -327,10 +363,23 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
 
     if output_kind == "write_request" and not looks_like_write_request(question):
         # The model used the write marker for a read-only question it
-        # couldn't answer (e.g. "what is joe's phone number?").
+        # couldn't answer: either it asks for something restricted
+        # ("what is joe's phone number?") or it was too vague ("what
+        # does Northwind have?"). The marker says nothing about which,
+        # so it is NOT reported as "not available / may be restricted":
+        # that blamed security for a vague question.
         print("\n[agent] Write marker without write intent; "
-              "treating as data not available.")
-        output_kind = "not_available"
+              "treating as an unclear question.")
+        output_kind = "unclear"
+
+    if output_kind == "unclear":
+        if mentions_denied_column(question, security):
+            print("\n[security] Question refers to a restricted column.")
+            return _policy_block("restricted_data")
+        print("\n[agent] Question too vague to answer with one query.")
+        message = clarify_message(_available_areas(catalog))
+        print(f"\n[answer] {message}")
+        return _result(message)
 
     if output_kind == "not_available":
         if mentions_denied_column(question, security):

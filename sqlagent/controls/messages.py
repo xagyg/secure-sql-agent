@@ -77,6 +77,61 @@ OFF_TOPIC_MESSAGE = (
 )
 
 
+# Example questions offered with the overview / clarification messages.
+EXAMPLE_QUESTIONS = (
+    "Which customers are in Germany?",
+    "Which products are low on stock?",
+    "Who are our top 5 customers by order value?",
+)
+
+
+def _areas_text(labels, conjunction="and"):
+    """'Sales, Purchasing & Inventory and Shipping & Logistics'. Labels
+    are the generic Domain of Discourse names, never table names."""
+    labels = [l for l in labels if l]
+    if not labels:
+        return ""
+    if len(labels) == 1:
+        return labels[0]
+    return ", ".join(labels[:-1]) + f" {conjunction} " + labels[-1]
+
+
+def _examples_text():
+    return ", ".join(f"\"{q}\"" for q in EXAMPLE_QUESTIONS[:2])
+
+
+def overview_message(labels):
+    """
+    Answer to a question about the database itself ("What does Northwind
+    have?", "What data can I ask about?"). Lists only the areas this
+    role can see, by their generic labels, so nothing restricted is
+    revealed. Not a block: no SQL is generated or run.
+    """
+    areas = _areas_text(labels)
+    if not areas:
+        return OFF_TOPIC_MESSAGE
+    return (
+        "Northwind is a sample trading company's database. The areas you "
+        f"can ask about are {areas}. For example: {_examples_text()}"
+    )
+
+
+def clarify_message(labels):
+    """
+    The model couldn't tell what the question was after (it said so, or
+    misused the read-only marker for a question with no write intent).
+    Previously this was reported as "not available ... may be restricted
+    for your role", which blamed security for what was really a vague
+    question, and made genuine access denials less credible.
+    """
+    areas = _areas_text(labels, "or")
+    hint = f" about {areas}" if areas else " about the data"
+    return (
+        "I'm not sure what you're asking, so nothing was run. Try a more "
+        f"specific question{hint}, for example: {_examples_text()}"
+    )
+
+
 # Shown after the answer when restricted columns were left out. Generic on
 # purpose, like BLOCK_RULES: it never names a table or column.
 WITHHELD_NOTE = (
