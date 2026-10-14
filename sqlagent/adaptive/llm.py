@@ -48,6 +48,12 @@ NOT_A_DATA_QUESTION_SENTINEL = "NOT_A_DATA_QUESTION"
 # two apart, so the user-facing message doesn't claim either one.
 DATA_NOT_AVAILABLE_SENTINEL = "DATA_NOT_AVAILABLE"
 
+# Returned when it is a data question but too vague to turn into one
+# query ("what does Northwind have?", "show me stuff"). Without it the
+# model guessed a filter, or used READ_ONLY_VIOLATION, and the user was
+# told the data might be restricted for their role.
+UNCLEAR_QUESTION_SENTINEL = "UNCLEAR_QUESTION"
+
 headers = {"ngrok-skip-browser-warning": "true"}
 
 if OLLAMA_USERNAME and OLLAMA_PASSWORD:
@@ -147,6 +153,15 @@ IMPORTANT:
   and nothing else:
   {DATA_NOT_AVAILABLE_SENTINEL}
   Use it ONLY when no listed table could hold the answer.
+* If the current message is about the data but too vague to answer
+  with one query (it names no record, measure or kind of thing, e.g.
+  "what does Northwind have?", "show me stuff", "what's going on?"),
+  do NOT guess a table or a filter. Return exactly this and nothing
+  else:
+  {UNCLEAR_QUESTION_SENTINEL}
+* "Northwind" (or "North Wind") is the name of the company and the
+  database. It is never a value to filter on: never write
+  WHERE ... = 'Northwind' or 'North Wind'.
 * If the message asks what is known about a person, company or other
   record ("what information do you have about X?", "tell me about X",
   "any further details on X?"), select ALL columns of the matching row
@@ -155,7 +170,9 @@ IMPORTANT:
   automatically, so never refuse these.
 * Only use {WRITE_REQUEST_SENTINEL} for requests to modify data. Never
   use it for questions that only read data, even when they can't be
-  answered.
+  answered: use {DATA_NOT_AVAILABLE_SENTINEL} or
+  {UNCLEAR_QUESTION_SENTINEL} for those.
+* Reply with ONE of: a SELECT statement, or a single marker. Never both.
 
 EXAMPLES (message -> correct reply)
   "delete all customers"             -> {WRITE_REQUEST_SENTINEL}
@@ -169,6 +186,10 @@ EXAMPLES (message -> correct reply)
   "what's the weather today?"        -> {NOT_A_DATA_QUESTION_SENTINEL}
   "what is Nancy's home phone?"      -> {DATA_NOT_AVAILABLE_SENTINEL}
     (only when no phone column is listed in the schema above)
+  "what does North wind have"        -> {UNCLEAR_QUESTION_SENTINEL}
+  "show me some data"                -> {UNCLEAR_QUESTION_SENTINEL}
+  "what products does Northwind sell?"
+                                     -> SELECT product_name FROM products
   "how many customers are there?"    -> SELECT COUNT(*) FROM customers
   "what information do you have about Jose?"
     (after an answer naming Jose Pavarotti, a customer contact)
@@ -302,6 +323,10 @@ def classify_model_output(text):
                        modify data (WRITE_REQUEST_SENTINEL).
       "off_topic"    - the model flagged the message as not a data
                        question (NOT_A_DATA_QUESTION_SENTINEL).
+      "not_available"- a data question the schema can't answer
+                       (DATA_NOT_AVAILABLE_SENTINEL).
+      "unclear"      - a data question too vague for one query
+                       (UNCLEAR_QUESTION_SENTINEL).
       "no_sql"       - anything else, e.g. the model answered or declined
                        in prose. Previously this fell through to the parser
                        and surfaced as "couldn't be validated".
@@ -315,8 +340,8 @@ def classify_model_output(text):
 
     and its SQL is not trusted to answer the question. The agent then
     picks the user-facing message itself (a read-only marker without
-    write intent becomes "not available", which becomes "restricted"
-    when the question names a restricted column). Previously the SQL
+    write intent becomes "restricted" when the question names a
+    restricted column, otherwise "unclear"). Previously the SQL
     won, failed to parse, and the user got "couldn't produce a valid
     query". Two DIFFERENT markers in one reply give "no_sql" rather than
     a guess. A marker mentioned mid-sentence doesn't count.
@@ -341,6 +366,7 @@ _MARKER_KINDS = {
     WRITE_REQUEST_SENTINEL: "write_request",
     NOT_A_DATA_QUESTION_SENTINEL: "off_topic",
     DATA_NOT_AVAILABLE_SENTINEL: "not_available",
+    UNCLEAR_QUESTION_SENTINEL: "unclear",
 }
 
 
