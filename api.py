@@ -197,6 +197,27 @@ class RateLimiter:
 rate_limiter = RateLimiter()
 
 
+# Which part of the stack an exception came from, by the module that
+# defines its class. Wrapped errors are followed through __cause__ /
+# __context__, so e.g. ollama's ConnectionError still reads as "ollama".
+_ERROR_SOURCES = (
+    (("ollama", "httpx", "httpcore"), "model (ollama)"),
+    (("psycopg2",), "database (postgres)"),
+)
+
+
+def _error_source(exc: BaseException) -> str:
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        root = type(exc).__module__.split(".")[0]
+        for modules, label in _ERROR_SOURCES:
+            if root in modules:
+                return label
+        exc = exc.__cause__ or exc.__context__
+    return "agent"
+
+
 class AgentBusy(Exception):
     """No agent slot became free within QUEUE_WAIT_SECONDS."""
 
@@ -240,17 +261,36 @@ class AgentGate:
 
         watchdog = asyncio.get_running_loop().call_later(self._max_hold, release)
 
+        abandoned = False  # set once the caller has given up waiting
+
         def on_done(finished: "asyncio.Future") -> None:
             watchdog.cancel()
             release()
-            if not finished.cancelled():
-                finished.exception()  # mark retrieved; the caller sees it if still waiting
+            if finished.cancelled():
+                return
+            exc = finished.exception()  # mark retrieved; the caller sees it if still waiting
+            if exc is not None and abandoned:
+                # The request already got its 504; one line, not a traceback.
+                print(
+                    f"[timeout] abandoned agent run failed in {_error_source(exc)}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
         task.add_done_callback(on_done)
 
-        # shield(): a timeout stops the wait but leaves the task running,
-        # so the slot is freed by on_done, not by the timeout.
-        return await asyncio.wait_for(asyncio.shield(task), timeout=run_timeout)
+        # asyncio.wait(), not wait_for(shield(task)): it stops waiting without
+        # cancelling the task, so the slot is freed by on_done. shield() would
+        # also work, but logs a full traceback ("exception in shielded future")
+        # when the abandoned run later fails, e.g. on an Ollama ReadTimeout.
+        try:
+            done, _ = await asyncio.wait({task}, timeout=run_timeout)
+        except asyncio.CancelledError:
+            abandoned = True  # client went away; let the thread finish quietly
+            raise
+        if not done:
+            abandoned = True
+            raise asyncio.TimeoutError()
+        return task.result()
 
 
 agent_gate = AgentGate(MAX_CONCURRENT_AGENT_RUNS, MAX_SLOT_HOLD_SECONDS)
@@ -474,6 +514,7 @@ async def ask(payload: AskRequest, request: Request):
         )
     except asyncio.TimeoutError:
         audit("timeout", id=request_id, session=payload.session_id)
+        print(f"[timeout] no answer within {AGENT_TIMEOUT_SECONDS}s — returned 504")
         raise HTTPException(
             status_code=504,
             detail=(
