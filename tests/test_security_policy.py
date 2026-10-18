@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 from sqlagent.controls.security_policy import (
+    DEFAULT_SECURITY_FILE,
     SecurityPolicy,
     SecurityPolicyError,
     load_security_policy,
@@ -60,7 +61,7 @@ ERP_POLICY = """
 class ShippedPolicy(unittest.TestCase):
 
     def test_demo_role_matches_previous_hard_coded_context(self):
-        context = load_security_policy().build_context(
+        context = load_security_policy(DEFAULT_SECURITY_FILE).build_context(
             "demo", {"demo"}, NORTHWIND_TABLES, log=False)
         self.assertEqual(context.tables, {
             "public.customers", "public.orders", "public.order_details",
@@ -74,7 +75,7 @@ class ShippedPolicy(unittest.TestCase):
         self.assertEqual(context.roles, {"demo"})
 
     def test_sales_role_matches_previous_main_py_context(self):
-        context = load_security_policy().build_context(
+        context = load_security_policy(DEFAULT_SECURITY_FILE).build_context(
             "brad", {"Sales"}, NORTHWIND_TABLES, log=False)
         self.assertEqual(context.tables, NORTHWIND_TABLES)
         self.assertEqual(context.denied_columns, {

@@ -1,0 +1,45 @@
+# Which databases the agent can run against, and how to reach each one.
+#
+# Pick one at startup:
+#     .\run.ps1 -db adventureworks          (or -local for the REPL)
+#     $env:SQLAGENT_DATABASE = "adventureworks"
+# With neither, "default" below is used. Loaded by sqlagent/databases.py;
+# any problem in this file, or an unknown name, stops startup.
+#
+# Each database brings its own configuration, found by its name:
+#     config/security/<name>.yaml     who may see what (required)
+#     config/semantic/<name>/         what the data means (optional)
+# Set security_file / semantic_path to point somewhere else.
+#
+# Passwords are never stored here. The agent reads the password from the
+# environment variable named by password_env (PG_PASSWORD by default),
+# which run.ps1 sets for you.
+
+version: 1
+default: northwind
+
+databases:
+  northwind:
+    description: Northwind sample database (about a dozen tables)
+    connection:
+      host: localhost
+      port: 5432
+      database: northwind
+      user: sqlagent_ro
+    # Roles from config/security/northwind.yaml.
+    repl_roles: [sales]      # main.py (SQLAGENT_ROLES overrides)
+    demo_roles: [demo]       # api.py, every anonymous visitor
+
+  # Next step: AdventureWorks (about 70 tables in sales, purchasing,
+  # production, humanresources and person schemas). Uncomment once the
+  # database is loaded and config/security/adventureworks.yaml exists.
+  #
+  # adventureworks:
+  #   description: AdventureWorks (multi-schema, ERP-like)
+  #   connection:
+  #     host: localhost
+  #     port: 5432
+  #     database: adventureworks
+  #     user: sqlagent_ro
+  #   repl_roles: [sales]
+  #   demo_roles: [demo]

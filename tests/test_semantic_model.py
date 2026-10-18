@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 from sqlagent.adaptive.semantic_model import (
+    DEFAULT_SEMANTIC_PATH,
     SemanticModelError,
     load_semantic_model,
     parse_endpoint,
@@ -114,7 +115,7 @@ def tables_in(schema):
 class Loading(unittest.TestCase):
 
     def test_shipped_model_loads(self):
-        model = load_semantic_model()
+        model = load_semantic_model(DEFAULT_SEMANTIC_PATH)
         self.assertIn("public.employees", model.tables)
         self.assertIn("sales", model.domains)
         self.assertEqual(model.include, ("public.*",))
