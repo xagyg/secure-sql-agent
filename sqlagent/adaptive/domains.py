@@ -24,6 +24,7 @@
 #
 # Everything here is deterministic. The LLM never chooses the domain.
 
+import fnmatch
 import re
 from dataclasses import dataclass, field
 
@@ -42,6 +43,11 @@ from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_
 #
 #   domains           key -> {label, aliases, tables, roles, where, hops,
 #                             fallback_tables}
+#
+# tables and fallback_tables take exact names or wildcard patterns
+# ("sales.*", "production.product*"). A pattern is expanded against the
+# security-filtered catalog in refresh(), so it only ever covers tables
+# the role is authorised for.
 #   role_aliases      role -> set of friendly names
 #   function_aliases  CODE -> set of location names
 
@@ -86,6 +92,12 @@ BLEND_MARGIN = 0.15       # top two closer than this: use both domains
 # affects ROUTING only - never authorisation, which always comes from the
 # authenticated SecurityContext. Turn off in any real deployment.
 ALLOW_WHO_TAG = True
+
+def _is_pattern(name):
+    """True for a domain table entry with wildcards ("sales.*",
+    "production.product*"), matched like sources.include."""
+    return any(ch in name for ch in "*?[")
+
 
 _TAG_PATTERN = re.compile(r"\[\s*(where|who)\s*=\s*([^\]\[]{1,80})\]", re.IGNORECASE)
 
@@ -207,6 +219,21 @@ class DomainResolver:
         def resolve(names, key, what):
             found = set()
             for table in names:
+                if _is_pattern(table):
+                    # "sales.*": every authorised table that matches.
+                    # Matched against the filtered catalog, so a pattern
+                    # can never reach a table the role can't see.
+                    pattern = full_table_name(table.strip()).lower()
+                    matches = {
+                        name for name in self.catalog.tables
+                        if fnmatch.fnmatchcase(name.lower(), pattern)
+                    }
+                    if matches:
+                        found |= matches
+                    else:
+                        print(f"[domain] {key}: {what} pattern '{pattern}' "
+                              "matches no available table - skipped")
+                    continue
                 match = self.catalog.resolve_table_name(table)
                 if match:
                     found.add(match)
