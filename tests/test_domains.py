@@ -9,7 +9,7 @@
 
 import unittest
 
-from sqlagent.adaptive.domains import parse_context_tags
+from sqlagent.adaptive.domains import DomainResolver, parse_context_tags
 from tests.fixtures import make_catalog
 
 
@@ -244,6 +244,86 @@ class Security(unittest.TestCase):
         catalog = make_catalog(exclude={"shippers", "orders"})
         _, d = route(catalog, "anything [where=shipping desk]")
         self.assertNotIn("logistics", d.domains)
+
+
+class WildcardTables(unittest.TestCase):
+    """Domain tables given as patterns ("sales.*"), for schema-per-domain
+    databases such as AdventureWorks."""
+
+    EXTRA = {
+        "sales.customer": ["customerid", "storeid"],
+        "sales.salesorderheader": ["salesorderid", "customerid"],
+        "sales.salesorderdetail": ["salesorderid", "productid"],
+        "purchasing.vendor": ["businessentityid", "name"],
+        "purchasing.purchaseorderheader": ["purchaseorderid", "vendorid"],
+        "production.product": ["productid", "name"],
+        "production.productcategory": ["productcategoryid", "name"],
+        "production.workorder": ["workorderid", "productid"],
+    }
+
+    @staticmethod
+    def domain(label, tables, fallback=()):
+        return {"label": label, "aliases": {label.lower()}, "tables": set(tables),
+                "roles": {}, "where": set(), "hops": 1,
+                "fallback_tables": tuple(fallback)}
+
+    def resolver(self, domains, exclude_extra=()):
+        catalog = make_catalog(extra_tables={
+            k: v for k, v in self.EXTRA.items() if k not in exclude_extra})
+        return DomainResolver(catalog, domains=domains, role_aliases={},
+                              function_aliases={})
+
+    def test_schema_wildcard_expands(self):
+        r = self.resolver({"sales": self.domain("Sales", ["sales.*"])})
+        self.assertEqual(r.domain_tables["sales"], {
+            "sales.customer", "sales.salesorderheader", "sales.salesorderdetail"})
+
+    def test_partial_wildcard(self):
+        r = self.resolver({"prod": self.domain("Production", ["production.product*"])})
+        self.assertEqual(r.domain_tables["prod"], {
+            "production.product", "production.productcategory"})
+
+    def test_wildcard_is_case_insensitive(self):
+        r = self.resolver({"sales": self.domain("Sales", ["SALES.*"])})
+        self.assertIn("sales.customer", r.domain_tables["sales"])
+
+    def test_wildcard_mixed_with_exact_names(self):
+        r = self.resolver({"buy": self.domain(
+            "Purchasing", ["purchasing.*", "production.product"])})
+        self.assertEqual(r.domain_tables["buy"], {
+            "purchasing.vendor", "purchasing.purchaseorderheader",
+            "production.product"})
+
+    def test_bare_wildcard_is_default_schema(self):
+        # "*" means public.*, like a bare table name.
+        r = self.resolver({"all": self.domain("All", ["*"])})
+        self.assertIn("public.orders", r.domain_tables["all"])
+        self.assertNotIn("sales.customer", r.domain_tables["all"])
+
+    def test_wildcard_fallback_tables(self):
+        r = self.resolver({"buy": self.domain(
+            "Purchasing", ["purchasing.*"], fallback=["purchasing.*"])})
+        self.assertEqual(r.domain_fallbacks["buy"], r.domain_tables["buy"])
+
+    def test_unmatched_wildcard_leaves_domain_ineligible(self):
+        r = self.resolver({"hr": self.domain("HR", ["humanresources.*"])})
+        self.assertEqual(r.domain_tables["hr"], set())
+        d = r.resolve("in hr, list departments")
+        self.assertNotIn("hr", d.domains)
+
+    def test_wildcard_never_adds_unauthorised_tables(self):
+        r = self.resolver({"sales": self.domain("Sales", ["sales.*"])},
+                          exclude_extra={"sales.customer"})
+        self.assertNotIn("sales.customer", r.domain_tables["sales"])
+        self.assertIn("sales.salesorderheader", r.domain_tables["sales"])
+
+    def test_wildcard_domain_routes(self):
+        r = self.resolver({
+            "sales": self.domain("Sales", ["sales.*"]),
+            "purchasing": self.domain("Purchasing", ["purchasing.*"]),
+        })
+        d = r.resolve("list each vendor")
+        self.assertEqual(d.domains, ["purchasing"])
 
 
 if __name__ == "__main__":
