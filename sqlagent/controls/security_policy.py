@@ -2,8 +2,8 @@
 # Author: Brad Long
 #
 # Security policy: who may see what, kept in YAML separately from the
-# semantic model (config/security/northwind.yaml by default, or
-# SQLAGENT_SECURITY_FILE). One file per database.
+# semantic model (config/security/<database>.yaml for the active database
+# in config/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per database.
 #
 #   roles        Per role: the tables/views it may query (allow), any it
 #                may not even though a wildcard matched (deny), and the
@@ -52,6 +52,7 @@ from sqlagent.config_files import (
     load_yaml,
 )
 from sqlagent.controls.security_context import SecurityContext
+from sqlagent.databases import DatabaseConfigError, active_database
 from sqlagent.controls.security_utils import full_table_name
 
 
@@ -249,11 +250,17 @@ def log_context(context):
 def load_security_policy(path=None):
     """
     Load the security policy. path defaults to SQLAGENT_SECURITY_FILE,
-    then config/security/northwind.yaml. Raises SecurityPolicyError if the file is
-    missing or invalid - there is no fallback.
+    then the active database's security file (config/databases.yaml).
+    Raises SecurityPolicyError if the file is missing or invalid - there
+    is no fallback.
     """
     if path is None:
-        path = os.environ.get("SQLAGENT_SECURITY_FILE") or DEFAULT_SECURITY_FILE
+        path = os.environ.get("SQLAGENT_SECURITY_FILE")
+    if path is None:
+        try:
+            path = active_database().security_file
+        except DatabaseConfigError as ex:
+            raise SecurityPolicyError(str(ex)) from ex
     path = Path(path)
 
     if not path.is_file():

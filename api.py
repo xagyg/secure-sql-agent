@@ -48,6 +48,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sqlagent.agent import run_agent
+from sqlagent.databases import active_database
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.controls.security_policy import load_security_policy
 from sqlagent.adaptive.schema_catalog import SchemaCatalog
@@ -111,7 +112,8 @@ AUDIT_LOG_PATH = os.environ.get("DEMO_AUDIT_LOG", "audit.log")
 
 
 # ==========================================================================
-# Demo SecurityContext — the "demo" role in config/security/northwind.yaml.
+# Demo SecurityContext — the active database's demo_roles (config/databases.yaml),
+# e.g. the "demo" role in config/security/northwind.yaml.
 #
 # Every anonymous demo visitor gets this same read-only, narrow view,
 # independent of the roles real authenticated users get (see main.py).
@@ -124,7 +126,7 @@ AUDIT_LOG_PATH = os.environ.get("DEMO_AUDIT_LOG", "audit.log")
 # the result printed) and fixed until restart.
 # ==========================================================================
 
-DEMO_ROLES = {"demo"}
+DEMO_ROLES = set(active_database().demo_roles)
 
 SECURITY_POLICY = load_security_policy()
 
@@ -416,6 +418,7 @@ async def load_schema_catalog():
     demo_catalog.refresh()
     audit(
         "startup",
+        database=active_database().name,
         tables=len(demo_catalog.tables),
         foreign_keys=len(demo_catalog.foreign_keys),
     )

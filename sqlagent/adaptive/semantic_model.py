@@ -2,7 +2,8 @@
 # Author: Brad Long
 #
 # The semantic model: what the data MEANS, kept in YAML next to the code
-# (config/semantic/northwind/ by default, or SQLAGENT_SEMANTIC_PATH).
+# (config/semantic/<database>/ for the active database in
+# config/databases.yaml, or SQLAGENT_SEMANTIC_PATH).
 # One folder per database.
 #
 # The database says what exists (tables, views, columns). The semantic
@@ -55,6 +56,7 @@ from sqlagent.config_files import (
     load_yaml,
 )
 from sqlagent.controls.security_utils import full_table_name
+from sqlagent.databases import DatabaseConfigError, active_database
 
 
 DEFAULT_SEMANTIC_PATH = CONFIG_DIR / "semantic" / DEFAULT_DATABASE
@@ -298,14 +300,20 @@ def _set_once(target, key, value, where, what):
 def load_semantic_model(path=None):
     """
     Load the semantic model from a YAML file or a folder of YAML files.
-    path defaults to SQLAGENT_SEMANTIC_PATH, then config/semantic/northwind/.
+    path defaults to SQLAGENT_SEMANTIC_PATH, then the active database's
+    semantic folder (config/databases.yaml).
     Only the files directly in the folder are read, so another
     database's folder alongside it is never merged in. A
     missing path gives an empty model (logged). Invalid files raise
     SemanticModelError.
     """
     if path is None:
-        path = os.environ.get("SQLAGENT_SEMANTIC_PATH") or DEFAULT_SEMANTIC_PATH
+        path = os.environ.get("SQLAGENT_SEMANTIC_PATH")
+    if path is None:
+        try:
+            path = active_database().semantic_path
+        except DatabaseConfigError as ex:
+            raise SemanticModelError(str(ex)) from ex
     path = Path(path)
 
     if not path.exists():

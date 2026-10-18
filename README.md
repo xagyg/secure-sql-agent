@@ -57,6 +57,7 @@ The code is grouped by IBAAM layer. Entry points stay at the root.
 ```
 api.py, main.py            entry points (public demo API, local REPL)
 config/                    one security file and one semantic folder per database
+  databases.yaml           which databases exist, how to connect, which roles to use
   security/
     northwind.yaml         who may see what (roles, allowed tables, denied columns)
   semantic/
@@ -89,6 +90,8 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/execution/sql_execution.py`   | PostgreSQL connection and the final execution gate                                      |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt                                    |
 | `sqlagent/config_files.py`              | Shared YAML loading (rejects duplicate keys)                                            |
+| `sqlagent/databases.py`                 | Loads `config/databases.yaml` and picks the active database (fails closed)              |
+| `config/databases.yaml`                 | Database profiles: connection, security file, semantic folder, REPL and demo roles      |
 | `config/security/northwind.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
 | `config/semantic/northwind/*.yaml`      | Semantic model: discovery, labels, aliases, relationships, terms, domains               |
 | `tests/`                                | Unit tests; `tests/fixtures.py` holds a static Northwind schema                         |
@@ -168,7 +171,7 @@ For example:
 > Show me the orders for customer ALFKI.
 ```
 
-The REPL builds its `SecurityContext` from the `sales` role in `config/security/northwind.yaml` (set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly.
+The REPL builds its `SecurityContext` from the active database's `repl_roles` (the `sales` role in `config/security/northwind.yaml` for Northwind; set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly.
 
 ### Test the security controls
 
@@ -293,14 +296,40 @@ Every anonymous visitor gets the same fixed, narrow context: the `demo` role in 
 
 ## Configuration
 
-`run.ps1` supplies the local configuration for Ollama and PostgreSQL. Secrets are not stored in the script.
+`run.ps1` supplies the local configuration for Ollama and selects the database. Secrets are not stored in the script or in any config file.
+
+### Switching databases
+
+Everything that belongs to one database hangs off its name in `config/databases.yaml`:
+
+```yaml
+default: northwind
+databases:
+  northwind:
+    connection: {host: localhost, port: 5432, database: northwind, user: sqlagent_ro}
+    repl_roles: [sales]      # main.py
+    demo_roles: [demo]       # api.py
+```
+
+By convention the name also finds `config/security/<name>.yaml` (required) and `config/semantic/<name>/` (optional); set `security_file` or `semantic_path` to use other locations. The password is read from the environment variable named by `password_env` (default `PG_PASSWORD`).
+
+Pick a database with `-db`, or set it once as a user variable:
+
+```powershell
+.\run.ps1 -local -db adventureworks
+setx SQLAGENT_DATABASE adventureworks
+```
+
+Without either, the file's `default` is used. Startup prints the choice (`[database] northwind: sqlagent_ro@localhost:5432/northwind ...`) and the API records it in the `startup` audit line. An unknown name, a missing security file or an invalid `databases.yaml` stops startup. `PG_HOST`, `PG_DATABASE` and the like are ignored, so a value left over in a PowerShell window can't pair one database's security policy with another database. The unit tests always use Northwind, whatever is selected.
+
+To add a database: load it, grant `sqlagent_ro` read access, add an entry to `databases.yaml`, then create `config/security/<name>.yaml` and (optionally) `config/semantic/<name>/`.
 
 ### Database and model
 
 | Variable                             | Example                               |
 | ------------------------------------ | ------------------------------------- |
-| `PG_HOST`, `PG_PORT`, `PG_DATABASE`  | `localhost`, `5432`, `northwind`      |
-| `PG_USER`, `PG_PASSWORD`             | `sqlagent_ro`, *(secret)*             |
+| `SQLAGENT_DATABASE`                  | `northwind` (a name in `config/databases.yaml`) |
+| `PG_PASSWORD`                        | *(secret)*                            |
 | `PG_STATEMENT_TIMEOUT_SECONDS`       | `10`                                  |
 | `OLLAMA_HOST`                        | `http://localhost:11434`              |
 | `OLLAMA_MODEL`                       | `qwen3-coder`                         |
@@ -335,6 +364,7 @@ setx OLLAMA_NUM_PARALLEL 1
 The server it starts keeps running after the script exits, and logs to `logs\ollama-serve*.log`. To go back to the tray app, stop it (`Get-Process ollama | Stop-Process`) and start Ollama as usual.
 
 Keep `DEMO_MAX_CONCURRENCY` (below) equal to `OLLAMA_NUM_PARALLEL`. Both default to 1, which keeps the queue in the API: a second visitor waits up to `DEMO_QUEUE_WAIT` seconds for a free slot, then gets a prompt "busy" reply. If the API allowed more runs than Ollama answers at once, the extra runs would be admitted but then wait inside Ollama, and because each run makes two or more model calls, that wait would count against `DEMO_AGENT_TIMEOUT` and could end in a timeout. To let visitors wait longer for a turn, raise `DEMO_QUEUE_WAIT`. If you raise `OLLAMA_NUM_PARALLEL`, raise `DEMO_MAX_CONCURRENCY` to match, bearing in mind that each extra slot uses more GPU memory.
+
 
 ### Demo API
 
@@ -449,10 +479,11 @@ Routing changes where the search *starts*, never what the user may *see*: domain
 
 | Variable | Default | Purpose |
 | -------- | ------- | ------- |
-| `SQLAGENT_SECURITY_FILE` | `config/security/northwind.yaml` | Security policy |
-| `SQLAGENT_SEMANTIC_PATH` | `config/semantic/northwind` | Semantic model (a folder or one file) |
+| `SQLAGENT_DATABASE` | `default` in `config/databases.yaml` | Which database profile to use |
+| `SQLAGENT_SECURITY_FILE` | the profile's security file | Security policy (overrides the profile) |
+| `SQLAGENT_SEMANTIC_PATH` | the profile's semantic folder | Semantic model, a folder or one file (overrides the profile) |
 | `SQLAGENT_USER` | `brad` | REPL only: the local user's name |
-| `SQLAGENT_ROLES` | `sales` | REPL only: comma-separated roles from the security file |
+| `SQLAGENT_ROLES` | the profile's `repl_roles` | REPL only: comma-separated roles from the security file |
 
 ---
 

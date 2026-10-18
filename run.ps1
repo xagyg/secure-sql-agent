@@ -3,9 +3,15 @@
 # Usage:
 #     .\run.ps1
 #     .\run.ps1 -local
+#     .\run.ps1 -local -db adventureworks
 #
 # Without -local, starts the FastAPI API on 127.0.0.1:8000.
 # With -local, starts the interactive command-line REPL.
+#
+# -db picks a database from config/databases.yaml, which holds each
+# database's connection and points at its security and semantic config.
+# Without -db: the SQLAGENT_DATABASE user variable (setx SQLAGENT_DATABASE
+# adventureworks) if set, otherwise the file's default.
 #
 # Secrets are NOT stored in this file. Set them once as Windows user
 # environment variables (then open a new PowerShell window):
@@ -24,7 +30,8 @@
 # already running.
 
 param(
-    [switch]$local
+    [switch]$local,
+    [string]$db
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,11 +43,18 @@ $env:OLLAMA_MODEL = "qwen3-coder"
 Remove-Item Env:OLLAMA_USERNAME -ErrorAction SilentlyContinue
 Remove-Item Env:OLLAMA_PASSWORD -ErrorAction SilentlyContinue
 
-# --- Postgres: local, read-only role (see WINDOWS-SETUP.md) --------------
-$env:PG_HOST     = "localhost"
-$env:PG_PORT     = "5432"
-$env:PG_DATABASE = "northwind"
-$env:PG_USER     = "sqlagent_ro"
+# --- Database: chosen by name, details in config/databases.yaml -----------
+# Set from -db or the user variable every time, so a value left in this
+# window by an earlier run can't select the wrong database.
+if ($db) {
+    $env:SQLAGENT_DATABASE = $db
+} else {
+    $env:SQLAGENT_DATABASE = [Environment]::GetEnvironmentVariable("SQLAGENT_DATABASE", "User")
+}
+# Host, port, database and user now come from config/databases.yaml; clear
+# any left over from older versions of this script so nothing suggests
+# otherwise.
+Remove-Item Env:PG_HOST, Env:PG_PORT, Env:PG_DATABASE, Env:PG_USER -ErrorAction SilentlyContinue
 # Password lookup, in order:
 #   1. already set in this window ($env:PG_PASSWORD = "...")
 #   2. saved with setx; read straight from the Windows user settings, so
@@ -50,7 +64,7 @@ if (-not $env:PG_PASSWORD) {
     $env:PG_PASSWORD = [Environment]::GetEnvironmentVariable("PG_PASSWORD", "User")
 }
 if (-not $env:PG_PASSWORD) {
-    $secure = Read-Host "Password for Postgres user sqlagent_ro" -AsSecureString
+    $secure = Read-Host "Postgres password (PG_PASSWORD)" -AsSecureString
     $env:PG_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
 }

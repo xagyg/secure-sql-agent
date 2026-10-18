@@ -12,19 +12,15 @@ import psycopg2
 import psycopg2.extras
 
 from sqlagent.controls.sql_policy import is_safe_sql
+from sqlagent.databases import active_database
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-# Standard libpq environment variables — psql, pg_dump etc. all respect
-# these too, so this matches the rest of the Postgres tooling ecosystem.
-
-PG_HOST = os.getenv("PG_HOST")
-PG_PORT = os.getenv("PG_PORT")
-PG_DATABASE = os.getenv("PG_DATABASE")
-PG_USER = os.getenv("PG_USER")
-PG_PASSWORD = os.getenv("PG_PASSWORD")
+# Host, port, database and user come from the active database's profile
+# in config/databases.yaml (sqlagent/databases.py); the password from the
+# environment variable that profile names (PG_PASSWORD by default).
 
 # Keep this comfortably below the API's request timeout (DEMO_AGENT_TIMEOUT
 # in api.py). When the API gives up on a request, the worker thread and its
@@ -39,12 +35,14 @@ QUERY_TIMEOUT_SECONDS = int(os.getenv("PG_STATEMENT_TIMEOUT_SECONDS", "10"))
 # ---------------------------------------------------------------------------
 
 def get_connection():
+    profile = active_database()
+    c = profile.connection
     return psycopg2.connect(
-        host=PG_HOST,
-        port=PG_PORT,
-        dbname=PG_DATABASE,
-        user=PG_USER,
-        password=PG_PASSWORD,
+        host=c.host,
+        port=c.port,
+        dbname=c.database,
+        user=c.user,
+        password=profile.password(),
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
@@ -149,7 +147,8 @@ def execute_sql_with_sources(sql):
     The AI execution path performs the additional authorisation checks
     in validate_agent_sql().
 
-    PG_USER should be a dedicated, least-privileged Postgres role with
+    The connecting user (connection.user in config/databases.yaml)
+    should be a dedicated, least-privileged Postgres role with
     SELECT-only grants on the authorised tables — REVOKE INSERT/UPDATE/
     DELETE from it. That gives you a second boundary enforced by the
     database itself, independent of is_safe_sql() below.

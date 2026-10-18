@@ -1,14 +1,13 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Ported to PostgreSQL. sql_execution.get_connection() now connects via
-# psycopg2 using PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD env vars
-# (see sql_execution.py) instead of the SQL Server connection string.
-#
-# Who may see what is the role named by SQLAGENT_ROLES (default "sales")
-# in config/security/northwind.yaml; what the data means is
-# config/semantic/northwind/. Check
-# the table and column names there against your schema first:
+# Runs against the database chosen in config/databases.yaml
+# (SQLAGENT_DATABASE, or the file's default; .\run.ps1 -local -db <name>).
+# That profile gives the connection, the security file
+# (config/security/<database>.yaml) and the semantic model
+# (config/semantic/<database>/). The REPL's roles are the profile's
+# repl_roles unless SQLAGENT_ROLES is set. Check the table and column
+# names in those files against your schema first:
 #     psql -c '\dt public.*'
 #     psql -c '\d public.customers'
 
@@ -17,6 +16,7 @@ import os
 import sys
 
 from sqlagent.agent import run_agent
+from sqlagent.databases import DatabaseConfigError, active_database
 from sqlagent.controls.security_policy import (
     SecurityPolicyError,
     load_security_policy,
@@ -35,13 +35,15 @@ conversation_history = []
 
 # The local user and their roles. In a real deployment both come from
 # the user's sign-in (identity-provider groups -> roles, see group_roles
-# in config/security/northwind.yaml); here they are set with environment variables.
+# in config/security/<database>.yaml); here the user is SQLAGENT_USER and
+# the roles are SQLAGENT_ROLES, else the database profile's repl_roles.
 LOCAL_USER = os.environ.get("SQLAGENT_USER", "brad")
-LOCAL_ROLES = {
-    role.strip()
-    for role in os.environ.get("SQLAGENT_ROLES", "sales").split(",")
-    if role.strip()
-}
+
+
+def local_roles(profile):
+    override = os.environ.get("SQLAGENT_ROLES", "")
+    roles = {role.strip() for role in override.split(",") if role.strip()}
+    return roles or set(profile.repl_roles)
 
 
 # ---------------------------------------------------------------------------
@@ -68,15 +70,16 @@ def main():
 
     # Configuration errors stop here, before the database is touched.
     try:
+        profile = active_database()
         policy = load_security_policy()
         semantic = load_semantic_model()
-    except (SecurityPolicyError, SemanticModelError) as ex:
+    except (DatabaseConfigError, SecurityPolicyError, SemanticModelError) as ex:
         print(f"Configuration error: {ex}")
         sys.exit(1)
 
     try:
         security = policy.build_context(
-            LOCAL_USER, LOCAL_ROLES, list_tables(get_connection))
+            LOCAL_USER, local_roles(profile), list_tables(get_connection))
         catalog = SchemaCatalog(get_connection, security, semantic=semantic)
         catalog.refresh()
     except SecurityPolicyError as ex:

@@ -45,6 +45,12 @@
 .EXAMPLE
     .\run_with_ollama.ps1 -local
     Starts the command-line REPL instead of the API (passed on to run.ps1).
+
+.PARAMETER db
+    A database name from config/databases.yaml (passed on to run.ps1).
+
+.EXAMPLE
+    .\run_with_ollama.ps1 -local -db adventureworks
 #>
 
 [CmdletBinding()]
@@ -53,7 +59,8 @@ param(
     [int]    $MaxLoadedModels = 1,
     [string] $KeepAlive       = "-1",
     [int]    $StartupTimeoutSeconds = 30,
-    [switch] $local
+    [switch] $local,
+    [string] $db
 )
 
 $ErrorActionPreference = "Stop"
@@ -116,4 +123,4 @@ $runScript = Join-Path $PSScriptRoot "run.ps1"
 if (-not (Test-Path $runScript)) {
     Write-Error "Could not find $runScript."
 }
-& $runScript -local:$local
+& $runScript -local:$local -db $db
