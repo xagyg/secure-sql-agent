@@ -1,0 +1,791 @@
+# Semantic model for AdventureWorks (Postgres port by Lorin Thwaits).
+#
+# What the data MEANS: labels, aliases, relationships and terms. This file
+# grants no access - that is config/adventureworks/security.yaml. Anything
+# here that names a table or column the role can't see is skipped at
+# startup and never shown to the model.
+#
+# All files in this folder are merged (domains are in domains.yaml).
+#
+# Things about this database worth knowing:
+#   - Postgres folded every name to lower case, so names run together
+#     (salesorderheader, orderdate). The schema search splits names on "_"
+#     and CamelCase only, so every table gets a label below; otherwise
+#     "sales order" would not find salesorderheader.
+#   - The port dropped SQL Server's computed columns:
+#     salesorderdetail.linetotal, salesorderheader.salesordernumber,
+#     customer.accountnumber, purchaseorderdetail.linetotal / stockedqty,
+#     purchaseorderheader.totaldue, workorder.stockedqty. The descriptions
+#     say how to compute them.
+#   - Person, employee, store and vendor all share one id,
+#     businessentityid, issued by person.businessentity.
+#   - The fiscal year starts on 1 July.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Discovery
+# ---------------------------------------------------------------------------
+sources:
+  # The five business schemas. Leaves out the pe / hr / pr / pu / sa
+  # convenience views, which repeat every base table under a short name.
+  include:
+    - "person.*"
+    - "humanresources.*"
+    - "production.*"
+    - "purchasing.*"
+    - "sales.*"
+  exclude:
+    # Secrets and card data (granted to no role either).
+    - person.password
+    - sales.creditcard
+    - sales.personcreditcard
+    # Binary and XML payloads: photos, documents, diagrams, resumes.
+    - production.productphoto
+    - production.productproductphoto
+    - production.document
+    - production.productdocument
+    - production.illustration
+    - production.productmodelillustration
+    - humanresources.jobcandidate
+    - humanresources.vjobcandidate*
+    - production.vproductmodel*
+    # Views that join personal contact or survey details back in.
+    - person.vadditionalcontactinfo
+    - humanresources.vemployee
+    - sales.vindividualcustomer
+    - sales.vpersondemographics
+    - sales.vsalesperson
+    - sales.vstorewithcontacts
+    - purchasing.vvendorwithcontacts
+    # Crosstab with quoted mixed-case columns ("2012", "FullName"); the
+    # model does better with the plain data view behind it.
+    - sales.vsalespersonsalesbyfiscalyears
+  # The port declares real foreign keys, so most joins come from the
+  # database. The few it can't express are under "relationships".
+  use_database_foreign_keys: true
+
+# Used when a question names no table.
+fallback_tables:
+  - sales.salesorderheader
+  - sales.salesorderdetail
+  - sales.customer
+  - sales.store
+  - production.product
+  - person.person
+
+# ---------------------------------------------------------------------------
+# Tables and columns
+# ---------------------------------------------------------------------------
+tables:
+
+  # -- person ------------------------------------------------------------
+
+  person.person:
+    label: person
+    aliases: [people, contact, individual, name]
+    description: >-
+      Every human being: employees, individual (retail) customers, store
+      and vendor contacts. Names for customers (via customer.personid),
+      employees and salespeople (via businessentityid) come from here.
+    columns:
+      firstname:  {label: first name, aliases: [given_name, forename]}
+      middlename: {label: middle name}
+      lastname:   {label: last name, aliases: [surname, family_name]}
+      persontype:
+        label: person type
+        description: >-
+          SC = store contact, IN = individual (retail) customer,
+          SP = salesperson, EM = employee (non-sales), VC = vendor contact,
+          GC = general contact
+      emailpromotion:
+        label: email promotion
+        aliases: [marketing_opt_in, opt_in]
+        description: >-
+          0 = no promotional e-mail, 1 = AdventureWorks only,
+          2 = AdventureWorks and partners
+      namestyle: {description: "false = western order (first last), true = eastern"}
+
+  person.emailaddress:
+    label: email address
+    aliases: [email, e_mail]
+    columns:
+      emailaddress: {label: email address, aliases: [email]}
+
+  person.personphone:
+    label: phone number
+    aliases: [phone, telephone]
+    columns:
+      phonenumber: {label: phone number, aliases: [phone, telephone]}
+
+  person.phonenumbertype:
+    label: phone number type
+    description: Cell, Home or Work
+
+  person.address:
+    label: address
+    aliases: [street_address, location]
+    columns:
+      addressline1: {label: address line 1, aliases: [street]}
+      addressline2: {label: address line 2}
+      postalcode:   {label: postal code, aliases: [postcode, zip, zip_code]}
+      stateprovinceid: {label: state province id}
+
+  person.addresstype:
+    label: address type
+    description: Billing, Home, Main Office, Primary, Shipping, Archive
+
+  person.businessentityaddress:
+    label: business entity address
+    description: >-
+      Links a person, store or vendor (businessentityid) to its addresses
+      and the address type.
+
+  person.businessentitycontact:
+    label: business entity contact
+    description: >-
+      The people (personid) who are contacts for a store or vendor
+      (businessentityid), with their contact type.
+
+  person.contacttype:
+    label: contact type
+    description: e.g. Owner, Purchasing Manager, Sales Representative
+
+  person.businessentity:
+    label: business entity
+    description: >-
+      Issues the shared id (businessentityid) used by person, employee,
+      store and vendor. Holds nothing else useful.
+
+  person.stateprovince:
+    label: state province
+    aliases: [state, province, region]
+    columns:
+      stateprovincecode: {label: state province code, aliases: [state_code]}
+      countryregioncode: {label: country region code, aliases: [country_code]}
+
+  person.countryregion:
+    label: country region
+    aliases: [country, nation]
+    columns:
+      countryregioncode: {label: country region code, aliases: [country_code, iso_code]}
+
+  # -- human resources ---------------------------------------------------
+
+  humanresources.employee:
+    label: employee
+    aliases: [staff, worker, personnel, team_member]
+    description: >-
+      One row per employee; businessentityid is also the person id, so join
+      to person.person for the name. organizationnode is the org-chart path
+      (e.g. /1/1/); depth = number of "/" minus 1.
+    columns:
+      jobtitle:       {label: job title, aliases: [title, position, role]}
+      hiredate:       {label: hire date, aliases: [start_date, joined]}
+      birthdate:      {label: birth date, aliases: [birthday, dob, date_of_birth]}
+      maritalstatus:  {label: marital status, description: "M = married, S = single"}
+      gender:         {description: "M = male, F = female"}
+      salariedflag:   {label: salaried flag, description: "true = salaried, false = hourly"}
+      vacationhours:  {label: vacation hours, aliases: [annual_leave, holiday]}
+      sickleavehours: {label: sick leave hours, aliases: [sick_leave]}
+      currentflag:    {label: current flag, description: "true = active employee"}
+      nationalidnumber: {label: national id number, aliases: [ssn, tax_file_number]}
+      loginid:        {label: login id, aliases: [username, network_login]}
+      organizationnode: {label: organization node, aliases: [org_chart, reports_to, manager]}
+
+  humanresources.department:
+    label: department
+    aliases: [dept, team, business_unit]
+    columns:
+      groupname: {label: group name, aliases: [division]}
+
+  humanresources.employeedepartmenthistory:
+    label: employee department history
+    aliases: [transfer, department_assignment]
+    description: >-
+      Which department and shift each employee is in, over time.
+      enddate IS NULL is the current assignment.
+    columns:
+      startdate: {label: start date}
+      enddate:   {label: end date}
+
+  humanresources.employeepayhistory:
+    label: employee pay history
+    aliases: [pay, salary, wage, pay_rate, compensation]
+    description: >-
+      Pay rate changes. rate is hourly; payfrequency 1 = monthly,
+      2 = biweekly. The current rate is the row with the latest
+      ratechangedate for the employee.
+    columns:
+      ratechangedate: {label: rate change date}
+      rate:           {aliases: [hourly_rate, pay_rate]}
+      payfrequency:   {label: pay frequency}
+
+  humanresources.shift:
+    label: shift
+    description: Day, Evening or Night
+    columns:
+      starttime: {label: start time}
+      endtime:   {label: end time}
+
+  humanresources.vemployeedepartment:
+    label: employee department
+    aliases: [staff_list, who_works_where]
+    description: Each current employee with name, job title, department and group.
+
+  humanresources.vemployeedepartmenthistory:
+    label: employee department history view
+    description: Every department and shift assignment with the employee's name.
+
+  # -- production --------------------------------------------------------
+
+  production.product:
+    label: product
+    aliases: [item, sku, part, component, bike, bicycle, goods]
+    description: >-
+      Products sold (finishedgoodsflag = true) and parts used to make them.
+      Category is product -> productsubcategory -> productcategory.
+    columns:
+      productnumber:     {label: product number, aliases: [sku, part_number]}
+      listprice:         {label: list price, aliases: [price, selling_price, retail_price]}
+      standardcost:      {label: standard cost, aliases: [cost, unit_cost]}
+      safetystocklevel:  {label: safety stock level, aliases: [minimum_stock]}
+      reorderpoint:      {label: reorder point, aliases: [reorder_level]}
+      daystomanufacture: {label: days to manufacture, aliases: [lead_time, build_time]}
+      makeflag:          {label: make flag, description: "true = made in-house, false = purchased"}
+      finishedgoodsflag: {label: finished goods flag, description: "true = salable"}
+      productline:       {label: product line, description: "R = Road, M = Mountain, T = Touring, S = Standard"}
+      class:             {description: "H = high, M = medium, L = low"}
+      style:             {description: "W = womens, M = mens, U = universal"}
+      sizeunitmeasurecode:   {label: size unit measure code}
+      weightunitmeasurecode: {label: weight unit measure code}
+      sellstartdate:     {label: sell start date, aliases: [launch_date]}
+      sellenddate:       {label: sell end date}
+      discontinueddate:  {label: discontinued date}
+
+  production.productcategory:
+    label: product category
+    aliases: [category]
+    description: Bikes, Components, Clothing, Accessories
+
+  production.productsubcategory:
+    label: product subcategory
+    aliases: [subcategory]
+    description: e.g. Mountain Bikes, Road Frames, Helmets, Jerseys
+
+  production.productmodel:
+    label: product model
+    aliases: [model]
+
+  production.productdescription:
+    label: product description
+    description: Catalogue text, in several languages (see productmodelproductdescriptionculture).
+
+  production.productmodelproductdescriptionculture:
+    label: product model description culture
+    description: Which description belongs to which product model, in which language (cultureid, e.g. 'en').
+
+  production.culture:
+    label: culture
+    aliases: [language, locale]
+
+  production.productlistpricehistory:
+    label: product list price history
+    aliases: [price_history, price_change]
+    columns:
+      listprice: {label: list price}
+      startdate: {label: start date}
+      enddate:   {label: end date, description: "NULL = current price"}
+
+  production.productcosthistory:
+    label: product cost history
+    aliases: [cost_history, cost_change]
+    columns:
+      standardcost: {label: standard cost}
+      startdate:    {label: start date}
+      enddate:      {label: end date, description: "NULL = current cost"}
+
+  production.productreview:
+    label: product review
+    aliases: [review, rating, feedback]
+    columns:
+      reviewername: {label: reviewer name}
+      reviewdate:   {label: review date}
+      rating:       {description: "1 to 5, 5 is best"}
+
+  production.productinventory:
+    label: product inventory
+    aliases: [inventory, stock, stock_on_hand, on_hand, warehouse]
+    description: >-
+      Quantity of each product at each location (shelf and bin). Stock on
+      hand for a product is SUM(quantity) across its locations.
+    columns:
+      quantity: {aliases: [on_hand, stock_level, qty]}
+
+  production.location:
+    label: location
+    aliases: [work_centre, work_center, warehouse_location]
+    columns:
+      costrate:     {label: cost rate, description: standard hourly cost}
+      availability: {description: work capacity in hours}
+
+  production.unitmeasure:
+    label: unit of measure
+    aliases: [uom, unit]
+
+  production.billofmaterials:
+    label: bill of materials
+    aliases: [bom, components, assembly, recipe]
+    description: >-
+      Parent product (productassemblyid) -> component (componentid) with
+      perassemblyqty. enddate IS NULL is the current structure.
+    columns:
+      productassemblyid: {label: product assembly id, aliases: [parent, assembly]}
+      componentid:       {label: component id, aliases: [component, child]}
+      perassemblyqty:    {label: per assembly quantity}
+      bomlevel:          {label: bom level}
+
+  production.workorder:
+    label: work order
+    aliases: [job, production_order, manufacturing_order, build]
+    description: >-
+      Manufacturing orders. Quantity built = orderqty - scrappedqty.
+    columns:
+      orderqty:      {label: order quantity, aliases: [quantity, qty]}
+      scrappedqty:   {label: scrapped quantity, aliases: [scrap, rejects]}
+      startdate:     {label: start date}
+      enddate:       {label: end date, aliases: [completed]}
+      duedate:       {label: due date}
+      scrapreasonid: {label: scrap reason id}
+
+  production.workorderrouting:
+    label: work order routing
+    aliases: [routing, operation, operation_step]
+    columns:
+      operationsequence: {label: operation sequence, aliases: [step]}
+      scheduledstartdate: {label: scheduled start date}
+      scheduledenddate:   {label: scheduled end date}
+      actualstartdate:    {label: actual start date}
+      actualenddate:      {label: actual end date}
+      actualresourcehrs:  {label: actual resource hours, aliases: [hours]}
+      plannedcost:        {label: planned cost}
+      actualcost:         {label: actual cost}
+
+  production.scrapreason:
+    label: scrap reason
+    aliases: [defect, failure_reason]
+
+  production.transactionhistory:
+    label: transaction history
+    aliases: [stock_movement, inventory_transaction]
+    description: >-
+      Product movements in the current year. transactiontype W = work
+      order, S = sales order, P = purchase order; referenceorderid is that
+      order's id.
+    columns:
+      transactiondate: {label: transaction date}
+      transactiontype: {label: transaction type}
+      referenceorderid: {label: reference order id}
+      actualcost:      {label: actual cost}
+
+  production.transactionhistoryarchive:
+    label: transaction history archive
+    description: Product movements for previous years; same columns as transactionhistory.
+
+  # -- purchasing --------------------------------------------------------
+
+  purchasing.vendor:
+    label: vendor
+    aliases: [supplier, provider]
+    columns:
+      accountnumber:  {label: account number}
+      creditrating:   {label: credit rating, description: "1 = superior ... 5 = below average"}
+      preferredvendorstatus: {label: preferred vendor status}
+      activeflag:     {label: active flag}
+      purchasingwebserviceurl: {label: purchasing web service url, aliases: [website]}
+
+  purchasing.productvendor:
+    label: product vendor
+    aliases: [vendor_price, supplier_price, sourcing]
+    description: Which vendors supply which products, at what price and lead time.
+    columns:
+      averageleadtime: {label: average lead time, aliases: [lead_time], description: days}
+      standardprice:   {label: standard price, aliases: [vendor_price]}
+      lastreceiptcost: {label: last receipt cost}
+      lastreceiptdate: {label: last receipt date}
+      minorderqty:     {label: minimum order quantity, aliases: [moq]}
+      maxorderqty:     {label: maximum order quantity}
+      onorderqty:      {label: on order quantity, aliases: [on_order]}
+
+  purchasing.purchaseorderheader:
+    label: purchase order
+    aliases: [po, purchase]
+    description: >-
+      One row per purchase order. Total = subtotal + taxamt + freight
+      (totaldue was dropped in this port). employeeid is the buyer who
+      raised it.
+    columns:
+      orderdate:  {label: order date}
+      shipdate:   {label: ship date}
+      status:     {description: "1 = pending, 2 = approved, 3 = rejected, 4 = complete"}
+      subtotal:   {label: sub total}
+      taxamt:     {label: tax amount, aliases: [tax]}
+      freight:    {aliases: [shipping_cost]}
+      vendorid:   {label: vendor id, aliases: [supplier]}
+      employeeid: {label: employee id, aliases: [buyer, purchaser]}
+      shipmethodid: {label: ship method id}
+
+  purchasing.purchaseorderdetail:
+    label: purchase order line
+    aliases: [po_line, purchase_order_detail]
+    description: >-
+      Lines of a purchase order. Line total = orderqty * unitprice;
+      stocked = receivedqty - rejectedqty (both dropped in this port).
+    columns:
+      orderqty:    {label: order quantity, aliases: [quantity, qty]}
+      unitprice:   {label: unit price}
+      receivedqty: {label: received quantity}
+      rejectedqty: {label: rejected quantity}
+      duedate:     {label: due date}
+
+  purchasing.shipmethod:
+    label: ship method
+    aliases: [shipper, carrier, courier, freight_company, shipping_method]
+    columns:
+      shipbase: {label: ship base, description: minimum charge}
+      shiprate: {label: ship rate, description: charge per pound}
+
+  purchasing.vvendorwithaddresses:
+    label: vendor addresses
+    description: Each vendor with its address, state and country.
+
+  # -- sales -------------------------------------------------------------
+
+  sales.salesorderheader:
+    label: sales order
+    aliases: [order, sale, invoice]
+    description: >-
+      One row per sales order. Revenue is usually SUM(subtotal) (before tax
+      and freight); totaldue = subtotal + taxamt + freight. The order
+      number shown to customers is 'SO' || salesorderid. onlineorderflag
+      true = placed online by an individual, false = placed by a
+      salesperson for a store (reseller). Fiscal year starts 1 July:
+      EXTRACT(YEAR FROM orderdate + INTERVAL '6 months').
+    columns:
+      orderdate:    {label: order date, aliases: [sale_date]}
+      duedate:      {label: due date, aliases: [required_date]}
+      shipdate:     {label: ship date, aliases: [shipped_date, dispatched]}
+      status:       {description: "1 in process, 2 approved, 3 backordered, 4 rejected, 5 shipped, 6 cancelled"}
+      onlineorderflag: {label: online order flag}
+      subtotal:     {label: sub total, aliases: [revenue, sales_amount, net_sales]}
+      taxamt:       {label: tax amount, aliases: [tax]}
+      freight:      {aliases: [shipping_cost]}
+      totaldue:     {label: total due, aliases: [order_total, gross_total]}
+      customerid:   {label: customer id}
+      salespersonid: {label: salesperson id, aliases: [sales_rep]}
+      territoryid:  {label: territory id}
+      billtoaddressid: {label: bill to address id}
+      shiptoaddressid: {label: ship to address id}
+      shipmethodid: {label: ship method id}
+      purchaseordernumber: {label: purchase order number, aliases: [customer_po]}
+      accountnumber: {label: account number}
+      creditcardid: {label: credit card id}
+      creditcardapprovalcode: {label: credit card approval code}
+      currencyrateid: {label: currency rate id}
+
+  sales.salesorderdetail:
+    label: sales order line
+    aliases: [order_line, line_item, sales_order_detail, order_detail]
+    description: >-
+      Lines of a sales order. Line total (dropped in this port) =
+      unitprice * (1 - unitpricediscount) * orderqty.
+    columns:
+      orderqty:          {label: order quantity, aliases: [quantity, qty, units]}
+      unitprice:         {label: unit price, aliases: [price]}
+      unitpricediscount: {label: unit price discount, aliases: [discount]}
+      specialofferid:    {label: special offer id}
+      carriertrackingnumber: {label: carrier tracking number, aliases: [tracking_number]}
+
+  sales.customer:
+    label: customer
+    aliases: [client, buyer, account]
+    description: >-
+      A customer is a person (personid set, storeid NULL: an individual
+      retail customer), a store (storeid set, personid NULL), or a person
+      buying for a store (both set). Names: person.person via personid,
+      sales.store via storeid. Account number = 'AW' || lpad(customerid, 8, '0').
+    columns:
+      personid:    {label: person id}
+      storeid:     {label: store id}
+      territoryid: {label: territory id}
+
+  sales.store:
+    label: store
+    aliases: [reseller, shop, retailer, dealer, bike_shop]
+    description: >-
+      Reseller customers. businessentityid is the store id
+      (customer.storeid). salespersonid is the account manager.
+    columns:
+      salespersonid: {label: salesperson id, aliases: [account_manager, sales_rep]}
+      demographics:  {description: XML survey; use sales.vstorewithdemographics instead}
+
+  sales.vstorewithaddresses:
+    label: store addresses
+    description: Each store with its address type, address, state and country.
+
+  sales.vstorewithdemographics:
+    label: store demographics
+    aliases: [store_survey]
+    description: >-
+      Store survey data - annual sales and revenue, year opened, square
+      feet, employees, specialty. Its columns are mixed case and must be
+      double-quoted ("AnnualSales").
+    columns:
+      AnnualSales:     {label: annual sales}
+      AnnualRevenue:   {label: annual revenue}
+      YearOpened:      {label: year opened}
+      SquareFeet:      {label: square feet}
+      NumberEmployees: {label: number of employees}
+
+  sales.salesperson:
+    label: salesperson
+    aliases: [sales_rep, sales_representative, account_manager, salespeople, rep]
+    description: >-
+      Sales representatives. businessentityid is the employee and person
+      id; join to person.person for the name. Orders link through
+      salesorderheader.salespersonid.
+    columns:
+      salesquota:    {label: sales quota, aliases: [quota, target]}
+      commissionpct: {label: commission percent, aliases: [commission]}
+      salesytd:      {label: sales year to date, aliases: [ytd_sales]}
+      saleslastyear: {label: sales last year}
+
+  sales.salespersonquotahistory:
+    label: salesperson quota history
+    aliases: [quota_history, target_history]
+    columns:
+      quotadate:  {label: quota date}
+      salesquota: {label: sales quota}
+
+  sales.vsalespersonsalesbyfiscalyearsdata:
+    label: salesperson sales by fiscal year
+    aliases: [sales_by_rep, rep_performance]
+    description: Each salesperson's total sales (salestotal) per fiscal year, with name, title and territory.
+
+  sales.salesterritory:
+    label: sales territory
+    aliases: [territory, sales_region, market]
+    description: >-
+      Territories such as Northwest, Canada, France. The column "group"
+      (North America, Europe, Pacific) is a reserved word - quote it.
+    columns:
+      group:         {aliases: [geography, continent, sales_group]}
+      countryregioncode: {label: country region code, aliases: [country_code]}
+      salesytd:      {label: sales year to date}
+      saleslastyear: {label: sales last year}
+      costytd:       {label: cost year to date}
+      costlastyear:  {label: cost last year}
+
+  sales.salesterritoryhistory:
+    label: sales territory history
+    description: Which territory each salesperson covered, over time (enddate IS NULL = current).
+
+  sales.specialoffer:
+    label: special offer
+    aliases: [promotion, discount, deal, promo]
+    columns:
+      discountpct: {label: discount percent, aliases: [discount]}
+      startdate:   {label: start date}
+      enddate:     {label: end date}
+      minqty:      {label: minimum quantity}
+      maxqty:      {label: maximum quantity}
+
+  sales.specialofferproduct:
+    label: special offer product
+    description: Which products each special offer applies to.
+
+  sales.salesreason:
+    label: sales reason
+    aliases: [purchase_reason, why_bought]
+    columns:
+      reasontype: {label: reason type}
+
+  sales.salesorderheadersalesreason:
+    label: sales order reason
+    description: Links sales orders to the reasons the customer gave.
+
+  sales.shoppingcartitem:
+    label: shopping cart item
+    aliases: [cart, basket]
+    columns:
+      shoppingcartid: {label: shopping cart id}
+      datecreated:    {label: date created}
+
+  sales.currency:
+    label: currency
+    columns:
+      currencycode: {label: currency code}
+
+  sales.currencyrate:
+    label: currency rate
+    aliases: [exchange_rate, fx_rate]
+    columns:
+      currencyratedate: {label: currency rate date}
+      fromcurrencycode: {label: from currency code}
+      tocurrencycode:   {label: to currency code}
+      averagerate:      {label: average rate}
+      endofdayrate:     {label: end of day rate}
+
+  sales.countryregioncurrency:
+    label: country currency
+    description: Which currency each country or region uses.
+
+  sales.salestaxrate:
+    label: sales tax rate
+    aliases: [tax_rate, gst, vat]
+    columns:
+      taxtype: {label: tax type, description: "1 = retail, 2 = wholesale, 3 = all sales"}
+      taxrate: {label: tax rate}
+
+# ---------------------------------------------------------------------------
+# Relationships the database doesn't declare.
+# ---------------------------------------------------------------------------
+relationships:
+  # Addresses and contacts hang off businessentity, which holds nothing;
+  # these let the walk go straight to the person, store or vendor.
+  - from: person.businessentityaddress(businessentityid)
+    to:   person.person(businessentityid)
+    description: address of a person
+  - from: person.businessentityaddress(businessentityid)
+    to:   sales.store(businessentityid)
+    description: address of a store
+  - from: person.businessentityaddress(businessentityid)
+    to:   purchasing.vendor(businessentityid)
+    description: address of a vendor
+  - from: person.businessentitycontact(businessentityid)
+    to:   sales.store(businessentityid)
+    description: contact person for a store
+  - from: person.businessentitycontact(businessentityid)
+    to:   purchasing.vendor(businessentityid)
+    description: contact person for a vendor
+  # Salesperson -> employee -> person is two hops; names are wanted
+  # with almost every salesperson question, so link them directly.
+  - from: sales.salesperson(businessentityid)
+    to:   person.person(businessentityid)
+    cardinality: one_to_one
+    description: the salesperson's name
+  # Views have no foreign keys.
+  - from: humanresources.vemployeedepartment(businessentityid)
+    to:   humanresources.employee(businessentityid)
+    cardinality: one_to_one
+  - from: humanresources.vemployeedepartmenthistory(businessentityid)
+    to:   humanresources.employee(businessentityid)
+  - from: sales.vsalespersonsalesbyfiscalyearsdata(salespersonid)
+    to:   sales.salesperson(businessentityid)
+  - from: sales.vstorewithaddresses(businessentityid)
+    to:   sales.store(businessentityid)
+  - from: sales.vstorewithdemographics(businessentityid)
+    to:   sales.store(businessentityid)
+    cardinality: one_to_one
+  - from: purchasing.vvendorwithaddresses(businessentityid)
+    to:   purchasing.vendor(businessentityid)
+
+# ---------------------------------------------------------------------------
+# Terms: words that pick ROWS.
+# ---------------------------------------------------------------------------
+terms:
+  online_order:
+    table: sales.salesorderheader
+    column: onlineorderflag
+    aliases: [online, internet_sale, web_order, direct_to_consumer]
+    description: placed online by an individual customer
+
+  reseller_order:
+    table: sales.salesorderheader
+    predicate: onlineorderflag = false
+    aliases: [reseller_sale, store_order, wholesale, channel_sale]
+    description: placed by a salesperson on behalf of a store
+
+  shipped_late:
+    table: sales.salesorderheader
+    predicate: shipdate > duedate
+    aliases: [late, late_shipment, late_delivery, delayed]
+    description: shipped after the due date
+
+  individual_customer:
+    table: sales.customer
+    predicate: storeid IS NULL
+    aliases: [retail_customer, consumer, end_customer]
+    description: a person buying for themselves, not a store
+
+  current_employee:
+    table: humanresources.employee
+    column: currentflag
+    aliases: [active_employee, current_staff]
+    description: still employed
+
+  salaried:
+    table: humanresources.employee
+    column: salariedflag
+    aliases: [salaried_staff, exempt]
+    description: salaried rather than hourly
+
+  current_department:
+    table: humanresources.employeedepartmenthistory
+    predicate: enddate IS NULL
+    aliases: [current_assignment, works_in]
+    description: the employee's present department and shift
+
+  discontinued:
+    table: production.product
+    predicate: sellenddate IS NOT NULL
+    aliases: [no_longer_sold, retired_product, end_of_life]
+    description: no longer for sale
+
+  salable:
+    table: production.product
+    column: finishedgoodsflag
+    aliases: [saleable, finished_good, for_sale]
+    description: a finished product that is sold, not a part
+
+  manufactured:
+    table: production.product
+    column: makeflag
+    aliases: [made_in_house, make_item, built_in_house]
+    description: made by AdventureWorks rather than bought in
+
+  scrapped:
+    table: production.workorder
+    predicate: scrappedqty > 0
+    aliases: [scrap, rejected_units, quality_failure]
+    description: work orders where some units failed inspection
+
+  work_order_late:
+    table: production.workorder
+    predicate: enddate > duedate
+    aliases: [late_work_order, overdue_build, behind_schedule]
+    description: finished after its due date
+
+  preferred_vendor:
+    table: purchasing.vendor
+    column: preferredvendorstatus
+    aliases: [preferred_supplier]
+    description: preferred over other vendors for the same product
+
+  active_vendor:
+    table: purchasing.vendor
+    column: activeflag
+    aliases: [active_supplier, current_vendor]
+    description: still used
+
+  pending_purchase_order:
+    table: purchasing.purchaseorderheader
+    predicate: status = 1
+    aliases: [awaiting_approval, unapproved_po, pending_po]
+    description: not yet approved
+
+  rejected_purchase_order:
+    table: purchasing.purchaseorderheader
+    predicate: status = 3
+    aliases: [rejected_po]
+    description: rejected by the approver

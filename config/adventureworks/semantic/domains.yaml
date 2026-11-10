@@ -1,0 +1,218 @@
+# Domains of Discourse for AdventureWorks (see sqlagent/adaptive/domains.py
+# for how they are scored, and config/northwind/semantic/domains.yaml for
+# what each key means). A domain only changes WHERE the schema search
+# starts; it never changes what a user may see.
+#
+# AdventureWorks is a bicycle manufacturer with five schemas, which map
+# roughly onto the domains below. Tables are always "schema.table" here:
+# a bare name would mean the public schema, which this database doesn't use.
+#
+# Role keys match the roles in config/adventureworks/security.yaml (sales,
+# purchasing, production, hr, finance) plus job titles that may arrive in
+# the [who=...] tag.
+
+version: 1
+
+domains:
+  sales:
+    label: Sales
+    aliases: [sales, selling, revenue, customer_service, crm, reseller_channel]
+    tables:
+      - sales.salesorderheader
+      - sales.salesorderdetail
+      - sales.customer
+      - sales.store
+      - sales.salesperson
+      - sales.salespersonquotahistory
+      - sales.salesterritory
+      - sales.salesterritoryhistory
+      - sales.specialoffer
+      - sales.specialofferproduct
+      - sales.salesreason
+      - sales.salesorderheadersalesreason
+      - sales.shoppingcartitem
+      - sales.vstorewithaddresses
+      - sales.vstorewithdemographics
+      - sales.vsalespersonsalesbyfiscalyearsdata
+      - production.product
+      - person.person
+    roles: {sales: 1.0, sales_rep: 1.0, sales_manager: 1.0, finance: 0.4}
+    where: [sales_order_entry, order_entry, sales_workbench, customer_enquiry,
+            customer_maintenance, store_maintenance, territory_review]
+    hops: 1
+    fallback_tables: [sales.salesorderheader, sales.salesorderdetail,
+                      sales.customer, sales.store, sales.salesperson,
+                      production.product]
+
+  products:
+    label: Products & Catalogue
+    aliases: [product, products, catalogue, catalog, merchandising,
+              product_management, pricing]
+    tables:
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productmodel
+      - production.productdescription
+      - production.productmodelproductdescriptionculture
+      - production.culture
+      - production.productlistpricehistory
+      - production.productreview
+      - sales.specialoffer
+      - sales.specialofferproduct
+    roles: {product_manager: 1.0, sales: 0.5, purchasing: 0.3, production: 0.3}
+    where: [product_maintenance, catalogue_maintenance, price_list, product_enquiry]
+    hops: 1
+    fallback_tables: [production.product, production.productsubcategory,
+                      production.productcategory, production.productmodel]
+
+  purchasing:
+    label: Purchasing
+    aliases: [purchasing, procurement, buying, sourcing, supply_chain]
+    tables:
+      - purchasing.vendor
+      - purchasing.productvendor
+      - purchasing.purchaseorderheader
+      - purchasing.purchaseorderdetail
+      - purchasing.shipmethod
+      - purchasing.vvendorwithaddresses
+      - production.product
+      - production.productinventory
+    roles: {purchasing: 1.0, buyer: 1.0, finance: 0.3, production: 0.3}
+    where: [purchase_order_entry, vendor_maintenance, supplier_maintenance,
+            purchase_enquiry, sourcing_workbench]
+    hops: 1
+    fallback_tables: [purchasing.purchaseorderheader, purchasing.purchaseorderdetail,
+                      purchasing.vendor, purchasing.productvendor]
+
+  manufacturing:
+    label: Manufacturing & Inventory
+    aliases: [manufacturing, production, factory, shop_floor, inventory,
+              stock_control, warehouse]
+    tables:
+      - production.workorder
+      - production.workorderrouting
+      - production.billofmaterials
+      - production.scrapreason
+      - production.location
+      - production.productinventory
+      - production.transactionhistory
+      - production.transactionhistoryarchive
+      - production.unitmeasure
+      - production.productcosthistory
+      - production.product
+    roles: {production: 1.0, production_planner: 1.0, warehouse: 1.0,
+            purchasing: 0.4, finance: 0.2}
+    where: [work_order_entry, shop_floor_control, production_scheduling,
+            stock_control, inventory_enquiry, bom_maintenance]
+    hops: 1
+    fallback_tables: [production.workorder, production.workorderrouting,
+                      production.productinventory, production.product]
+
+  logistics:
+    label: Shipping & Logistics
+    aliases: [shipping, logistics, freight, dispatch, delivery, fulfilment]
+    tables:
+      - purchasing.shipmethod
+      - sales.salesorderheader
+      - purchasing.purchaseorderheader
+      - person.address
+      - person.stateprovince
+      - person.countryregion
+    roles: {dispatcher: 1.0, warehouse: 0.6, sales: 0.2}
+    where: [dispatch, shipping_desk, freight_enquiry]
+    hops: 1
+    fallback_tables: [sales.salesorderheader, purchasing.shipmethod, person.address]
+
+  hr:
+    label: Human Resources
+    aliases: [hr, human_resources, people, personnel, payroll, headcount]
+    tables:
+      - humanresources.employee
+      - humanresources.department
+      - humanresources.employeedepartmenthistory
+      - humanresources.employeepayhistory
+      - humanresources.shift
+      - humanresources.vemployeedepartment
+      - humanresources.vemployeedepartmenthistory
+      - person.person
+    roles: {hr: 1.0, hr_officer: 1.0, sales_manager: 0.2}
+    where: [hr_enquiry, staff_records, employee_maintenance, payroll_review]
+    hops: 1
+    fallback_tables: [humanresources.employee, humanresources.vemployeedepartment,
+                      humanresources.department, person.person]
+
+  finance:
+    label: Financials
+    aliases: [finance, financials, accounting, accounts, accounts_receivable,
+              accounts_payable, invoicing, billing, margin, profitability]
+    tables:
+      - sales.salesorderheader
+      - sales.salesorderdetail
+      - sales.currency
+      - sales.currencyrate
+      - sales.countryregioncurrency
+      - sales.salestaxrate
+      - sales.salesterritory
+      - sales.salesperson
+      - purchasing.purchaseorderheader
+      - purchasing.purchaseorderdetail
+      - production.productcosthistory
+      - production.productlistpricehistory
+    roles: {finance: 1.0, ar_clerk: 1.0, ap_clerk: 1.0}
+    where: [financials_data_entry, invoice_entry, ar_enquiry, ap_enquiry,
+            credit_control, month_end]
+    hops: 1
+    fallback_tables: [sales.salesorderheader, purchasing.purchaseorderheader,
+                      sales.currencyrate]
+
+  contacts:
+    label: Contacts & Addresses
+    aliases: [contacts, address_book, directory]
+    tables:
+      - person.person
+      - person.emailaddress
+      - person.personphone
+      - person.address
+      - person.businessentityaddress
+      - person.businessentitycontact
+      - person.contacttype
+      - person.stateprovince
+      - person.countryregion
+    roles: {}
+    where: [contact_maintenance, address_book]
+    hops: 1
+    fallback_tables: [person.person, person.emailaddress, person.address]
+
+# Friendly names for role codes, so the [who=...] tag can use business words.
+role_aliases:
+  sales_rep:          [sales_representative, account_manager, salesperson]
+  sales_manager:      [head_of_sales, north_american_sales_manager,
+                       european_sales_manager, pacific_sales_manager]
+  buyer:              [purchasing_officer, procurement_officer, purchaser,
+                       purchasing_assistant]
+  purchasing:         [purchasing_manager]
+  production_planner: [production_control_manager, production_supervisor,
+                       scheduling_assistant]
+  production:         [production_technician, production_manager]
+  warehouse:          [shipping_and_receiving_clerk, stocker, storeman]
+  hr_officer:         [human_resources_administrative_assistant, recruiter,
+                       benefits_specialist]
+  hr:                 [human_resources_manager]
+  finance:            [accountant, finance_manager, chief_financial_officer]
+  ar_clerk:           [accounts_receivable_specialist, credit_controller]
+  ap_clerk:           [accounts_payable_specialist]
+  product_manager:    [marketing_manager, marketing_specialist]
+  dispatcher:         [shipping_clerk, logistics_coordinator]
+
+# Function / screen codes mapped to location names used in domains.*.where.
+function_aliases:
+  SAL0100: [sales_order_entry]
+  SAL0200: [customer_maintenance]
+  PRD0100: [product_maintenance]
+  PUR0410: [purchase_order_entry]
+  MFG0300: [work_order_entry]
+  INV0100: [stock_control]
+  HR0200:  [staff_records]
+  FIN0300: [financials_data_entry]
+  SHP0050: [dispatch]

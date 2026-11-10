@@ -409,8 +409,9 @@ if ALLOWED_ORIGINS:
 @app.on_event("startup")
 async def load_schema_catalog():
     global demo_catalog, DEMO_SECURITY
-    # Any failure here (database, policy, semantic model) aborts startup:
-    # the API never runs without its SecurityContext.
+    # Any failure here (database, policy, semantic model, or a catalog with
+    # no tables - EmptyCatalogError) aborts startup: the API never runs
+    # without its SecurityContext or with nothing to ground the model in.
     DEMO_SECURITY = SECURITY_POLICY.build_context(
         "demo", DEMO_ROLES, list_tables(get_connection))
     demo_catalog = SchemaCatalog(

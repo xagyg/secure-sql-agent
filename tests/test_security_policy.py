@@ -11,6 +11,10 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
+from sqlagent.controls.security_context import SecurityContext
 
 from sqlagent.controls.security_policy import (
     DEFAULT_SECURITY_FILE,
@@ -201,6 +205,41 @@ class FailClosed(unittest.TestCase):
     def test_from_dict(self):
         with self.assertRaises(SecurityPolicyError):
             SecurityPolicy.from_dict({"default": "deny"})
+
+
+class EmptyCatalog(unittest.TestCase):
+    """Startup stops when the role ends up with no tables (e.g. the
+    database user was never granted SELECT on a newly loaded database)."""
+
+    def refresh(self, security, tables):
+        catalog = SchemaCatalog(connection_factory=None, security=security)
+        with mock.patch.object(SchemaCatalog, "_load_tables", return_value=tables), \
+             mock.patch.object(SchemaCatalog, "_load_foreign_keys", return_value=[]):
+            catalog.refresh()
+        return catalog
+
+    def test_no_authorised_tables_stops_startup(self):
+        security = SecurityContext(user_id="brad", roles={"sales"})
+        with self.assertRaises(EmptyCatalogError) as ctx:
+            self.refresh(security, {})
+        self.assertIn("no tables are visible to user brad", str(ctx.exception))
+        self.assertIn("SELECT", str(ctx.exception))
+
+    def test_authorised_but_not_discovered_stops_startup(self):
+        security = SecurityContext(user_id="brad", roles={"sales"},
+                                   tables={"public.orders"})
+        with self.assertRaises(EmptyCatalogError) as ctx:
+            self.refresh(security, {})
+        self.assertIn("sources.include", str(ctx.exception))
+
+    def test_tables_present_loads(self):
+        security = SecurityContext(user_id="brad", roles={"sales"},
+                                   tables={"public.orders"})
+        tables = {"public.orders": {"schema": "public", "name": "orders",
+                                    "columns": [{"name": "order_id", "type": "int",
+                                                 "nullable": False}]}}
+        catalog = self.refresh(security, tables)
+        self.assertEqual(set(catalog.tables), {"public.orders"})
 
 
 if __name__ == "__main__":

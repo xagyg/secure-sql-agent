@@ -46,6 +46,15 @@ from sqlagent.adaptive.text_match import (
 )
 
 
+class EmptyCatalogError(RuntimeError):
+    """
+    The catalog loaded no tables, so the agent would have nothing to
+    ground the model in. Startup stops instead of letting the model guess
+    a schema (the authorisation check would block the guess, but a user
+    would only ever see "restricted").
+    """
+
+
 def _words_of(name):
     """A label or phrase for display: "credit_limit" -> "credit limit"."""
     return name.replace("_", " ").strip()
@@ -109,6 +118,8 @@ class SchemaCatalog:
 
     def refresh(self):
         self.tables = self._load_tables()
+        if not self.tables:
+            raise EmptyCatalogError(self._empty_reason())
         self._attach_semantics()
 
         database_keys = (
@@ -121,6 +132,26 @@ class SchemaCatalog:
         # Domains of Discourse are mapped onto THIS catalog, i.e. only
         # onto tables the role is authorised for.
         self.domain_resolver = DomainResolver(self)
+
+    def _empty_reason(self):
+        """Why no tables loaded, as a hint for whoever reads the startup log."""
+        security = self.security
+        if security is not None and not security.tables:
+            roles = ", ".join(sorted(security.roles)) or "(none)"
+            return (
+                f"no tables are visible to user {security.user_id} "
+                f"(roles: {roles}). Either the database user has no SELECT "
+                "grant on the tables the security policy allows, or the "
+                "policy's allow lists name no tables that exist. The "
+                "[security] lines above list each allowed table that wasn't "
+                "found.")
+        if security is not None:
+            return (
+                f"{len(security.tables)} table(s) are authorised, but none "
+                "of them is discovered. Check sources.include / "
+                "sources.exclude in the semantic model.")
+        return ("the database has no tables matching sources.include / "
+                "sources.exclude in the semantic model.")
 
     def _attach_semantics(self):
         """
