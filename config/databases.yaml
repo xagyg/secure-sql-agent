@@ -30,16 +30,15 @@ databases:
     repl_roles: [sales]      # main.py (SQLAGENT_ROLES overrides)
     demo_roles: [demo]       # api.py, every anonymous visitor
 
-  # Next step: AdventureWorks (about 70 tables in sales, purchasing,
-  # production, humanresources and person schemas). Uncomment once the
-  # database is loaded and config/adventureworks/security.yaml exists.
-  #
-  # adventureworks:
-  #   description: AdventureWorks (multi-schema, ERP-like)
-  #   connection:
-  #     host: localhost
-  #     port: 5432
-  #     database: adventureworks
-  #     user: sqlagent_ro
-  #   repl_roles: [sales]
-  #   demo_roles: [demo]
+  # AdventureWorks (about 70 tables in sales, purchasing,
+  # production, humanresources and person schemas).
+  
+  adventureworks:
+    description: AdventureWorks (multi-schema, ERP-like)
+    connection:
+      host: localhost
+      port: 5432
+      database: adventureworks
+      user: sqlagent_ro
+    repl_roles: [sales]
+    demo_roles: [demo]

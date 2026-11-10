@@ -21,7 +21,7 @@ from sqlagent.controls.security_policy import (
     SecurityPolicyError,
     load_security_policy,
 )
-from sqlagent.adaptive.schema_catalog import SchemaCatalog
+from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
 from sqlagent.adaptive.semantic_model import SemanticModelError, load_semantic_model
 from sqlagent.execution.sql_execution import get_connection, execute_sql, list_tables
 
@@ -38,6 +38,16 @@ conversation_history = []
 # in config/<database>/security.yaml); here the user is SQLAGENT_USER and
 # the roles are SQLAGENT_ROLES, else the database profile's repl_roles.
 LOCAL_USER = os.environ.get("SQLAGENT_USER", "brad")
+
+
+# Typing one of these on its own ends the REPL. The whole input must be
+# the word (case and trailing punctuation ignored), so "who is on leave?"
+# is still a question.
+EXIT_WORDS = {"quit", "exit", "leave", "bye", ":quit", ":exit", ":q"}
+
+
+def is_exit(text):
+    return text.strip().rstrip(".!?").strip().lower() in EXIT_WORDS
 
 
 def local_roles(profile):
@@ -85,6 +95,9 @@ def main():
     except SecurityPolicyError as ex:
         print(f"Configuration error: {ex}")
         sys.exit(1)
+    except EmptyCatalogError as ex:
+        print(f"Startup stopped: {ex}")
+        sys.exit(1)
     except Exception as ex:
         print("Unable to connect to PostgreSQL.")
         print(ex)
@@ -105,6 +118,9 @@ def main():
 
         if not question:
             continue
+
+        if is_exit(question):
+            break
 
  #       if question.lower() in (":quit", ":exit", ":q"):
  #           break

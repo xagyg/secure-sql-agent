@@ -1,0 +1,239 @@
+# Security policy for AdventureWorks (Postgres port by Lorin Thwaits).
+#
+# Owned by security / IT, reviewed separately from the semantic model
+# (config/adventureworks/semantic/), which can never widen access. Loaded at
+# startup by sqlagent/controls/security_policy.py. Any problem in this file
+# stops the server from starting (fail closed). The rules are the same as
+# config/northwind/security.yaml; see that file's header.
+#
+# Every grant below is an explicit table name, never "sales.*". The database
+# has 68 tables, 20 views, 68 convenience views in the pe/hr/pr/pu/sa schemas
+# (SELECT * copies of the base tables) and several views that join personal
+# contact details back in. A wildcard would quietly grant all of those.
+#
+# A view is its own object: granting one grants every column it exposes,
+# whatever deny_columns says about the tables underneath. So the views that
+# carry phone numbers, e-mail addresses or survey data (vemployee,
+# vindividualcustomer, vsalesperson, vstorewithcontacts, vvendorwithcontacts,
+# vpersondemographics, vadditionalcontactinfo) are granted to no role, and
+# neither are the convenience-view schemas.
+#
+# Granted to NO role, ever:
+#   person.password            password hashes and salts
+#   sales.creditcard           card numbers
+#   sales.personcreditcard     who holds which card
+#   humanresources.jobcandidate  applicants' resumes (XML)
+#
+# Column denials used throughout:
+#   person.person: additionalcontactinfo (XML: phones, addresses, e-mail)
+#                  and demographics (XML: income, education, children...)
+#   humanresources.employee: nationalidnumber, loginid, birthdate,
+#                  maritalstatus, gender, vacationhours, sickleavehours
+#   sales.salesorderheader: creditcardid, creditcardapprovalcode
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - orders, customers, products and territories; no personal details
+    allow:
+      - sales.salesorderheader
+      - sales.salesorderdetail
+      - sales.customer
+      - sales.store
+      - sales.salesperson
+      - sales.salesterritory
+      - sales.specialoffer
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productmodel
+      - purchasing.vendor
+      - purchasing.shipmethod
+      - person.person
+      - person.countryregion
+      - person.stateprovince
+      - humanresources.employee
+    deny_columns:
+      sales.salesorderheader: [creditcardid, creditcardapprovalcode,
+                               accountnumber, purchaseordernumber]
+      sales.store: [demographics]
+      sales.salesperson: [bonus, commissionpct]
+      person.person: [additionalcontactinfo, demographics, emailpromotion]
+      humanresources.employee: [nationalidnumber, loginid, birthdate, maritalstatus,
+                                gender, vacationhours, sickleavehours]
+
+  # Sales reps and managers; also the local command-line REPL (main.py).
+  # The name gives this role its affinity to the Sales domain
+  # (config/adventureworks/semantic/domains.yaml).
+  sales:
+    description: Sales - orders, customers, stores, territories, offers and the product catalogue
+    allow:
+      - sales.salesorderheader
+      - sales.salesorderdetail
+      - sales.salesorderheadersalesreason
+      - sales.salesreason
+      - sales.customer
+      - sales.store
+      - sales.salesperson
+      - sales.salespersonquotahistory
+      - sales.salesterritory
+      - sales.salesterritoryhistory
+      - sales.specialoffer
+      - sales.specialofferproduct
+      - sales.shoppingcartitem
+      - sales.currency
+      - sales.currencyrate
+      - sales.countryregioncurrency
+      - sales.salestaxrate
+      - sales.vstorewithaddresses
+      - sales.vstorewithdemographics
+      - sales.vsalespersonsalesbyfiscalyearsdata
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productmodel
+      - production.productdescription
+      - production.productmodelproductdescriptionculture
+      - production.culture
+      - production.productlistpricehistory
+      - production.productreview
+      - purchasing.shipmethod
+      - person.person
+      - person.emailaddress
+      - person.address
+      - person.addresstype
+      - person.businessentityaddress
+      - person.businessentitycontact
+      - person.contacttype
+      - person.stateprovince
+      - person.countryregion
+      - humanresources.employee
+    deny_columns:
+      sales.salesorderheader: [creditcardid, creditcardapprovalcode]
+      sales.salesperson: [bonus, commissionpct]
+      production.productreview: [emailaddress]
+      person.person: [additionalcontactinfo, demographics]
+      humanresources.employee: [nationalidnumber, loginid, birthdate, maritalstatus,
+                                gender, vacationhours, sickleavehours]
+
+  purchasing:
+    description: Purchasing - vendors, purchase orders, vendor pricing and stock on hand
+    allow:
+      - purchasing.vendor
+      - purchasing.productvendor
+      - purchasing.purchaseorderheader
+      - purchasing.purchaseorderdetail
+      - purchasing.shipmethod
+      - purchasing.vvendorwithaddresses
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productinventory
+      - production.location
+      - production.unitmeasure
+      - production.productcosthistory
+      - person.person
+      - person.emailaddress
+      - person.businessentitycontact
+      - person.contacttype
+      - person.address
+      - person.addresstype
+      - person.businessentityaddress
+      - person.stateprovince
+      - person.countryregion
+      - humanresources.employee
+    deny_columns:
+      person.person: [additionalcontactinfo, demographics]
+      humanresources.employee: [nationalidnumber, loginid, birthdate, maritalstatus,
+                                gender, vacationhours, sickleavehours]
+
+  production:
+    description: Manufacturing - work orders, routings, bills of materials, inventory and scrap
+    allow:
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productmodel
+      - production.billofmaterials
+      - production.workorder
+      - production.workorderrouting
+      - production.scrapreason
+      - production.location
+      - production.productinventory
+      - production.transactionhistory
+      - production.transactionhistoryarchive
+      - production.unitmeasure
+      - production.productcosthistory
+
+  # HR sees pay and leave but still not national ID numbers: nothing the
+  # agent does needs them, so they are kept out of it entirely.
+  hr:
+    description: Human Resources - employees, departments, shifts, pay and leave
+    allow:
+      - humanresources.employee
+      - humanresources.department
+      - humanresources.employeedepartmenthistory
+      - humanresources.employeepayhistory
+      - humanresources.shift
+      - humanresources.vemployeedepartment
+      - humanresources.vemployeedepartmenthistory
+      - person.person
+      - person.emailaddress
+      - person.personphone
+      - person.phonenumbertype
+      - person.address
+      - person.addresstype
+      - person.businessentityaddress
+      - person.stateprovince
+      - person.countryregion
+      - sales.salesperson
+      - sales.salesterritory
+    deny_columns:
+      humanresources.employee: [nationalidnumber]
+      person.person: [demographics]
+
+  # Finance sees salesperson bonus and commission, which sales doesn't.
+  finance:
+    description: Finance - revenue, purchasing spend, costs, prices, currency and tax
+    allow:
+      - sales.salesorderheader
+      - sales.salesorderdetail
+      - sales.customer
+      - sales.store
+      - sales.salesperson
+      - sales.salespersonquotahistory
+      - sales.salesterritory
+      - sales.specialoffer
+      - sales.currency
+      - sales.currencyrate
+      - sales.countryregioncurrency
+      - sales.salestaxrate
+      - sales.vsalespersonsalesbyfiscalyearsdata
+      - purchasing.purchaseorderheader
+      - purchasing.purchaseorderdetail
+      - purchasing.vendor
+      - purchasing.productvendor
+      - purchasing.shipmethod
+      - production.product
+      - production.productcategory
+      - production.productsubcategory
+      - production.productcosthistory
+      - production.productlistpricehistory
+      - person.person
+      - person.stateprovince
+      - person.countryregion
+    deny_columns:
+      sales.salesorderheader: [creditcardid, creditcardapprovalcode]
+      person.person: [additionalcontactinfo, demographics]
+
+# Identity-provider group -> roles.
+group_roles:
+  AW-Sales: [sales]
+  AW-Purchasing: [purchasing]
+  AW-Production: [production]
+  AW-HR: [hr]
+  AW-Finance: [finance]
+  Public-Demo: [demo]
