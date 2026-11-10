@@ -3,8 +3,8 @@
 #
 # Shared helpers for the YAML configuration files:
 #
-#   config/security/<database>.yaml   who may see what (controls/security_policy.py)
-#   config/semantic/<database>/       what the data means (adaptive/semantic_model.py)
+#   config/<database>/security.yaml   who may see what (controls/security_policy.py)
+#   config/<database>/semantic/       what the data means (adaptive/semantic_model.py)
 #
 # One security file and one semantic folder per database; the defaults
 # are the Northwind demo's (DEFAULT_DATABASE).

@@ -1,7 +1,7 @@
 # Security policy: who may see what.
 #
 # Owned by security / IT, reviewed separately from the semantic model
-# (config/semantic/northwind/), which can never widen access. Loaded at startup by
+# (config/northwind/semantic/), which can never widen access. Loaded at startup by
 # sqlagent/controls/security_policy.py. Any problem in this file stops the
 # server from starting (fail closed).
 #
@@ -43,7 +43,7 @@ roles:
       public.employees: [home_phone]
 
   # The local command-line REPL (main.py). The name also gives this role
-  # its affinity to the Sales domain (config/semantic/northwind/domains.yaml).
+  # its affinity to the Sales domain (config/northwind/semantic/domains.yaml).
   sales:
     description: Local development - all of Northwind except personal phone numbers
     allow:

@@ -4,8 +4,8 @@
 # Runs against the database chosen in config/databases.yaml
 # (SQLAGENT_DATABASE, or the file's default; .\run.ps1 -local -db <name>).
 # That profile gives the connection, the security file
-# (config/security/<database>.yaml) and the semantic model
-# (config/semantic/<database>/). The REPL's roles are the profile's
+# (config/<database>/security.yaml) and the semantic model
+# (config/<database>/semantic/). The REPL's roles are the profile's
 # repl_roles unless SQLAGENT_ROLES is set. Check the table and column
 # names in those files against your schema first:
 #     psql -c '\dt public.*'
@@ -35,7 +35,7 @@ conversation_history = []
 
 # The local user and their roles. In a real deployment both come from
 # the user's sign-in (identity-provider groups -> roles, see group_roles
-# in config/security/<database>.yaml); here the user is SQLAGENT_USER and
+# in config/<database>/security.yaml); here the user is SQLAGENT_USER and
 # the roles are SQLAGENT_ROLES, else the database profile's repl_roles.
 LOCAL_USER = os.environ.get("SQLAGENT_USER", "brad")
 

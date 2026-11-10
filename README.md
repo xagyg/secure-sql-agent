@@ -38,7 +38,7 @@ Each layer, and the file that implements it:
 
 | Layer                | Where                                    | What it does                                                                                                                                                    |
 | -------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Security policy      | `config/security/northwind.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
+| Security policy      | `config/northwind/security.yaml`, `controls/security_policy.py` | Deny by default; roles resolved to a concrete table list at startup; the server won't start if the file is missing or invalid                     |
 | Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
 | Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
 | Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
@@ -56,12 +56,11 @@ The code is grouped by IBAAM layer. Entry points stay at the root.
 
 ```
 api.py, main.py            entry points (public demo API, local REPL)
-config/                    one security file and one semantic folder per database
+config/                    one folder per database
   databases.yaml           which databases exist, how to connect, which roles to use
-  security/
-    northwind.yaml         who may see what (roles, allowed tables, denied columns)
-  semantic/
-    northwind/
+  northwind/
+    security.yaml          who may see what (roles, allowed tables, denied columns)
+    semantic/
       model.yaml           what the data means (sources, labels, aliases, relationships, terms)
       domains.yaml         Domains of Discourse, role aliases, function codes
 sqlagent/
@@ -77,7 +76,7 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/agent.py`                     | `run_agent()`: the full question → answer pipeline                                      |
 | `sqlagent/adaptive/llm.py`              | Ollama client, prompts for SQL generation, correction and explanation                   |
 | `sqlagent/adaptive/schema_catalog.py`   | Reads the schema at startup and picks the relevant tables for each question             |
-| `sqlagent/adaptive/semantic_model.py`   | Loads and validates the semantic model in `config/semantic/<database>/`                 |
+| `sqlagent/adaptive/semantic_model.py`   | Loads and validates the semantic model in `config/<database>/semantic/`                 |
 | `sqlagent/adaptive/domains.py`          | Domains of Discourse and Who / What / Where routing                                     |
 | `sqlagent/adaptive/text_match.py`       | Shared tokenizing and phrase matching for schema search, routing and policy checks      |
 | `sqlagent/controls/sql_policy.py`       | Structural safety, authorisation, `SELECT *` rewriting, column stripping, row limit     |
@@ -85,15 +84,15 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/controls/question_policy.py`  | Restricted columns named in the question; the follow-up "restricted" pre-check          |
 | `sqlagent/controls/messages.py`         | Block rules and generic user-facing messages                                            |
 | `sqlagent/controls/security_context.py` | `SecurityContext`: user, roles, authorised tables, denied columns                       |
-| `sqlagent/controls/security_policy.py`  | Loads `config/security/<database>.yaml` and builds each user's `SecurityContext` (fails closed)     |
+| `sqlagent/controls/security_policy.py`  | Loads `config/<database>/security.yaml` and builds each user's `SecurityContext` (fails closed)     |
 | `sqlagent/controls/security_utils.py`   | Case-insensitive authorisation and table-naming helpers                                 |
 | `sqlagent/execution/sql_execution.py`   | PostgreSQL connection and the final execution gate                                      |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt                                    |
 | `sqlagent/config_files.py`              | Shared YAML loading (rejects duplicate keys)                                            |
 | `sqlagent/databases.py`                 | Loads `config/databases.yaml` and picks the active database (fails closed)              |
 | `config/databases.yaml`                 | Database profiles: connection, security file, semantic folder, REPL and demo roles      |
-| `config/security/northwind.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
-| `config/semantic/northwind/*.yaml`      | Semantic model: discovery, labels, aliases, relationships, terms, domains               |
+| `config/northwind/security.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
+| `config/northwind/semantic/*.yaml`      | Semantic model: discovery, labels, aliases, relationships, terms, domains               |
 | `tests/`                                | Unit tests; `tests/fixtures.py` holds a static Northwind schema                         |
 | `api.py`                                | FastAPI wrapper for the public demo                                                     |
 | `main.py`                               | Interactive command-line REPL for local use                                             |
@@ -171,7 +170,7 @@ For example:
 > Show me the orders for customer ALFKI.
 ```
 
-The REPL builds its `SecurityContext` from the active database's `repl_roles` (the `sales` role in `config/security/northwind.yaml` for Northwind; set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly.
+The REPL builds its `SecurityContext` from the active database's `repl_roles` (the `sales` role in `config/northwind/security.yaml` for Northwind; set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly.
 
 ### Test the security controls
 
@@ -290,7 +289,7 @@ The web page and the tunnel script (`ngrok.ps1`) are specific to that deployment
 
 Delete the file to switch the demo off without stopping the server; the page then shows an "unavailable" message.
 
-Every anonymous visitor gets the same fixed, narrow context: the `demo` role in `config/security/northwind.yaml`, eight Northwind tables, with customer phone, fax and address, and employee home phone, denied.
+Every anonymous visitor gets the same fixed, narrow context: the `demo` role in `config/northwind/security.yaml`, eight Northwind tables, with customer phone, fax and address, and employee home phone, denied.
 
 ---
 
@@ -311,7 +310,7 @@ databases:
     demo_roles: [demo]       # api.py
 ```
 
-By convention the name also finds `config/security/<name>.yaml` (required) and `config/semantic/<name>/` (optional); set `security_file` or `semantic_path` to use other locations. The password is read from the environment variable named by `password_env` (default `PG_PASSWORD`).
+By convention the name also finds `config/<name>/security.yaml` (required) and `config/<name>/semantic/` (optional); set `security_file` or `semantic_path` to use other locations. The password is read from the environment variable named by `password_env` (default `PG_PASSWORD`).
 
 Pick a database with `-db`, or set it once as a user variable:
 
@@ -322,7 +321,7 @@ setx SQLAGENT_DATABASE adventureworks
 
 Without either, the file's `default` is used. Startup prints the choice (`[database] northwind: sqlagent_ro@localhost:5432/northwind ...`) and the API records it in the `startup` audit line. An unknown name, a missing security file or an invalid `databases.yaml` stops startup. `PG_HOST`, `PG_DATABASE` and the like are ignored, so a value left over in a PowerShell window can't pair one database's security policy with another database. The unit tests always use Northwind, whatever is selected.
 
-To add a database: load it, grant `sqlagent_ro` read access, add an entry to `databases.yaml`, then create `config/security/<name>.yaml` and (optionally) `config/semantic/<name>/`.
+To add a database: load it, grant `sqlagent_ro` read access, add an entry to `databases.yaml`, then create `config/<name>/security.yaml` and (optionally) `config/<name>/semantic/`.
 
 ### Database and model
 
@@ -384,9 +383,9 @@ Keep `DEMO_MAX_CONCURRENCY` (below) equal to `OLLAMA_NUM_PARALLEL`. Both default
 
 Run with `--workers 1`. The rate limiter and session store are in memory and are not shared across worker processes.
 
-### Security policy (`config/security/<database>.yaml`)
+### Security policy (`config/<database>/security.yaml`)
 
-Who may see what, one file per database (`config/security/northwind.yaml` for the demo). Owned by security / IT and reviewed separately from the semantic model, which can never widen access.
+Who may see what, one file per database (`config/northwind/security.yaml` for the demo). Owned by security / IT and reviewed separately from the semantic model, which can never widen access.
 
 ```yaml
 version: 1
@@ -415,9 +414,9 @@ group_roles:                       # identity-provider group -> roles
 * **Fails closed.** A missing file, invalid YAML, a duplicate or unknown key, `default` other than `deny`, a `deny_columns` table the role isn't granted (usually a typo), or an undefined role stops startup. A denied column that doesn't exist on its table is logged as a warning.
 * **Users come from identity, not the file.** `group_roles` maps identity-provider groups to roles (`SecurityPolicy.roles_for_groups`). The demo API always uses the `demo` role; the REPL uses `SQLAGENT_ROLES`.
 
-### Semantic model (`config/semantic/<database>/`)
+### Semantic model (`config/<database>/semantic/`)
 
-What the data means, one folder per database (`config/semantic/northwind/`: `model.yaml` and `domains.yaml`). Every `.yaml` file directly in the folder is merged, so a large ERP can have one file per domain; sub-folders and other databases' folders are never read. Nothing here grants access: it is applied to the catalog after security filtering, and anything that names a table or column the role can't see is skipped.
+What the data means, one folder per database (`config/northwind/semantic/`: `model.yaml` and `domains.yaml`). Every `.yaml` file directly in the folder is merged, so a large ERP can have one file per domain; sub-folders are never read. Nothing here grants access: it is applied to the catalog after security filtering, and anything that names a table or column the role can't see is skipped.
 
 ```yaml
 sources:                           # which tables and views to discover
@@ -457,7 +456,7 @@ terms:                             # words that pick rows
 * **Terms** are shown to the model in a `TERMS` section and point routing at their table. A predicate may use only the table's own columns (no subqueries) and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
 * **Loading.** A structural error (unknown key, wrong type, a name defined twice) stops startup. A name that isn't in the database is skipped with a log line. No folder at all means an empty model: everything is discovered and there is no vocabulary.
 
-### Domains of Discourse (`config/semantic/<database>/domains.yaml`)
+### Domains of Discourse (`config/<database>/semantic/domains.yaml`)
 
 Named subsets of the schema (Sales, Purchasing & Inventory, Shipping & Logistics, Human Resources, Financials for Northwind). For each question the agent picks the best-matching domain from three signals and starts its table search there:
 
@@ -502,7 +501,7 @@ This is a research demonstration, not a production system.
 * CORS only controls which web pages can call the API from a browser. It doesn't stop direct calls with `curl` or scripts. Rate limits and the concurrency gate are the real controls.
 * Only the API is exposed through the tunnel. Ollama and PostgreSQL listen on localhost only.
 * The in-memory rate limiter treats each IPv6 address separately, so a client with a large IPv6 range could spread requests across addresses.
-* The table and column names in `config/security/northwind.yaml` and `config/semantic/northwind/` assume snake_case Northwind naming. Check them against your schema (`\dt public.*`) before running. Startup logs every name it can't find.
+* The table and column names in `config/northwind/security.yaml` and `config/northwind/semantic/` assume snake_case Northwind naming. Check them against your schema (`\dt public.*`) before running. Startup logs every name it can't find.
 * The local REPL and API use the same underlying agent and security controls; the API adds the HTTP-specific rate limiting, concurrency, timeout and audit controls.
 
 ---

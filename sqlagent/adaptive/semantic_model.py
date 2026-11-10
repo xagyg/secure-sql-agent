@@ -2,7 +2,7 @@
 # Author: Brad Long
 #
 # The semantic model: what the data MEANS, kept in YAML next to the code
-# (config/semantic/<database>/ for the active database in
+# (config/<database>/semantic/ for the active database in
 # config/databases.yaml, or SQLAGENT_SEMANTIC_PATH).
 # One folder per database.
 #
@@ -26,7 +26,7 @@
 # Nothing here grants access. The model is applied to the catalog AFTER
 # security filtering, so a label, alias, relationship or term on a table
 # or column the role can't see is skipped and never shown. Access is
-# decided only by the security policy, config/security/<database>.yaml
+# decided only by the security policy, config/<database>/security.yaml
 # (controls/security_policy.py).
 #
 # Loading rules:
@@ -59,7 +59,7 @@ from sqlagent.controls.security_utils import full_table_name
 from sqlagent.databases import DatabaseConfigError, active_database
 
 
-DEFAULT_SEMANTIC_PATH = CONFIG_DIR / "semantic" / DEFAULT_DATABASE
+DEFAULT_SEMANTIC_PATH = CONFIG_DIR / DEFAULT_DATABASE / "semantic"
 
 # Discover everything (the behaviour before the semantic model existed).
 INCLUDE_EVERYTHING = ("*.*",)
@@ -302,9 +302,8 @@ def load_semantic_model(path=None):
     Load the semantic model from a YAML file or a folder of YAML files.
     path defaults to SQLAGENT_SEMANTIC_PATH, then the active database's
     semantic folder (config/databases.yaml).
-    Only the files directly in the folder are read, so another
-    database's folder alongside it is never merged in. A
-    missing path gives an empty model (logged). Invalid files raise
+    Only the files directly in the folder are read; sub-folders are
+    ignored. A missing path gives an empty model (logged). Invalid files raise
     SemanticModelError.
     """
     if path is None:

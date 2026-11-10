@@ -6,4 +6,4 @@
 # filtering (result_policy.py), restricted-column checks on questions
 # (question_policy.py), user-facing messages (messages.py) and the
 # caller's SecurityContext (security_context.py, security_utils.py),
-# built from config/security/<database>.yaml (security_policy.py).
+# built from config/<database>/security.yaml (security_policy.py).

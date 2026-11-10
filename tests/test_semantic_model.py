@@ -121,8 +121,8 @@ class Loading(unittest.TestCase):
         self.assertEqual(model.include, ("public.*",))
 
     def test_sub_folders_are_not_read(self):
-        # config/semantic/erp/ next to config/semantic/northwind/ must
-        # never be merged into either.
+        # Only the files directly in config/<database>/semantic/ are
+        # merged; a sub-folder is never read.
         with tempfile.TemporaryDirectory() as folder:
             write_files(folder, {"model.yaml": "tables: {customers: {aliases: [client]}}"})
             Path(folder, "erp").mkdir()
@@ -133,8 +133,8 @@ class Loading(unittest.TestCase):
     def test_default_paths_are_per_database(self):
         from sqlagent.adaptive.semantic_model import DEFAULT_SEMANTIC_PATH
         from sqlagent.controls.security_policy import DEFAULT_SECURITY_FILE
-        self.assertEqual(DEFAULT_SEMANTIC_PATH.parts[-2:], ("semantic", "northwind"))
-        self.assertEqual(DEFAULT_SECURITY_FILE.parts[-2:], ("security", "northwind.yaml"))
+        self.assertEqual(DEFAULT_SEMANTIC_PATH.parts[-2:], ("northwind", "semantic"))
+        self.assertEqual(DEFAULT_SECURITY_FILE.parts[-2:], ("northwind", "security.yaml"))
         self.assertTrue((DEFAULT_SEMANTIC_PATH / "model.yaml").is_file())
         self.assertTrue((DEFAULT_SEMANTIC_PATH / "domains.yaml").is_file())
         self.assertTrue(DEFAULT_SECURITY_FILE.is_file())

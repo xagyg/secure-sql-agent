@@ -1,7 +1,7 @@
 # Semantic model for the Northwind demo database.
 #
 # What the data MEANS: labels, aliases, relationships and terms. This file
-# grants no access - that is config/security/northwind.yaml. Anything here that
+# grants no access - that is config/northwind/security.yaml. Anything here that
 # names a table or column the role can't see is skipped at startup and
 # never shown to the model.
 #

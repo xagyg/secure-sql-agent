@@ -20,7 +20,7 @@
 #   4. Fallback schema and Domains of Discourse, from the semantic model.
 #
 # The vocabulary that used to be defined here (TABLE_ALIASES,
-# COLUMN_ALIASES, DEFAULT_FALLBACK_TABLES) now lives in config/semantic/<database>/
+# COLUMN_ALIASES, DEFAULT_FALLBACK_TABLES) now lives in config/<database>/semantic/
 # (see semantic_model.py).
 
 from contextlib import closing
@@ -57,7 +57,7 @@ class SchemaCatalog:
                  fallback_tables=None):
         self.connection_factory = connection_factory
         self.security = security
-        # The semantic model (config/semantic/northwind/ unless one is passed in).
+        # The semantic model (config/northwind/semantic/ unless one is passed in).
         self.semantic = semantic if semantic is not None else default_semantic_model()
         self.fallback_tables = (
             tuple(fallback_tables) if fallback_tables is not None

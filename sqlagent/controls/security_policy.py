@@ -2,7 +2,7 @@
 # Author: Brad Long
 #
 # Security policy: who may see what, kept in YAML separately from the
-# semantic model (config/security/<database>.yaml for the active database
+# semantic model (config/<database>/security.yaml for the active database
 # in config/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per database.
 #
 #   roles        Per role: the tables/views it may query (allow), any it
@@ -56,7 +56,7 @@ from sqlagent.databases import DatabaseConfigError, active_database
 from sqlagent.controls.security_utils import full_table_name
 
 
-DEFAULT_SECURITY_FILE = CONFIG_DIR / "security" / f"{DEFAULT_DATABASE}.yaml"
+DEFAULT_SECURITY_FILE = CONFIG_DIR / DEFAULT_DATABASE / "security.yaml"
 
 
 class SecurityPolicyError(ConfigFileError):
