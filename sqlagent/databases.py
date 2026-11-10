@@ -9,8 +9,8 @@
 #
 #   connection        host, port, database, user (password from the
 #                     environment, never the file)
-#   security_file     config/security/<name>.yaml unless set
-#   semantic_path     config/semantic/<name>/ unless set
+#   security_file     config/<name>/security.yaml unless set
+#   semantic_path     config/<name>/semantic/ unless set
 #   repl_roles        roles for the local REPL (main.py)
 #   demo_roles        roles for every anonymous visitor (api.py)
 #
@@ -88,9 +88,9 @@ class DatabaseProfile:
         self.description = spec.description
         self.connection = spec.connection
         self.security_file = _resolve(
-            spec.security_file, config_dir / "security" / f"{name}.yaml")
+            spec.security_file, config_dir / name / "security.yaml")
         self.semantic_path = _resolve(
-            spec.semantic_path, config_dir / "semantic" / name)
+            spec.semantic_path, config_dir / name / "semantic")
         self.repl_roles = {r.strip() for r in spec.repl_roles if r.strip()}
         self.demo_roles = {r.strip() for r in spec.demo_roles if r.strip()}
 

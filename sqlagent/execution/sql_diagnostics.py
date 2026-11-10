@@ -20,7 +20,7 @@ from sqlagent.execution.sql_execution import get_connection
 # Semantic column aliases
 # ---------------------------------------------------------------------------
 # The column vocabulary is the semantic model's column labels, aliases
-# and column terms (config/semantic/<database>/), the same words the catalog uses to
+# and column terms (config/<database>/semantic/), the same words the catalog uses to
 # pick tables and shows the LLM. Here it is read the other way round: the
 # model wrote an alias ("phone") or label as if it were a column, so map
 # it back to the physical column (employees.home_phone). This NEVER

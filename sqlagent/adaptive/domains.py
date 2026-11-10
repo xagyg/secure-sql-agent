@@ -37,7 +37,7 @@ from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_
 # ---------------------------------------------------------------------------
 # The domains, role_aliases (friendly names for role codes) and
 # function_aliases (screen codes such as PUR0410) are part of the
-# semantic model: config/semantic/northwind/domains.yaml documents each key. The
+# semantic model: config/northwind/semantic/domains.yaml documents each key. The
 # resolver reads them from catalog.semantic, or from the arguments, as
 # plain dicts:
 #

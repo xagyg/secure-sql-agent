@@ -50,8 +50,8 @@ class Profiles(unittest.TestCase):
         self.assertEqual(profile.name, "northwind")
         self.assertEqual(profile.connection.host, "localhost")
         self.assertEqual(profile.connection.port, 5432)
-        self.assertEqual(profile.security_file, CONFIG_DIR / "security" / "northwind.yaml")
-        self.assertEqual(profile.semantic_path, CONFIG_DIR / "semantic" / "northwind")
+        self.assertEqual(profile.security_file, CONFIG_DIR / "northwind" / "security.yaml")
+        self.assertEqual(profile.semantic_path, CONFIG_DIR / "northwind" / "semantic")
         self.assertEqual(profile.repl_roles, {"sales"})
 
     def test_environment_selects_case_insensitively(self):
@@ -59,7 +59,7 @@ class Profiles(unittest.TestCase):
         self.assertEqual(profile.name, "adventureworks")
         self.assertEqual(profile.connection.database, "aw")
         self.assertEqual(profile.connection.port, 6543)
-        self.assertEqual(profile.security_file, CONFIG_DIR / "security" / "adventureworks.yaml")
+        self.assertEqual(profile.security_file, CONFIG_DIR / "adventureworks" / "security.yaml")
         self.assertEqual(profile.semantic_path, PROJECT_ROOT / "elsewhere" / "aw")
         self.assertEqual(profile.repl_roles, {"sales", "purchasing"})
 

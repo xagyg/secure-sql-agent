@@ -113,7 +113,7 @@ AUDIT_LOG_PATH = os.environ.get("DEMO_AUDIT_LOG", "audit.log")
 
 # ==========================================================================
 # Demo SecurityContext — the active database's demo_roles (config/databases.yaml),
-# e.g. the "demo" role in config/security/northwind.yaml.
+# e.g. the "demo" role in config/northwind/security.yaml.
 #
 # Every anonymous demo visitor gets this same read-only, narrow view,
 # independent of the roles real authenticated users get (see main.py).

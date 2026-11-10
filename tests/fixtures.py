@@ -5,7 +5,7 @@
 # and a SchemaCatalog built from it, so tests need no database. The
 # customers.phone and employees.home_phone columns are left out, as the
 # demo role's security-filtered catalog does. The semantic model is the
-# real one in config/semantic/northwind/, so the tests cover the shipped vocabulary.
+# real one in config/northwind/semantic/, so the tests cover the shipped vocabulary.
 
 from sqlagent.adaptive.domains import DomainResolver
 from sqlagent.adaptive.schema_catalog import SchemaCatalog
