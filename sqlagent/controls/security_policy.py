@@ -3,7 +3,7 @@
 #
 # Security policy: who may see what, kept in YAML separately from the
 # semantic model (config/<database>/security.yaml for the active database
-# in config/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per database.
+# in config/settings/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per database.
 #
 #   roles        Per role: the tables/views it may query (allow), any it
 #                may not even though a wildcard matched (deny), and the
@@ -45,8 +45,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from sqlagent.config_files import (
-    CONFIG_DIR,
-    DEFAULT_DATABASE,
     ConfigFileError,
     format_validation_error,
     load_yaml,
@@ -54,9 +52,6 @@ from sqlagent.config_files import (
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.databases import DatabaseConfigError, active_database
 from sqlagent.controls.security_utils import full_table_name
-
-
-DEFAULT_SECURITY_FILE = CONFIG_DIR / DEFAULT_DATABASE / "security.yaml"
 
 
 class SecurityPolicyError(ConfigFileError):
@@ -250,7 +245,7 @@ def log_context(context):
 def load_security_policy(path=None):
     """
     Load the security policy. path defaults to SQLAGENT_SECURITY_FILE,
-    then the active database's security file (config/databases.yaml).
+    then the active database's security file (config/settings/databases.yaml).
     Raises SecurityPolicyError if the file is missing or invalid - there
     is no fallback.
     """

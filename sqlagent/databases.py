@@ -2,17 +2,20 @@
 # Author: Brad Long
 #
 # Database profiles: which database the agent runs against, and where
-# that database's configuration lives (config/databases.yaml).
+# that database's configuration lives (config/settings/databases.yaml).
 #
 # One name selects everything that belongs to a database, so switching
 # is one setting rather than five that must agree:
 #
-#   connection        host, port, database, user (password from the
-#                     environment, never the file)
+#   connection        host, port, database, user; password_env names the
+#                     environment variable holding the password (a
+#                     literal password in the file is rejected)
 #   security_file     config/<name>/security.yaml unless set
 #   semantic_path     config/<name>/semantic/ unless set
 #   repl_roles        roles for the local REPL (main.py)
 #   demo_roles        roles for every anonymous visitor (api.py)
+#   identity          how the agent names the database in prompts and
+#                     messages, and its example questions
 #
 # The active database is SQLAGENT_DATABASE, else the file's "default".
 # Fail closed: a missing or invalid file, or an unknown name, raises
@@ -34,13 +37,14 @@ from sqlagent.config_files import (
     format_validation_error,
     load_yaml,
 )
+from sqlagent.settings import reject_secret_keys, settings_dir
 
 
-DATABASES_FILE = CONFIG_DIR / "databases.yaml"
+DATABASES_FILE = CONFIG_DIR / "settings" / "databases.yaml"
 
 
 class DatabaseConfigError(ConfigFileError):
-    """config/databases.yaml is missing or invalid, or names no such database."""
+    """databases.yaml is missing or invalid, or names no such database."""
 
 
 class _Strict(BaseModel):
@@ -56,9 +60,23 @@ class Connection(_Strict):
     password_env: str = Field("PG_PASSWORD", min_length=1)
 
 
+class Identity(_Strict):
+    """How the agent talks about the database. Never affects access."""
+    # Used in the LLM prompt and in user-facing messages.
+    display_name: str | None = None
+    # What users call the company/database ("what does Northwind have?").
+    # Matched in overview questions; the LLM is told never to filter on them.
+    names: list[str] = Field(default_factory=list)
+    # Completes "<display_name> is ..." in the overview message.
+    about: str = ""
+    # Offered when a question is too vague or off topic.
+    example_questions: list[str] = Field(default_factory=list)
+
+
 class DatabaseSpec(_Strict):
     description: str = ""
     connection: Connection
+    identity: Identity = Field(default_factory=Identity)
     security_file: Path | None = None
     semantic_path: Path | None = None
     repl_roles: list[str] = Field(..., min_length=1)
@@ -93,14 +111,22 @@ class DatabaseProfile:
             spec.semantic_path, config_dir / name / "semantic")
         self.repl_roles = {r.strip() for r in spec.repl_roles if r.strip()}
         self.demo_roles = {r.strip() for r in spec.demo_roles if r.strip()}
+        ident = spec.identity
+        self.display_name = (ident.display_name or name).strip()
+        names = [n.strip() for n in ident.names if n.strip()]
+        self.names = names or [self.display_name]
+        self.about = ident.about.strip()
+        self.example_questions = [q.strip() for q in ident.example_questions if q.strip()]
 
     def password(self):
         return os.environ.get(self.connection.password_env)
 
     def describe(self):
         c = self.connection
+        found = "set" if self.password() else "NOT SET"
         return (f"{self.name}: {c.user}@{c.host}:{c.port}/{c.database} "
-                f"(security {self.security_file}, semantic {self.semantic_path})")
+                f"(password from ${c.password_env}: {found}; "
+                f"security {self.security_file}, semantic {self.semantic_path})")
 
 
 def _resolve(path, default):
@@ -116,13 +142,16 @@ def load_database_profile(name=None, path=None):
     The profile for database `name` (default: SQLAGENT_DATABASE, then the
     file's "default"). Names are case-insensitive.
     """
-    path = Path(path or DATABASES_FILE)
+    path = Path(path or settings_dir() / "databases.yaml")
     if not path.is_file():
         raise DatabaseConfigError(f"database list not found: {path}")
     try:
         data = load_yaml(path)
+        reject_secret_keys(data)
     except ConfigFileError as ex:
         raise DatabaseConfigError(str(ex)) from ex
+    except ValueError as ex:
+        raise DatabaseConfigError(f"{path}: {ex}") from ex
     try:
         parsed = DatabasesFile.model_validate(data)
     except ValidationError as ex:

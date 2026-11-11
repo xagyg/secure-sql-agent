@@ -3,7 +3,7 @@
 #
 # The semantic model: what the data MEANS, kept in YAML next to the code
 # (config/<database>/semantic/ for the active database in
-# config/databases.yaml, or SQLAGENT_SEMANTIC_PATH).
+# config/settings/databases.yaml, or SQLAGENT_SEMANTIC_PATH).
 # One folder per database.
 #
 # The database says what exists (tables, views, columns). The semantic
@@ -49,8 +49,6 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from sqlagent.config_files import (
-    CONFIG_DIR,
-    DEFAULT_DATABASE,
     ConfigFileError,
     format_validation_error,
     load_yaml,
@@ -58,8 +56,6 @@ from sqlagent.config_files import (
 from sqlagent.controls.security_utils import full_table_name
 from sqlagent.databases import DatabaseConfigError, active_database
 
-
-DEFAULT_SEMANTIC_PATH = CONFIG_DIR / DEFAULT_DATABASE / "semantic"
 
 # Discover everything (the behaviour before the semantic model existed).
 INCLUDE_EVERYTHING = ("*.*",)
@@ -301,7 +297,7 @@ def load_semantic_model(path=None):
     """
     Load the semantic model from a YAML file or a folder of YAML files.
     path defaults to SQLAGENT_SEMANTIC_PATH, then the active database's
-    semantic folder (config/databases.yaml).
+    semantic folder (config/settings/databases.yaml).
     Only the files directly in the folder are read; sub-folders are
     ignored. A missing path gives an empty model (logged). Invalid files raise
     SemanticModelError.

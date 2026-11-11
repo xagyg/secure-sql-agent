@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 
 from sqlagent.controls.security_utils import full_table_name
 from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_matches, tokenize
+from sqlagent.settings import get_settings
 
 
 # ---------------------------------------------------------------------------
@@ -54,17 +55,24 @@ from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_
 # ---------------------------------------------------------------------------
 # Tuning
 # ---------------------------------------------------------------------------
+# The values are set under domains: in config/settings/retrieval.yaml (how
+# to tune them, and the validation applied). Why each one exists and how
+# it is used is explained here.
 
-# Signal weights. When a signal is absent (no [where=...] tag, say) its
-# weight is shared among the signals that are present, so questions
-# without a tag aren't penalised.
-WEIGHT_WHAT = 0.45
-WEIGHT_WHERE = 0.35
-WEIGHT_WHO = 0.20
+_ROUTING = get_settings().retrieval.domains
+
+# Signal weights for What (tables, aliases, terms and domains the question
+# names), Where (a [where=...] tag, screen code or location phrase) and
+# Who (the asker's role affinity). When a signal is absent (no [where=...]
+# tag, say) its weight is shared among the signals that are present, so
+# questions without a tag aren't penalised. See DomainResolver.resolve().
+WEIGHT_WHAT = _ROUTING.weights.what
+WEIGHT_WHERE = _ROUTING.weights.where
+WEIGHT_WHO = _ROUTING.weights.who
 
 # Bonus for the domain used on the previous turn, so follow-ups such as
 # "and which of those were late?" stay in the same area.
-STICKY_BONUS = 0.10
+STICKY_BONUS = _ROUTING.sticky_bonus
 
 # Weak evidence never moves a conversation. When the question names no
 # table (in full or by alias) and no domain, and there is no [where=...]
@@ -74,24 +82,25 @@ STICKY_BONUS = 0.10
 # about customers jumped to Purchasing (suppliers.phone) because
 # customers.phone is hidden from the role. With weak evidence and a
 # previous domain, the agent stays in the previous domain instead.
-WEAK_EVIDENCE_FOLLOW_UP = True
+WEAK_EVIDENCE_FOLLOW_UP = _ROUTING.weak_evidence_follow_up
 
 # A question that names the domain ("in purchasing") is worth two tables
-# named in full (see FULL_NAME_MATCH in text_match.py).
-EXPLICIT_DOMAIN_POINTS = 40
+# named in full (FULL_NAME_MATCH in text_match.py), so it beats any single
+# table match.
+EXPLICIT_DOMAIN_POINTS = _ROUTING.explicit_domain_points
 
 # Points per word of a matched location phrase. Longer, more specific
 # phrases ("purchase order entry") beat single words ("entry").
-WHERE_PHRASE_POINTS = 10
+WHERE_PHRASE_POINTS = _ROUTING.where_phrase_points
 
 # Decision rule.
-MIN_DOMAIN_SCORE = 0.25   # below this, no domain: search the whole UoD
-BLEND_MARGIN = 0.15       # top two closer than this: use both domains
+MIN_DOMAIN_SCORE = _ROUTING.min_domain_score   # below this, no domain: search the whole UoD
+BLEND_MARGIN = _ROUTING.blend_margin           # top two closer than this: use both domains
 
 # Demo only: lets the person asking set Who with "[who=buyer]". This
 # affects ROUTING only - never authorisation, which always comes from the
 # authenticated SecurityContext. Turn off in any real deployment.
-ALLOW_WHO_TAG = True
+ALLOW_WHO_TAG = _ROUTING.allow_who_tag
 
 def _is_pattern(name):
     """True for a domain table entry with wildcards ("sales.*",

@@ -1,0 +1,9 @@
+# The local command-line REPL (main.py, .\run.ps1 -local).
+#
+# In a real deployment the user and roles come from the user's sign-in
+# (identity-provider groups -> roles, see group_roles in
+# config/<database>/security.yaml). Locally the user is set here
+# [SQLAGENT_USER] and the roles are the database's repl_roles in
+# databases.yaml [SQLAGENT_ROLES, comma-separated].
+
+user: brad

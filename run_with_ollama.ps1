@@ -27,7 +27,8 @@
 
 .PARAMETER NumParallel
     OLLAMA_NUM_PARALLEL: how many requests each loaded model serves concurrently.
-    Default 1. Keep DEMO_MAX_CONCURRENCY in step with it (see README).
+    Default 1. Keep max_concurrency in config/settings/api.yaml in step with it
+    (see README).
 
 .PARAMETER MaxLoadedModels
     OLLAMA_MAX_LOADED_MODELS: how many models may be held in memory at once.
@@ -47,7 +48,7 @@
     Starts the command-line REPL instead of the API (passed on to run.ps1).
 
 .PARAMETER db
-    A database name from config/databases.yaml (passed on to run.ps1).
+    A database name from config/settings/databases.yaml (passed on to run.ps1).
 
 .EXAMPLE
     .\run_with_ollama.ps1 -local -db adventureworks

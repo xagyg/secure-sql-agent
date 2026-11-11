@@ -19,13 +19,15 @@ from sqlagent.controls.security_utils import (
     get_denied_columns,
     is_authorized_table,
 )
+from sqlagent.settings import get_settings
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-MAX_ROWS = 1000
+# LIMIT added to queries that have none (config/settings/query.yaml).
+MAX_ROWS = get_settings().query.max_rows
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 

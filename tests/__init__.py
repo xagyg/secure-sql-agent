@@ -13,3 +13,4 @@ import os
 os.environ["SQLAGENT_DATABASE"] = "northwind"
 os.environ.pop("SQLAGENT_SECURITY_FILE", None)
 os.environ.pop("SQLAGENT_SEMANTIC_PATH", None)
+os.environ.pop("SQLAGENT_SETTINGS_DIR", None)

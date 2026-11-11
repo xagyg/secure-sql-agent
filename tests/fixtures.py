@@ -8,8 +8,13 @@
 # real one in config/northwind/semantic/, so the tests cover the shipped vocabulary.
 
 from sqlagent.adaptive.domains import DomainResolver
+from sqlagent.config_files import CONFIG_DIR
 from sqlagent.adaptive.schema_catalog import SchemaCatalog
 
+
+# The shipped Northwind configuration the tests run against.
+NORTHWIND_SECURITY_FILE = CONFIG_DIR / "northwind" / "security.yaml"
+NORTHWIND_SEMANTIC_PATH = CONFIG_DIR / "northwind" / "semantic"
 
 NORTHWIND = {
     "categories": ["category_id", "category_name", "description", "picture"],

@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 
-import os
 import re
 import json
 import base64
@@ -9,25 +8,31 @@ import base64
 import httpx
 from ollama import Client
 
+from sqlagent.databases import active_database
+from sqlagent.settings import get_settings
+
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# These are set in the startup script
-OLLAMA_HOST = os.getenv("OLLAMA_HOST")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
-OLLAMA_USERNAME = os.getenv("OLLAMA_USERNAME")
-OLLAMA_PASSWORD = os.getenv("OLLAMA_PASSWORD")
-MAX_HISTORY_TURNS = 5
+# config/settings/llm.yaml (OLLAMA_* environment variables override it).
+# The username and password come from the environment variables it
+# names, never from the file.
+_LLM = get_settings().llm
+OLLAMA_HOST = _LLM.host
+OLLAMA_MODEL = _LLM.model
+OLLAMA_USERNAME = _LLM.username()
+OLLAMA_PASSWORD = _LLM.password()
+MAX_HISTORY_TURNS = _LLM.history_turns
 
 # Timeouts for calls to Ollama, in seconds. The ollama client's default is
 # no timeout at all, so a call sent on a connection that was silently
 # dropped (e.g. by the ngrok tunnel after a long idle period) waited
 # forever: the REPL froze, and under the API each hung call held a worker
 # thread for good until the thread pool ran out.
-OLLAMA_CONNECT_TIMEOUT = float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "10"))
-OLLAMA_READ_TIMEOUT = float(os.getenv("OLLAMA_READ_TIMEOUT", "120"))
+OLLAMA_CONNECT_TIMEOUT = _LLM.connect_timeout
+OLLAMA_READ_TIMEOUT = _LLM.read_timeout
 
 # Returned by the model (instead of SQL) when the user asks to modify data.
 # It can only ever lead to a request being BLOCKED, never to more access,
@@ -54,7 +59,7 @@ DATA_NOT_AVAILABLE_SENTINEL = "DATA_NOT_AVAILABLE"
 # told the data might be restricted for their role.
 UNCLEAR_QUESTION_SENTINEL = "UNCLEAR_QUESTION"
 
-headers = {"ngrok-skip-browser-warning": "true"}
+headers = dict(_LLM.headers)
 
 if OLLAMA_USERNAME and OLLAMA_PASSWORD:
     credentials = f"{OLLAMA_USERNAME}:{OLLAMA_PASSWORD}"
@@ -117,8 +122,12 @@ Previous answer:
             for turn in history[-MAX_HISTORY_TURNS:]
         )
 
+    db = active_database()
+    db_names = " (or ".join(f'"{n}"' for n in db.names[:2]) + (")" if len(db.names) > 1 else "")
+    db_values = " or ".join(f"'{n}'" for n in db.names)
+
     system_prompt = f"""
-You are a PostgreSQL assistant working with the northwind database.
+You are a PostgreSQL assistant working with the {db.name} database.
 Your job is to generate ONE PostgreSQL SELECT statement that answers
 the user's current question.
 
@@ -159,9 +168,9 @@ IMPORTANT:
   do NOT guess a table or a filter. Return exactly this and nothing
   else:
   {UNCLEAR_QUESTION_SENTINEL}
-* "Northwind" (or "North Wind") is the name of the company and the
+* {db_names} is the name of the company and the
   database. It is never a value to filter on: never write
-  WHERE ... = 'Northwind' or 'North Wind'.
+  WHERE ... = {db_values}.
 * If the message asks what is known about a person, company or other
   record ("what information do you have about X?", "tell me about X",
   "any further details on X?"), select ALL columns of the matching row

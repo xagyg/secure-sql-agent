@@ -19,13 +19,13 @@
 import re
 
 from sqlagent.controls.messages import (
-    NO_QUERY_MESSAGE,
-    OFF_TOPIC_MESSAGE,
     WITHHELD_LABEL,
     WITHHELD_NOTE,
     WITHHELD_RULE,
     block_rule,
     clarify_message,
+    no_query_message,
+    off_topic_message,
     overview_message,
     rule_label,
     rule_message,
@@ -400,13 +400,15 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
 
     if output_kind == "off_topic":
         print("\n[agent] Not a data question.")
-        print(f"\n[answer] {OFF_TOPIC_MESSAGE}")
-        return _result(OFF_TOPIC_MESSAGE)
+        message = off_topic_message()
+        print(f"\n[answer] {message}")
+        return _result(message)
 
     if output_kind == "no_sql":
         print("\n[agent] Model did not return a SQL statement.")
-        print(f"\n[answer] {NO_QUERY_MESSAGE}")
-        return _error(NO_QUERY_MESSAGE)
+        message = no_query_message()
+        print(f"\n[answer] {message}")
+        return _error(message)
 
     # ---------------------------------------------------------
     # Strip, validate, rewrite, re-validate (see _prepare_sql)

@@ -1,0 +1,70 @@
+# Which databases the agent can run against, and how to reach each one.
+#
+# Pick one at startup:
+#     .\run.ps1 -db adventureworks          (or -local for the REPL)
+#     $env:SQLAGENT_DATABASE = "adventureworks"
+# With neither, "default" below is used. Loaded by sqlagent/databases.py;
+# any problem in this file, or an unknown name, stops startup.
+#
+# Each database brings its own configuration, found by its name:
+#     config/<name>/security.yaml     who may see what (required)
+#     config/<name>/semantic/         what the data means (optional)
+# Set security_file / semantic_path to point somewhere else.
+#
+# SECRETS: the password is never stored here. password_env names the
+# environment variable that holds it, and a literal "password:" key is
+# rejected at startup. run.ps1 sets PG_PASSWORD for you (from the
+# window, then your Windows user variables, then a hidden prompt), and
+# startup prints whether it was found.
+#
+# identity: how the agent talks about this database - the name in the
+# LLM prompt and in user-facing messages, the names users call it
+# ("what does Northwind have?"), and the example questions offered when
+# a question is too vague. It never affects access.
+
+version: 1
+default: northwind
+
+databases:
+  northwind:
+    description: Northwind sample database (about a dozen tables)
+    connection:
+      host: localhost
+      port: 5432
+      database: northwind
+      user: sqlagent_ro
+      password_env: PG_PASSWORD     # value from the environment, never here
+    # Roles from config/northwind/security.yaml.
+    repl_roles: [sales]      # main.py (SQLAGENT_ROLES overrides)
+    demo_roles: [demo]       # api.py, every anonymous visitor
+    identity:
+      display_name: Northwind
+      # What users call the company/database. Matched in overview
+      # questions, and the LLM is told never to filter on them.
+      names: [Northwind, North Wind]
+      about: a sample trading company's database
+      example_questions:
+        - Which customers are in Germany?
+        - Which products are low on stock?
+        - Who are our top 5 customers by order value?
+
+  # AdventureWorks (about 70 tables in sales, purchasing,
+  # production, humanresources and person schemas).
+  adventureworks:
+    description: AdventureWorks (multi-schema, ERP-like)
+    connection:
+      host: localhost
+      port: 5432
+      database: adventureworks
+      user: sqlagent_ro
+      password_env: PG_PASSWORD     # value from the environment, never here
+    repl_roles: [sales]
+    demo_roles: [demo]
+    identity:
+      display_name: AdventureWorks
+      names: [AdventureWorks, Adventure Works, Adventure Works Cycles]
+      about: a sample bicycle manufacturer's ERP database
+      example_questions:
+        - Which territories had the highest sales last year?
+        - What are our top 5 products by revenue?
+        - Which vendors supply us with bike components?

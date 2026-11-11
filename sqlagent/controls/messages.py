@@ -5,6 +5,12 @@
 # and label here is generic: none ever names a table or column, so all are
 # safe to send to the browser. Detailed reasons stay in the server log.
 # Split out of agent_controls.py.
+#
+# The database's name, description and example questions come from its
+# identity in config/settings/databases.yaml, so the wording follows the
+# active database.
+
+from sqlagent.databases import active_database
 
 
 # Each rule has a short label (shown as a tag in the UI) and a generic
@@ -60,29 +66,28 @@ BLOCK_RULES = {
 }
 
 
+def _example(index):
+    """The database's example question at `index` (wrapping), or None."""
+    examples = active_database().example_questions
+    return examples[index % len(examples)] if examples else None
+
+
 # Not a block: the model didn't return a query at all (e.g. it replied in
 # prose). Reported as a technical "error", like an unparseable query.
-NO_QUERY_MESSAGE = (
-    "I couldn't turn that into a database query, so nothing was run. "
-    "Try asking a question about the data, e.g. "
-    "\"Which customers are in Germany?\""
-)
+def no_query_message():
+    example = _example(0)
+    hint = f", e.g. \"{example}\"" if example else "."
+    return ("I couldn't turn that into a database query, so nothing was run. "
+            f"Try asking a question about the data{hint}")
 
 
 # Not a block either: the message wasn't a question about the data
 # (greeting, insult, small talk). reason=None, so the UI shows no tag.
-OFF_TOPIC_MESSAGE = (
-    "I can only answer questions about the Northwind data. Try something "
-    "like \"Which products are low on stock?\""
-)
-
-
-# Example questions offered with the overview / clarification messages.
-EXAMPLE_QUESTIONS = (
-    "Which customers are in Germany?",
-    "Which products are low on stock?",
-    "Who are our top 5 customers by order value?",
-)
+def off_topic_message():
+    example = _example(1)
+    hint = f" Try something like \"{example}\"" if example else ""
+    return (f"I can only answer questions about the "
+            f"{active_database().display_name} data.{hint}")
 
 
 def _areas_text(labels, conjunction="and"):
@@ -97,7 +102,13 @@ def _areas_text(labels, conjunction="and"):
 
 
 def _examples_text():
-    return ", ".join(f"\"{q}\"" for q in EXAMPLE_QUESTIONS[:2])
+    examples = active_database().example_questions[:2]
+    return ", ".join(f"\"{q}\"" for q in examples)
+
+
+def _for_example():
+    text = _examples_text()
+    return f", for example: {text}" if text else "."
 
 
 def overview_message(labels):
@@ -109,11 +120,12 @@ def overview_message(labels):
     """
     areas = _areas_text(labels)
     if not areas:
-        return OFF_TOPIC_MESSAGE
-    return (
-        "Northwind is a sample trading company's database. The areas you "
-        f"can ask about are {areas}. For example: {_examples_text()}"
-    )
+        return off_topic_message()
+    db = active_database()
+    about = f"{db.display_name} is {db.about}. " if db.about else ""
+    examples = _examples_text()
+    examples = f" For example: {examples}" if examples else ""
+    return f"{about}The areas you can ask about are {areas}.{examples}"
 
 
 def clarify_message(labels):
@@ -128,7 +140,7 @@ def clarify_message(labels):
     hint = f" about {areas}" if areas else " about the data"
     return (
         "I'm not sure what you're asking, so nothing was run. Try a more "
-        f"specific question{hint}, for example: {_examples_text()}"
+        f"specific question{hint}{_for_example()}"
     )
 
 

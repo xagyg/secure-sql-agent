@@ -89,8 +89,10 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/execution/sql_execution.py`   | PostgreSQL connection and the final execution gate                                      |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt                                    |
 | `sqlagent/config_files.py`              | Shared YAML loading (rejects duplicate keys)                                            |
-| `sqlagent/databases.py`                 | Loads `config/databases.yaml` and picks the active database (fails closed)              |
-| `config/databases.yaml`                 | Database profiles: connection, security file, semantic folder, REPL and demo roles      |
+| `sqlagent/settings.py`                  | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
+| `sqlagent/databases.py`                 | Loads `config/settings/databases.yaml` and picks the active database (fails closed)     |
+| `config/settings/databases.yaml`        | Database profiles: connection, security file, semantic folder, roles, identity          |
+| `config/settings/*.yaml`                | Runtime settings: LLM, API limits, query limits, routing, REPL                          |
 | `config/northwind/security.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
 | `config/northwind/semantic/*.yaml`      | Semantic model: discovery, labels, aliases, relationships, terms, domains               |
 | `tests/`                                | Unit tests; `tests/fixtures.py` holds a static Northwind schema                         |
@@ -273,7 +275,7 @@ The web page and the tunnel script (`ngrok.ps1`) are specific to that deployment
    `setx DEMO_ALLOWED_ORIGIN "https://example.com,https://www.example.com"`
    If it's unset, the API allows same-origin requests only.
 
-`run.ps1` sets `DEMO_TRUSTED_PROXY_HOPS=1` because ngrok is the one proxy in front of the API; change it if you use a different setup. CORS is limited to the origins in `DEMO_ALLOWED_ORIGIN`.
+`api.yaml` sets `trusted_proxy_hops: 1` because ngrok is the one proxy in front of the API; change it if you use a different setup. CORS is limited to the origins in `allowed_origins` (or `DEMO_ALLOWED_ORIGIN`).
 
 ### Endpoints
 
@@ -295,22 +297,66 @@ Every anonymous visitor gets the same fixed, narrow context: the `demo` role in 
 
 ## Configuration
 
-`run.ps1` supplies the local configuration for Ollama and selects the database. Secrets are not stored in the script or in any config file.
+All runtime settings live in YAML under `config/settings/`, next to each database's own configuration:
+
+```
+config/
+  settings/
+    databases.yaml   which databases exist, how to reach them, how to name them
+    llm.yaml         Ollama host and model, timeouts, conversation history
+    api.yaml         public demo API: CORS, proxy hops, rate limits, concurrency, timeouts
+    query.yaml       limits on every generated query: statement timeout, max rows, max result bytes
+    retrieval.yaml   which authorised tables are shown to the LLM per question
+    repl.yaml        local REPL user
+  northwind/         per database: security.yaml, semantic/
+  adventureworks/
+```
+
+Each file documents its own keys. They are loaded once at startup by `sqlagent/settings.py` and validated: an unknown key, a value out of range (e.g. `max_rows: 0`), weights that don't add up to 1, or a statement timeout that isn't below the API timeout stops startup. The `[settings]` startup line shows the folder in use and any environment overrides.
+
+**Precedence:** environment variable, then the YAML file, then the built-in default. The environment variable names are unchanged (`OLLAMA_MODEL`, `DEMO_AGENT_TIMEOUT`, `PG_STATEMENT_TIMEOUT_SECONDS`, ...), and each file lists the variable beside the key it overrides. Use them for a one-off run or a deployment; keep the normal values in the YAML. An empty variable counts as unset. `SQLAGENT_SETTINGS_DIR` points at a different settings folder.
+
+**Secrets are never stored in a settings file.** A key ending in `_env` names the environment variable that holds the secret, so the file shows where each one comes from:
+
+```yaml
+# databases.yaml
+connection:
+  user: sqlagent_ro
+  password_env: PG_PASSWORD     # value from the environment, never here
+
+# llm.yaml
+username_env: OLLAMA_USERNAME
+password_env: OLLAMA_PASSWORD
+```
+
+A literal `password`, `username`, `secret`, `token` or `api_key` key anywhere in a settings file, or an `Authorization` header in `llm.yaml`, is rejected at startup. A placeholder value such as `password: "[set by environment]"` is deliberately not used: it would be one edit away from holding the real password. Startup reports whether each password was found without printing it (`password from $PG_PASSWORD: set`).
+
+`run.ps1` selects the database and supplies `PG_PASSWORD` (from the window, your Windows user variables or a hidden prompt). It no longer sets any other configuration.
 
 ### Switching databases
 
-Everything that belongs to one database hangs off its name in `config/databases.yaml`:
+Everything that belongs to one database hangs off its name in `config/settings/databases.yaml`:
 
 ```yaml
 default: northwind
 databases:
   northwind:
-    connection: {host: localhost, port: 5432, database: northwind, user: sqlagent_ro}
+    connection: {host: localhost, port: 5432, database: northwind, user: sqlagent_ro,
+                 password_env: PG_PASSWORD}
     repl_roles: [sales]      # main.py
     demo_roles: [demo]       # api.py
+    identity:
+      display_name: Northwind
+      names: [Northwind, North Wind]
+      about: a sample trading company's database
+      example_questions:
+        - Which customers are in Germany?
+        - Which products are low on stock?
 ```
 
-By convention the name also finds `config/<name>/security.yaml` (required) and `config/<name>/semantic/` (optional); set `security_file` or `semantic_path` to use other locations. The password is read from the environment variable named by `password_env` (default `PG_PASSWORD`).
+By convention the name also finds `config/<name>/security.yaml` (required) and `config/<name>/semantic/` (optional); set `security_file` or `semantic_path` to use other locations.
+
+`identity` is how the agent talks about the database: the name in the LLM prompt and in user-facing messages, the names users call it (recognised in "what does Northwind have?", and never used as a filter value by the LLM), and the example questions offered when a question is vague or off topic. It never affects access. Without it, the database's key is used as its name and no examples are offered.
 
 Pick a database with `-db`, or set it once as a user variable:
 
@@ -321,20 +367,24 @@ setx SQLAGENT_DATABASE adventureworks
 
 Without either, the file's `default` is used. Startup prints the choice (`[database] northwind: sqlagent_ro@localhost:5432/northwind ...`) and the API records it in the `startup` audit line. An unknown name, a missing security file or an invalid `databases.yaml` stops startup. `PG_HOST`, `PG_DATABASE` and the like are ignored, so a value left over in a PowerShell window can't pair one database's security policy with another database. The unit tests always use Northwind, whatever is selected.
 
-To add a database: load it, grant `sqlagent_ro` read access, add an entry to `databases.yaml`, then create `config/<name>/security.yaml` and (optionally) `config/<name>/semantic/`.
+To add a database: load it, grant `sqlagent_ro` read access, add an entry (with an `identity`) to `databases.yaml`, then create `config/<name>/security.yaml` and (optionally) `config/<name>/semantic/`.
 
-### Database and model
+### Environment variables
 
-| Variable                             | Example                               |
-| ------------------------------------ | ------------------------------------- |
-| `SQLAGENT_DATABASE`                  | `northwind` (a name in `config/databases.yaml`) |
-| `PG_PASSWORD`                        | *(secret)*                            |
-| `PG_STATEMENT_TIMEOUT_SECONDS`       | `10`                                  |
-| `OLLAMA_HOST`                        | `http://localhost:11434`              |
-| `OLLAMA_MODEL`                       | `qwen3-coder`                         |
-| `OLLAMA_USERNAME`, `OLLAMA_PASSWORD` | Only if Ollama sits behind basic auth |
-| `OLLAMA_CONNECT_TIMEOUT`             | `10` (seconds to connect to Ollama)   |
-| `OLLAMA_READ_TIMEOUT`                | `120` (seconds to wait for an answer) |
+These override the settings files, or select what the files can't:
+
+| Variable | Overrides / purpose |
+| -------- | ------------------- |
+| `SQLAGENT_DATABASE` | Which database in `databases.yaml` (default: its `default`) |
+| `PG_PASSWORD` | *(secret)* the database password, as named by `password_env` |
+| `OLLAMA_USERNAME`, `OLLAMA_PASSWORD` | *(secret)* only if Ollama sits behind basic auth |
+| `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_CONNECT_TIMEOUT`, `OLLAMA_READ_TIMEOUT` | `llm.yaml` |
+| `DEMO_ALLOWED_ORIGIN`, `DEMO_TRUSTED_PROXY_HOPS`, `DEMO_MAX_QUESTION_CHARS`, `DEMO_SESSION_RPM`/`RPD`, `DEMO_IP_RPM`/`RPD`, `DEMO_MAX_CONCURRENCY`, `DEMO_QUEUE_WAIT`, `DEMO_AGENT_TIMEOUT`, `DEMO_MAX_SLOT_HOLD`, `DEMO_MAX_SESSIONS`, `DEMO_AUDIT_LOG` | `api.yaml` |
+| `PG_STATEMENT_TIMEOUT_SECONDS` | `query.yaml` |
+| `SQLAGENT_USER` | `repl.yaml` |
+| `SQLAGENT_ROLES` | REPL only: comma-separated roles (default: the profile's `repl_roles`) |
+| `SQLAGENT_SECURITY_FILE`, `SQLAGENT_SEMANTIC_PATH` | The profile's security file / semantic folder |
+| `SQLAGENT_SETTINGS_DIR` | The settings folder (default `config/settings/`) |
 
 ### Ollama server settings
 
@@ -362,24 +412,12 @@ setx OLLAMA_NUM_PARALLEL 1
 
 The server it starts keeps running after the script exits, and logs to `logs\ollama-serve*.log`. To go back to the tray app, stop it (`Get-Process ollama | Stop-Process`) and start Ollama as usual.
 
-Keep `DEMO_MAX_CONCURRENCY` (below) equal to `OLLAMA_NUM_PARALLEL`. Both default to 1, which keeps the queue in the API: a second visitor waits up to `DEMO_QUEUE_WAIT` seconds for a free slot, then gets a prompt "busy" reply. If the API allowed more runs than Ollama answers at once, the extra runs would be admitted but then wait inside Ollama, and because each run makes two or more model calls, that wait would count against `DEMO_AGENT_TIMEOUT` and could end in a timeout. To let visitors wait longer for a turn, raise `DEMO_QUEUE_WAIT`. If you raise `OLLAMA_NUM_PARALLEL`, raise `DEMO_MAX_CONCURRENCY` to match, bearing in mind that each extra slot uses more GPU memory.
+Keep `max_concurrency` in `api.yaml` equal to `OLLAMA_NUM_PARALLEL`. Both default to 1, which keeps the queue in the API: a second visitor waits up to `queue_wait` seconds for a free slot, then gets a prompt "busy" reply. If the API allowed more runs than Ollama answers at once, the extra runs would be admitted but then wait inside Ollama, and because each run makes two or more model calls, that wait would count against `agent_timeout` and could end in a timeout. To let visitors wait longer for a turn, raise `queue_wait`. If you raise `OLLAMA_NUM_PARALLEL`, raise `max_concurrency` to match, bearing in mind that each extra slot uses more GPU memory.
 
 
 ### Demo API
 
-| Variable                                | Default                   | Purpose                                                                                              |
-| --------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `DEMO_ALLOWED_ORIGIN`                   | *(unset = same-origin)*   | Comma-separated CORS origins                                                                         |
-| `DEMO_TRUSTED_PROXY_HOPS`               | `1`                       | Proxies in front of the API; client IP is read this many entries from the right of `X-Forwarded-For` |
-| `DEMO_MAX_QUESTION_CHARS`               | `300`                     | Question length limit                                                                                |
-| `DEMO_IP_RPM` / `DEMO_IP_RPD`           | `10` / `150`              | Per-IP requests per minute / day                                                                     |
-| `DEMO_SESSION_RPM` / `DEMO_SESSION_RPD` | `4` / `40`                | Per-session requests per minute / day                                                                |
-| `DEMO_MAX_CONCURRENCY`                  | `1`                       | Agent runs (Ollama calls) in flight at once                                                          |
-| `DEMO_QUEUE_WAIT`                       | `5`                       | Seconds to wait for a free slot before replying "busy"                                               |
-| `DEMO_AGENT_TIMEOUT`                    | `25` (`120` in `run.ps1`) | Seconds before a request times out                                                                   |
-| `DEMO_MAX_SLOT_HOLD`                    | `90` (`150` in `run.ps1`) | Hard cap on how long a stuck run holds a slot                                                        |
-| `DEMO_MAX_SESSIONS`                     | `2000`                    | Conversation histories kept in memory                                                                |
-| `DEMO_AUDIT_LOG`                        | `audit.log`               | Audit log path                                                                                       |
+The API's limits are in `config/settings/api.yaml`: CORS origins, trusted proxy hops, question length, per-IP and per-session rate limits, concurrency, queue wait, agent timeout, slot hold, sessions kept in memory and the audit log path. Wildcard CORS origins are rejected.
 
 Run with `--workers 1`. The rate limiter and session store are in memory and are not shared across worker processes.
 
@@ -472,17 +510,11 @@ show me the latest one [where=PUR0410]           → Purchasing & Inventory (fun
 what was the last order? [who=accountant]        → Financials
 ```
 
-Tags are stripped before the question reaches the LLM. `[who=...]` only affects routing, never access, and is controlled by `ALLOW_WHO_TAG`; turn it off outside the demo.
+Tags are stripped before the question reaches the LLM. `[who=...]` only affects routing, never access, and is controlled by `domains.allow_who_tag` in `config/settings/retrieval.yaml`; turn it off outside the demo. The routing weights and thresholds are in the same file.
 
 Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog and every layer in [Defence in depth](#defence-in-depth) still runs. The chosen domain is printed as a `[domain]` line in the console.
 
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `SQLAGENT_DATABASE` | `default` in `config/databases.yaml` | Which database profile to use |
-| `SQLAGENT_SECURITY_FILE` | the profile's security file | Security policy (overrides the profile) |
-| `SQLAGENT_SEMANTIC_PATH` | the profile's semantic folder | Semantic model, a folder or one file (overrides the profile) |
-| `SQLAGENT_USER` | `brad` | REPL only: the local user's name |
-| `SQLAGENT_ROLES` | the profile's `repl_roles` | REPL only: comma-separated roles from the security file |
+The environment variables that select the database, security file and semantic folder are listed under [Environment variables](#environment-variables).
 
 ---
 

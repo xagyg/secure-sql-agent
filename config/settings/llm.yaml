@@ -1,0 +1,33 @@
+# The LLM that turns questions into SQL (sqlagent/adaptive/llm.py).
+#
+# Environment variables override these (for a one-off run or a
+# deployment): OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_CONNECT_TIMEOUT,
+# OLLAMA_READ_TIMEOUT.
+#
+# SECRETS: a tunnelled Ollama (e.g. behind ngrok) may need basic auth.
+# The username and password are read from the environment variables
+# named below, never from this file; a literal "username:"/"password:"
+# key, or an Authorization header, is rejected at startup. With either
+# variable unset, no auth is sent (run.ps1 clears both for a local
+# Ollama).
+
+host: http://localhost:11434
+model: qwen3-coder
+
+username_env: OLLAMA_USERNAME   # value from the environment, never here
+password_env: OLLAMA_PASSWORD   # value from the environment, never here
+
+# Seconds. The ollama client's own default is no timeout at all, so a
+# call on a silently dropped connection (e.g. an idle ngrok tunnel) hung
+# forever. connect: reaching the server; read: waiting for the model.
+connect_timeout: 10
+read_timeout: 120
+
+# Earlier questions/answers sent with each new question (follow-ups such
+# as "now show me only those in Germany").
+history_turns: 5
+
+# Sent with every request. Skips ngrok's browser warning page; harmless
+# without ngrok.
+headers:
+  ngrok-skip-browser-warning: "true"

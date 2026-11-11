@@ -14,9 +14,11 @@ from sqlagent.controls.security_utils import (
     is_authorized_table,
 )
 from sqlagent.controls.sql_policy import MAX_ROWS
+from sqlagent.settings import get_settings
 
 
-MAX_RESULT_BYTES = 5_000_000
+# config/settings/query.yaml
+MAX_RESULT_BYTES = get_settings().query.max_result_bytes
 
 
 # ---------------------------------------------------------------------------
