@@ -1,0 +1,33 @@
+# How the agent talks about the AdventureWorks database. It never affects
+# access - that is security.yaml, next to this file.
+#
+#   display_name       the name in the LLM prompt and in user-facing messages
+#   names              what users call the company/database ("what does
+#                      Northwind have?"): matched in overview questions, and
+#                      the LLM is told never to filter on them
+#   about              completes "<display_name> is ..." in the overview
+#   example_questions  offered when a question is vague or off topic
+#   sql_examples       worked question -> SQL examples for the LLM, in this
+#                      database's own table and column names and dialect
+#                      (question, sql, and an optional note)
+#
+# Loaded with this database's profile (sqlagent/databases.py); set
+# identity_file in config/settings/databases.yaml to use another file.
+# Without one, the database's key is its name and no examples are offered.
+
+version: 1
+display_name: AdventureWorks
+names: [AdventureWorks, Adventure Works, Adventure Works Cycles]
+about: a sample bicycle manufacturer's ERP database
+example_questions:
+  - Which territories had the highest sales last year?
+  - What are our top 5 products by revenue?
+  - Which vendors supply us with bike components?
+sql_examples:
+  - question: what products does Adventure Works sell?
+    sql: SELECT name FROM production.product
+  - question: how many customers are there?
+    sql: SELECT COUNT(*) FROM sales.customer
+  - question: what information do you have about Ken?
+    note: after an answer naming Ken Sánchez, an employee
+    sql: SELECT * FROM person.person WHERE firstname = 'Ken' AND lastname = 'Sánchez'

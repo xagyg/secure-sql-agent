@@ -7,19 +7,21 @@
 # One name selects everything that belongs to a database, so switching
 # is one setting rather than five that must agree:
 #
-#   engine            the database product (postgresql); see
+#   engine            the database product (postgresql, sqlserver); see
 #                     sqlagent/execution/engines/
 #   default_schema    schema for a bare table name (the engine's default,
-#                     e.g. public, unless set)
+#                     public or dbo, unless set)
 #   connection        host, port, database, user; password_env names the
 #                     environment variable holding the password (a
 #                     literal password in the file is rejected)
 #   security_file     config/<name>/security.yaml unless set
 #   semantic_path     config/<name>/semantic/ unless set
+#   identity_file     config/<name>/identity.yaml unless set: how the
+#                     agent names the database in prompts and messages,
+#                     its example questions and worked SQL examples.
+#                     Optional; without it the defaults below apply.
 #   repl_roles        roles for the local REPL (main.py)
 #   demo_roles        roles for every anonymous visitor (api.py)
-#   identity          how the agent names the database in prompts and
-#                     messages, and its example questions
 #
 # The active database is SQLAGENT_DATABASE, else the file's "default".
 # Fail closed: a missing or invalid file, or an unknown name, raises
@@ -87,7 +89,9 @@ class SqlExample(_Strict):
 
 
 class Identity(_Strict):
-    """How the agent talks about the database. Never affects access."""
+    """How the agent talks about the database (config/<name>/identity.yaml).
+    Never affects access."""
+    version: Literal[1] = 1
     # Used in the LLM prompt and in user-facing messages.
     display_name: str | None = None
     # What users call the company/database ("what does Northwind have?").
@@ -108,11 +112,21 @@ class DatabaseSpec(_Strict):
     engine: Literal["postgresql", "sqlserver"] = "postgresql"
     default_schema: str | None = Field(None, min_length=1)
     connection: Connection
-    identity: Identity = Field(default_factory=Identity)
     security_file: Path | None = None
     semantic_path: Path | None = None
+    identity_file: Path | None = None
     repl_roles: list[str] = Field(..., min_length=1)
     demo_roles: list[str] = Field(..., min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _identity_moved(cls, data):
+        if isinstance(data, dict) and "identity" in data:
+            raise ValueError(
+                "identity: has moved to config/<name>/identity.yaml, next to "
+                "the database's security and semantic files (or set "
+                "identity_file)")
+        return data
 
     @model_validator(mode="after")
     def _engine_options(self):
@@ -159,7 +173,9 @@ class DatabaseProfile:
             spec.semantic_path, config_dir / name / "semantic")
         self.repl_roles = {r.strip() for r in spec.repl_roles if r.strip()}
         self.demo_roles = {r.strip() for r in spec.demo_roles if r.strip()}
-        ident = spec.identity
+        self.identity_file = _resolve(
+            spec.identity_file, config_dir / name / "identity.yaml")
+        ident = _load_identity(self.identity_file)
         self.display_name = (ident.display_name or name).strip()
         names = [n.strip() for n in ident.names if n.strip()]
         self.names = names or [self.display_name]
@@ -176,7 +192,25 @@ class DatabaseProfile:
         port = f":{c.port}" if c.port else ""
         return (f"{self.name}: {self.engine} {c.user}@{c.host}{port}/{c.database} "
                 f"(password from ${c.password_env}: {found}; "
-                f"security {self.security_file}, semantic {self.semantic_path})")
+                f"security {self.security_file}, semantic {self.semantic_path}, "
+                f"identity {self.identity_file if self.identity_file.is_file() else '(none)'})")
+
+
+def _load_identity(path):
+    """The database's identity file, or the defaults when there is none.
+    An invalid file raises DatabaseConfigError (startup stops)."""
+    if not path.is_file():
+        return Identity()
+    try:
+        data = load_yaml(path)
+        reject_secret_keys(data)
+        return Identity.model_validate(data)
+    except ConfigFileError as ex:
+        raise DatabaseConfigError(str(ex)) from ex
+    except ValidationError as ex:
+        raise DatabaseConfigError(format_validation_error(path, ex)) from ex
+    except ValueError as ex:
+        raise DatabaseConfigError(f"{path}: {ex}") from ex
 
 
 def _resolve(path, default):
