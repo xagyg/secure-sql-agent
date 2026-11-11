@@ -1,0 +1,64 @@
+# Security policy for Northwind on SQL Server: who may see what.
+#
+# The same roles and rules as the PostgreSQL Northwind
+# (config/northwind/security.yaml, which explains the format), in SQL
+# Server's names: schema dbo, PascalCase tables and columns, and
+# "Order Details" with a space. A name without a schema is in dbo.
+#
+# Differences from the PostgreSQL version:
+#   - Employees.Photo is denied for both roles: a binary image the model
+#     can't use, which would only bloat results.
+#   - The 16 Northwind views (Invoices, Sales by Category, ...) are not
+#     allowed; they repeat the tables' data. Add one to a role's allow
+#     list (and to sources.include in semantic/model.yaml) to use it.
+#
+# The login (sqlagent_ro) must itself be read-only - db_datareader only:
+# SQL Server has no read-only session, so its permissions are the
+# database's own boundary. See README.md "SQL Server".
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - narrow, read-only view of Northwind
+    allow:
+      - dbo.Customers
+      - dbo.Orders
+      - dbo.Order Details
+      - dbo.Products
+      - dbo.Categories
+      - dbo.Suppliers
+      - dbo.Employees
+      - dbo.Shippers
+    deny_columns:
+      dbo.Customers: [Phone, Fax, Address]
+      dbo.Employees: [HomePhone, Photo]
+
+  # The local command-line REPL (main.py). The name also gives this role
+  # its affinity to the Sales domain (semantic/domains.yaml).
+  sales:
+    description: Local development - all of Northwind except personal phone numbers
+    allow:
+      - dbo.Customers
+      - dbo.Orders
+      - dbo.Order Details
+      - dbo.Products
+      - dbo.Categories
+      - dbo.Suppliers
+      - dbo.Employees
+      - dbo.EmployeeTerritories
+      - dbo.Region
+      - dbo.Shippers
+      - dbo.Territories
+      - dbo.CustomerDemographics
+      - dbo.CustomerCustomerDemo
+    deny_columns:
+      dbo.Customers: [Phone]
+      dbo.Employees: [HomePhone, Photo]
+
+# Identity-provider group -> roles.
+group_roles:
+  Northwind-Sales: [sales]
+  Public-Demo: [demo]

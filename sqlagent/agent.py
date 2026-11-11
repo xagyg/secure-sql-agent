@@ -16,7 +16,6 @@
 #     messages.py): a stable code plus a short, generic label that
 #     is safe to show in the UI. Detailed reasons stay in the console.
 
-import re
 
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
@@ -46,6 +45,7 @@ from sqlagent.adaptive.llm import (
     generate_sql,
 )
 from sqlagent.adaptive.domains import parse_context_tags
+from sqlagent.execution.engines import active_engine
 from sqlagent.execution.sql_diagnostics import diagnose_sql_error
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 
@@ -150,17 +150,14 @@ def _normalise_sql(sql):
 
 def _sanitize_sql_error_for_llm(error_text):
     """
-    Remove PostgreSQL DETAIL/HINT sections before sending an error to Ollama.
+    Remove schema detail (PostgreSQL's DETAIL/HINT sections, say) before
+    sending a database error to Ollama; see the engine's sanitize_error().
 
     The full database error remains available locally for diagnostics, but
-    PostgreSQL hints/details must not disclose physical schema information
-    to the correction model.
+    hints/details must not disclose physical schema information to the
+    correction model.
     """
-    return re.sub(
-        r"(?ms)^\s*(?:DETAIL|HINT):.*?(?=^\s*(?:DETAIL|HINT):|\Z)",
-        "",
-        error_text,
-    ).strip()
+    return active_engine().sanitize_error(error_text)
 
 
 def _available_areas(catalog):
@@ -205,7 +202,7 @@ def run_agent(question, catalog, history, security):
           ↓
         Re-validation
           ↓
-        PostgreSQL
+        Database (PostgreSQL)
           ↓
         Results
           ↓
@@ -523,16 +520,11 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
 
     print("\n[agent] Asking Ollama to interpret the results...")
 
-    # Remove the artificial LIMIT MAX_ROWS from the SQL supplied to the
-    # explanation model so that it doesn't incorrectly attribute the
-    # result to the user's question. (Postgres renders the row cap as
-    # "LIMIT n", unlike SQL Server's "TOP n".)
-    explanation_sql = re.sub(
-        rf"\bLIMIT\s+{MAX_ROWS}\b\s*",
-        "",
-        sql,
-        flags=re.IGNORECASE,
-    )
+    # Remove the artificial row cap (MAX_ROWS) from the SQL supplied to
+    # the explanation model so that it doesn't incorrectly attribute the
+    # result to the user's question. How the cap is written ("LIMIT n" on
+    # Postgres) is the engine's.
+    explanation_sql = active_engine().strip_row_limit(sql, MAX_ROWS)
 
     explanation = explain_results(
         question, explanation_sql, results, withheld=sorted(set(withheld))

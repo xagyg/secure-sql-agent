@@ -86,13 +86,17 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/controls/security_context.py` | `SecurityContext`: user, roles, authorised tables, denied columns                       |
 | `sqlagent/controls/security_policy.py`  | Loads `config/<database>/security.yaml` and builds each user's `SecurityContext` (fails closed)     |
 | `sqlagent/controls/security_utils.py`   | Case-insensitive authorisation and table-naming helpers                                 |
-| `sqlagent/execution/sql_execution.py`   | PostgreSQL connection and the final execution gate                                      |
+| `sqlagent/execution/sql_execution.py`   | Database connection and the final execution gate                                        |
+| `sqlagent/execution/engines/`           | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`postgres.py`, `sqlserver.py`) |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt                                    |
 | `sqlagent/config_files.py`              | Shared YAML loading (rejects duplicate keys)                                            |
 | `sqlagent/settings.py`                  | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
 | `sqlagent/databases.py`                 | Loads `config/settings/databases.yaml` and picks the active database (fails closed)     |
 | `config/settings/databases.yaml`        | Database profiles: connection, security file, semantic folder, roles, identity          |
-| `config/settings/*.yaml`                | Runtime settings: LLM, API limits, query limits, routing, REPL                          |
+| `config/settings/*.yaml`                | Runtime settings: LLM, API limits, query limits, retrieval, REPL                        |
+| `config/northwind_mssql/`               | Security policy and semantic model for Northwind on SQL Server                          |
+| `tools/check_engine.py`                 | Checks a configured database end to end without the LLM (PASS/FAIL per check)           |
+| `tools/probe_sqlserver.py`              | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors  |
 | `config/northwind/security.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
 | `config/northwind/semantic/*.yaml`      | Semantic model: discovery, labels, aliases, relationships, terms, domains               |
 | `tests/`                                | Unit tests; `tests/fixtures.py` holds a static Northwind schema                         |
@@ -107,7 +111,8 @@ tests/                     unit tests (no database or model needed)
 ## Requirements
 
 * Python 3.11+
-* PostgreSQL with a Northwind database
+* PostgreSQL or Microsoft SQL Server with a Northwind database (SQL Server
+  also needs Microsoft's *ODBC Driver 18 for SQL Server*)
 * [Ollama](https://ollama.com) with a code-capable model (the demo uses `qwen3-coder`)
 * ngrok — **only required for the public demo**
 
@@ -143,6 +148,34 @@ GRANT SELECT ON public.customers, public.orders, public.order_details,
 ```
 
 **Do not run this against a database containing real people's information.**
+
+### SQL Server
+
+The original SQL Server Northwind (`dbo` schema, PascalCase names, `[Order Details]`) is configured as `northwind_mssql`, with its own `config/northwind_mssql/security.yaml` and `semantic/`.
+
+SQL Server has no read-only session, so **the login's permissions are the database's own boundary**. Use a dedicated SQL login whose database user is in `db_datareader` only: no `db_datawriter`, no `EXECUTE`, no DDL, and never `db_owner` or `sysadmin`. A Windows login (`Trusted_Connection`) would run every generated query with your own rights. The server must allow SQL logins: in SSMS, server Properties → Security → *SQL Server and Windows Authentication mode*, then restart the service.
+
+```sql
+CREATE LOGIN sqlagent_ro WITH PASSWORD = '...';
+USE Northwind;
+CREATE USER sqlagent_ro FOR LOGIN sqlagent_ro;
+ALTER ROLE db_datareader ADD MEMBER sqlagent_ro;
+```
+
+Then check the whole path without the LLM, and run the agent:
+
+```powershell
+$env:SQLSERVER_PASSWORD = "..."        # or setx it; run.ps1 asks if it's missing
+.\.venv\Scripts\python tools\check_engine.py --db northwind_mssql
+.\run.ps1 -local -db northwind_mssql
+```
+
+How it differs from PostgreSQL:
+
+* **Timeout:** the ODBC query timeout (`query.yaml` `statement_timeout_seconds`) cancels a slow query; the connection stays usable.
+* **Column tracing** for the result policy uses `sp_describe_first_result_set` (browse mode 2): aliases, joins and derived tables are traced to their table; a view is its own source, as on PostgreSQL.
+* **Extra structural blocks** (both engines): database- or server-qualified names (`OtherDb.dbo.Customers`), functions used as tables (`OPENROWSET`, `OPENQUERY`, `OPENDATASOURCE`, table-valued functions) and `NEXT VALUE FOR`. Keep *Ad Hoc Distributed Queries* and `xp_cmdshell` turned off on the server as well.
+* The model is told SQL Server's syntax (`TOP`, square brackets, `GETDATE()`), and names that need brackets are shown to it bracketed (`dbo.[Order Details]`).
 
 ---
 
@@ -331,7 +364,7 @@ password_env: OLLAMA_PASSWORD
 
 A literal `password`, `username`, `secret`, `token` or `api_key` key anywhere in a settings file, or an `Authorization` header in `llm.yaml`, is rejected at startup. A placeholder value such as `password: "[set by environment]"` is deliberately not used: it would be one edit away from holding the real password. Startup reports whether each password was found without printing it (`password from $PG_PASSWORD: set`).
 
-`run.ps1` selects the database and supplies `PG_PASSWORD` (from the window, your Windows user variables or a hidden prompt). It no longer sets any other configuration.
+`run.ps1` selects the database and supplies the password variable that database's `password_env` names (`PG_PASSWORD`, `SQLSERVER_PASSWORD`, ...): from the window, your Windows user variables or a hidden prompt. It no longer sets any other configuration.
 
 ### Switching databases
 
@@ -353,6 +386,10 @@ databases:
         - Which customers are in Germany?
         - Which products are low on stock?
 ```
+
+`engine` names the database product: `postgresql` (the default) or `sqlserver`. It decides the SQL dialect, the driver and the catalog queries; see `sqlagent/execution/engines/`. `default_schema` sets the schema for a bare table name, otherwise the engine's (`public` for PostgreSQL, `dbo` for SQL Server). SQL Server connections also take `driver`, `encrypt` and `trust_server_certificate`, and `host` may name an instance (`SERVER\SQLEXPRESS`).
+
+`identity.sql_examples` gives the model a few worked question → SQL examples in that database's own names and dialect.
 
 By convention the name also finds `config/<name>/security.yaml` (required) and `config/<name>/semantic/` (optional); set `security_file` or `semantic_path` to use other locations.
 
@@ -376,7 +413,7 @@ These override the settings files, or select what the files can't:
 | Variable | Overrides / purpose |
 | -------- | ------------------- |
 | `SQLAGENT_DATABASE` | Which database in `databases.yaml` (default: its `default`) |
-| `PG_PASSWORD` | *(secret)* the database password, as named by `password_env` |
+| `PG_PASSWORD`, `SQLSERVER_PASSWORD` | *(secret)* the database password, whichever variable the database's `password_env` names |
 | `OLLAMA_USERNAME`, `OLLAMA_PASSWORD` | *(secret)* only if Ollama sits behind basic auth |
 | `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_CONNECT_TIMEOUT`, `OLLAMA_READ_TIMEOUT` | `llm.yaml` |
 | `DEMO_ALLOWED_ORIGIN`, `DEMO_TRUSTED_PROXY_HOPS`, `DEMO_MAX_QUESTION_CHARS`, `DEMO_SESSION_RPM`/`RPD`, `DEMO_IP_RPM`/`RPD`, `DEMO_MAX_CONCURRENCY`, `DEMO_QUEUE_WAIT`, `DEMO_AGENT_TIMEOUT`, `DEMO_MAX_SLOT_HOLD`, `DEMO_MAX_SESSIONS`, `DEMO_AUDIT_LOG` | `api.yaml` |
@@ -533,7 +570,8 @@ This is a research demonstration, not a production system.
 * CORS only controls which web pages can call the API from a browser. It doesn't stop direct calls with `curl` or scripts. Rate limits and the concurrency gate are the real controls.
 * Only the API is exposed through the tunnel. Ollama and PostgreSQL listen on localhost only.
 * The in-memory rate limiter treats each IPv6 address separately, so a client with a large IPv6 range could spread requests across addresses.
-* The table and column names in `config/northwind/security.yaml` and `config/northwind/semantic/` assume snake_case Northwind naming. Check them against your schema (`\dt public.*`) before running. Startup logs every name it can't find.
+* The table and column names in `config/northwind/` assume the snake_case PostgreSQL port of Northwind, and `config/northwind_mssql/` the original SQL Server Northwind. Check them against your schema before running (`tools/check_engine.py`). Startup logs every name it can't find.
+* On SQL Server, read-only access rests on the login's permissions (see [SQL Server](#sql-server)); PostgreSQL also enforces a read-only transaction.
 * The local REPL and API use the same underlying agent and security controls; the API adds the HTTP-specific rate limiting, concurrency, timeout and audit controls.
 
 ---

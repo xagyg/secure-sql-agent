@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 
-import re
 from contextlib import closing
 
 from sqlglot import exp
@@ -13,6 +12,7 @@ from sqlagent.controls.security_utils import (
     full_table_name,
     get_denied_columns,
 )
+from sqlagent.execution.engines import active_engine
 from sqlagent.execution.sql_execution import get_connection
 
 
@@ -35,20 +35,10 @@ def get_physical_columns(full_table):
     """Return physical columns for internal diagnostics only."""
     schema_name, table_name = full_table.split(".", 1)
 
-    sql = """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = %s
-          AND table_name = %s
-        ORDER BY ordinal_position
-    """
-
-    # closing(): a psycopg2 "with connection" block only ends the
+    # closing(): a DB-API "with connection" block only ends the
     # transaction, it does not close the connection.
     with closing(get_connection()) as conn:
-        with conn.cursor() as cursor:
-            cursor.execute(sql, (schema_name, table_name))
-            return [row["column_name"] for row in cursor.fetchall()]
+        return active_engine().physical_columns(conn, schema_name, table_name)
 
 
 def get_column_alias(full_table, column_name, semantic=None):
@@ -63,43 +53,17 @@ def get_column_alias(full_table, column_name, semantic=None):
 
 def extract_missing_column(error_text):
     """
-    Return the bare column name from a Postgres "does not exist" error.
-
-    Postgres words the error differently depending on how the column was
-    referenced, e.g.:
-
-        column "phone" does not exist        (unqualified)
-        column e.phone does not exist        (table alias / name qualifier)
-        column e."Phone" does not exist      (quoted identifier)
-
-    Only the column part is returned ("phone"); any qualifier is dropped
-    because the alias lookup that follows works on plain column names.
-    Only the first line is read, so a HINT further down can't be mistaken
-    for the failing column.
+    Return the bare column name from the database's "no such column"
+    error, or None. The wording is the engine's (see its
+    missing_column()); any table qualifier is dropped because the alias
+    lookup that follows works on plain column names.
     """
-    first_line = error_text.strip().splitlines()[0] if error_text.strip() else ""
-
-    match = re.search(
-        r"column\s+(.+?)\s+does not exist",
-        first_line,
-        flags=re.IGNORECASE,
-    )
-
-    if not match:
-        return None
-
-    raw = match.group(1).strip()
-
-    # A single quoted identifier: "some.name" is one column, not a qualifier.
-    if raw.startswith('"') and raw.endswith('"') and raw.count('"') == 2:
-        return raw.strip('"') or None
-
-    return raw.split(".")[-1].strip('"') or None
+    return active_engine().missing_column(error_text)
 
 
 def diagnose_sql_error(sql, error, security, semantic=None):
     """
-    Diagnose PostgreSQL "column ... does not exist" errors. semantic is
+    Diagnose "no such column" errors. semantic is
     the catalog's semantic model (the default model if omitted).
 
     Physical schema details remain internal and are not sent to Ollama.

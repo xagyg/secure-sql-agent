@@ -1,0 +1,100 @@
+# Semantic model for Northwind on SQL Server.
+#
+# The same vocabulary as the PostgreSQL Northwind
+# (config/northwind/semantic/model.yaml, which explains each key), in SQL
+# Server's names. Grants no access - that is ../security.yaml.
+#
+# PascalCase names are split into words for matching (CompanyName ->
+# "company", "name"), so only words the names don't already contain are
+# listed as aliases.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Discovery: the 13 Northwind tables. The 16 views are left out; they
+# repeat the tables' data under other names, which would muddy table
+# matching. To use one, add it here and to a role in ../security.yaml.
+# ---------------------------------------------------------------------------
+sources:
+  include:
+    - dbo.Categories
+    - dbo.CustomerCustomerDemo
+    - dbo.CustomerDemographics
+    - dbo.Customers
+    - dbo.Employees
+    - dbo.EmployeeTerritories
+    - dbo.Order Details
+    - dbo.Orders
+    - dbo.Products
+    - dbo.Region
+    - dbo.Shippers
+    - dbo.Suppliers
+    - dbo.Territories
+  exclude: []
+  use_database_foreign_keys: true
+
+# Used when a question names no table, e.g. "show me Nancy's information".
+fallback_tables:
+  - Customers
+  - Orders
+  - Order Details
+  - Products
+  - Categories
+  - Suppliers
+  - Employees
+
+tables:
+  dbo.Employees:
+    aliases: [staff, sales_rep, account_manager, salesperson, salespeople, worker]
+    columns:
+      # Also used by sql_diagnostics when the model writes "Phone" for
+      # Employees: it maps back to HomePhone (restricted for most roles).
+      HomePhone:  {aliases: [phone]}
+      HireDate:   {aliases: [start_date]}
+      BirthDate:  {aliases: [birthday, dob, date_of_birth]}
+      ReportsTo:  {aliases: [manager, supervisor]}
+      PostalCode: {aliases: [postcode, zip, zip_code]}
+
+  dbo.Customers:
+    aliases: [client, buyer]
+    columns:
+      PostalCode: {aliases: [postcode, zip, zip_code]}
+
+  dbo.Suppliers:
+    aliases: [vendor, provider]
+    columns:
+      PostalCode: {aliases: [postcode, zip, zip_code]}
+
+  dbo.Order Details:
+    aliases: [line_item]
+
+  dbo.Products:
+    aliases: [sku, stock, inventory, goods]
+    columns:
+      UnitsInStock: {aliases: [stock_level, on_hand]}
+
+  dbo.Shippers:
+    aliases: [carrier, courier]
+
+  dbo.Orders:
+    columns:
+      RequiredDate:   {aliases: [due_date]}
+      Freight:        {aliases: [shipping_cost]}
+      ShipPostalCode: {aliases: [postcode, zip, zip_code]}
+
+relationships: []
+
+# Terms: words that pick ROWS. Predicates are T-SQL on the table's own
+# columns.
+terms:
+  shipped_late:
+    table: dbo.Orders
+    predicate: ShippedDate > RequiredDate
+    aliases: [late, late_shipment, late_delivery, delayed]
+    description: shipped after the date the customer required
+
+  low_stock:
+    table: dbo.Products
+    predicate: UnitsInStock <= ReorderLevel
+    aliases: [reorder, needs_reordering, running_low]
+    description: at or below the reorder level

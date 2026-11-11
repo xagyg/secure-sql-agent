@@ -19,6 +19,7 @@ from sqlagent.controls.security_utils import (
     get_denied_columns,
     is_authorized_table,
 )
+from sqlagent.execution.engines import active_dialect
 from sqlagent.settings import get_settings
 
 
@@ -44,7 +45,7 @@ def parse_single_sql(sql):
     keyword/string matching.
     """
     try:
-        statements = sqlglot.parse(sql, read="postgres")
+        statements = sqlglot.parse(sql, read=active_dialect())
     except Exception as ex:
         # sqlglot underlines the bad token with terminal colour codes,
         # which show up as "←[4m" in a Windows console and in logs.
@@ -84,9 +85,47 @@ _FORBIDDEN_NODES = tuple(
         "Create", "Drop", "Alter", "AlterTable", "TruncateTable",
         "Copy", "Command",
         "Lock",  # SELECT ... FOR UPDATE / FOR SHARE
+        "NextValueFor",  # T-SQL NEXT VALUE FOR advances a sequence
     )
     if hasattr(exp, name)
 )
+
+# Functions that reach outside the database the agent is connected to
+# (another server, a file, an OLE DB/ODBC source). Checked by name
+# anywhere in the tree. SQL Server's "Ad Hoc Distributed Queries" option
+# should also stay off; this does not rely on it.
+_EXTERNAL_DATA_FUNCTIONS = {
+    "openrowset", "openquery", "opendatasource", "openxml",
+}
+
+
+def _check_table_references(tree):
+    """
+    Every table reference must be a plain [schema.]table in the connected
+    database. Rejected:
+
+      - a database or server prefix (OtherDb.dbo.Customers,
+        LinkedServer.OtherDb.dbo.Customers): authorisation works on
+        schema.table, so the prefix would otherwise be ignored and
+        OtherDb.dbo.Customers checked as if it were dbo.Customers;
+      - a function in place of a table (OPENROWSET(...),
+        dbo.SomeFunction(...), generate_series(...)): it isn't a table
+        the security policy can authorise.
+    """
+    for table in tree.find_all(exp.Table):
+        if table.catalog:
+            return False, "Cross-database and linked-server references are not permitted."
+        if not isinstance(table.this, exp.Identifier):
+            return False, "Only tables and views can be queried, not functions."
+    return True, None
+
+
+def _check_external_data(tree):
+    for func in tree.find_all(exp.Func):
+        name = (func.name if isinstance(func, exp.Anonymous) else func.sql_name())
+        if name and name.lower() in _EXTERNAL_DATA_FUNCTIONS:
+            return False, "External data sources are not permitted."
+    return True, None
 
 
 def validate_sql_structure(tree):
@@ -109,6 +148,14 @@ def validate_sql_structure(tree):
     # SELECT INTO creates a table and therefore isn't read-only.
     if tree.find(exp.Into):
         return False, "SELECT INTO is not permitted."
+
+    allowed, reason = _check_external_data(tree)
+    if not allowed:
+        return False, reason
+
+    allowed, reason = _check_table_references(tree)
+    if not allowed:
+        return False, reason
 
     return True, None
 
@@ -304,7 +351,22 @@ def rewrite_select_stars(sql, security, catalog):
         return sql
 
     rewrite_select_stars_tree(tree, security, catalog)
-    return tree.sql(dialect="postgres")
+    return tree.sql(dialect=active_dialect())
+
+
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def _identifier(name):
+    """
+    An identifier for a generated column reference. Quoted only when the
+    name can't be written plainly (a space or other character, e.g. SQL
+    Server's "Order Details"); sqlglot then renders the dialect's quotes,
+    [Order Details] or "Order Details". Plain names stay unquoted, as
+    before, so their case is matched the way the database matches it.
+    """
+    return exp.Identifier(this=name,
+                          quoted=not _PLAIN_IDENTIFIER.fullmatch(name))
 
 
 def rewrite_select_stars_tree(tree, security, catalog):
@@ -353,8 +415,8 @@ def rewrite_select_stars_tree(tree, security, catalog):
 
                     new_expressions.append(
                         exp.Column(
-                            this=exp.Identifier(this=column_name, quoted=False),
-                            table=exp.Identifier(this=reference, quoted=False),
+                            this=_identifier(column_name),
+                            table=_identifier(reference),
                         )
                     )
             continue
@@ -388,8 +450,8 @@ def rewrite_select_stars_tree(tree, security, catalog):
 
                 new_expressions.append(
                     exp.Column(
-                        this=exp.Identifier(this=column_name, quoted=False),
-                        table=exp.Identifier(this=table_reference, quoted=False),
+                        this=_identifier(column_name),
+                        table=_identifier(table_reference),
                     )
                 )
             continue
@@ -442,7 +504,7 @@ def strip_denied_projection(sql, security):
     if not removed:
         return sql, []
 
-    return tree.sql(dialect="postgres"), removed
+    return tree.sql(dialect=active_dialect()), removed
 
 
 def strip_denied_projection_tree(tree, security):
@@ -511,7 +573,7 @@ def apply_query_limits(sql):
         return sql
 
     apply_query_limits_tree(tree)
-    return tree.sql(dialect="postgres")
+    return tree.sql(dialect=active_dialect())
 
 
 def apply_query_limits_tree(tree):
@@ -584,7 +646,7 @@ def prepare_sql(sql, security, catalog):
     if is_select:
         result.withheld = strip_denied_projection_tree(tree, security)
         if result.withheld:
-            result.sql = result.stripped_sql = tree.sql(dialect="postgres")
+            result.sql = result.stripped_sql = tree.sql(dialect=active_dialect())
 
     allowed, reason = validate_tree(tree, security)
     if not allowed:
@@ -594,7 +656,7 @@ def prepare_sql(sql, security, catalog):
     if is_select:
         rewrite_select_stars_tree(tree, security, catalog)
         apply_query_limits_tree(tree)
-        final_sql = tree.sql(dialect="postgres")
+        final_sql = tree.sql(dialect=active_dialect())
         if final_sql != result.sql:
             result.sql = final_sql
             result.rewritten = True

@@ -6,6 +6,12 @@
 # With neither, "default" below is used. Loaded by sqlagent/databases.py;
 # any problem in this file, or an unknown name, stops startup.
 #
+# engine: the database product - postgresql or sqlserver. It decides the
+# SQL dialect, the driver and the catalog queries
+# (sqlagent/execution/engines/). default_schema, if set, is the schema for
+# a bare table name; otherwise the engine's (public for PostgreSQL, dbo
+# for SQL Server).
+#
 # Each database brings its own configuration, found by its name:
 #     config/<name>/security.yaml     who may see what (required)
 #     config/<name>/semantic/         what the data means (optional)
@@ -20,7 +26,9 @@
 # identity: how the agent talks about this database - the name in the
 # LLM prompt and in user-facing messages, the names users call it
 # ("what does Northwind have?"), and the example questions offered when
-# a question is too vague. It never affects access.
+# a question is too vague, plus sql_examples: worked question -> SQL
+# examples for the LLM in this database's own names and dialect. It never
+# affects access.
 
 version: 1
 default: northwind
@@ -28,6 +36,7 @@ default: northwind
 databases:
   northwind:
     description: Northwind sample database (about a dozen tables)
+    engine: postgresql
     connection:
       host: localhost
       port: 5432
@@ -47,11 +56,21 @@ databases:
         - Which customers are in Germany?
         - Which products are low on stock?
         - Who are our top 5 customers by order value?
+      # Worked examples for the LLM, in this database's names and dialect.
+      sql_examples:
+        - question: what products does Northwind sell?
+          sql: SELECT product_name FROM products
+        - question: how many customers are there?
+          sql: SELECT COUNT(*) FROM customers
+        - question: what information do you have about Jose?
+          note: after an answer naming Jose Pavarotti, a customer contact
+          sql: SELECT * FROM customers WHERE contact_name = 'Jose Pavarotti'
 
   # AdventureWorks (about 70 tables in sales, purchasing,
   # production, humanresources and person schemas).
   adventureworks:
     description: AdventureWorks (multi-schema, ERP-like)
+    engine: postgresql
     connection:
       host: localhost
       port: 5432
@@ -68,3 +87,42 @@ databases:
         - Which territories had the highest sales last year?
         - What are our top 5 products by revenue?
         - Which vendors supply us with bike components?
+      sql_examples:
+        - question: what products does Adventure Works sell?
+          sql: SELECT name FROM production.product
+        - question: how many customers are there?
+          sql: SELECT COUNT(*) FROM sales.customer
+        - question: what information do you have about Ken?
+          note: after an answer naming Ken Sánchez, an employee
+          sql: SELECT * FROM person.person WHERE firstname = 'Ken' AND lastname = 'Sánchez'
+
+  # Northwind on SQL Server: the original Northwind (dbo schema,
+  # PascalCase names, "Order Details" with a space). Its security policy
+  # and semantic model are in config/northwind_mssql/.
+  northwind_mssql:
+    description: Northwind on SQL Server (BRAD-Z640)
+    engine: sqlserver
+    connection:
+      host: BRAD-Z640                     # or BRAD-Z640\INSTANCE for a named instance
+      database: Northwind
+      user: sqlagent_ro                   # db_datareader only; see README "SQL Server"
+      password_env: SQLSERVER_PASSWORD    # value from the environment, never here
+      trust_server_certificate: true      # local server's self-signed certificate
+    repl_roles: [sales]
+    demo_roles: [demo]
+    identity:
+      display_name: Northwind
+      names: [Northwind, North Wind]
+      about: a sample trading company's database
+      example_questions:
+        - Which customers are in Germany?
+        - Which products are low on stock?
+        - Who are our top 5 customers by order value?
+      sql_examples:
+        - question: what products does Northwind sell?
+          sql: SELECT ProductName FROM dbo.Products
+        - question: how many customers are there?
+          sql: SELECT COUNT(*) FROM dbo.Customers
+        - question: what information do you have about Jose?
+          note: after an answer naming Jose Pavarotti, a customer contact
+          sql: SELECT * FROM dbo.Customers WHERE ContactName = 'Jose Pavarotti'
