@@ -228,5 +228,71 @@ class Identity(unittest.TestCase):
             self.assertTrue(messages.clarify_message(["Sales"]).endswith("about Sales."))
 
 
+class IdentityFiles(unittest.TestCase):
+    """config/<name>/identity.yaml, loaded with the database's profile."""
+
+    DATABASES = """
+        version: 1
+        default: erp
+        databases:
+          erp:
+            connection: {{database: erp, user: u}}
+            {extra}
+            repl_roles: [a]
+            demo_roles: [a]
+    """
+
+    def load(self, identity=None, extra=""):
+        """A profile for database "erp". With `identity`, its identity
+        file is that text (via identity_file); without, there is none -
+        config/erp/identity.yaml doesn't exist."""
+        with tempfile.TemporaryDirectory() as folder:
+            if identity is not None:
+                target = Path(folder, "identity.yaml")
+                target.write_text(textwrap.dedent(identity), encoding="utf-8")
+                extra = f"identity_file: {target.as_posix()}"
+            path = Path(folder, "databases.yaml")
+            path.write_text(textwrap.dedent(self.DATABASES.format(extra=extra)),
+                            encoding="utf-8")
+            return load_database_profile("erp", path)
+
+    def test_shipped_identity_files(self):
+        for name in ("northwind", "adventureworks", "northwind_mssql"):
+            profile = load_database_profile(name)
+            self.assertEqual(profile.identity_file.name, "identity.yaml")
+            self.assertEqual(profile.identity_file.parent.name, name)
+            self.assertTrue(profile.identity_file.is_file())
+            self.assertTrue(profile.sql_examples)
+
+    def test_file_is_read(self):
+        profile = self.load("""
+            version: 1
+            display_name: ERP
+            names: [ERP, the ledger]
+            sql_examples:
+              - question: how many?
+                sql: SELECT COUNT(*) FROM t
+        """)
+        self.assertEqual(profile.display_name, "ERP")
+        self.assertEqual(profile.names, ["ERP", "the ledger"])
+        self.assertEqual(profile.sql_examples[0].sql, "SELECT COUNT(*) FROM t")
+
+    def test_missing_file_gives_defaults(self):
+        profile = self.load()
+        self.assertEqual((profile.display_name, profile.names), ("erp", ["erp"]))
+        self.assertEqual(profile.sql_examples, [])
+        self.assertIn("identity (none)", profile.describe())
+
+    def test_invalid_file_stops_startup(self):
+        with self.assertRaisesRegex(DatabaseConfigError, "display_nam"):
+            self.load("display_nam: typo\n")
+        with self.assertRaisesRegex(DatabaseConfigError, "sql"):
+            self.load("sql_examples: [{question: q}]\n")
+
+    def test_identity_block_in_databases_yaml_is_rejected(self):
+        with self.assertRaisesRegex(DatabaseConfigError, "moved to config/<name>/identity.yaml"):
+            self.load(extra="identity: {display_name: Old}")
+
+
 if __name__ == "__main__":
     unittest.main()

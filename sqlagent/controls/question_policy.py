@@ -30,7 +30,7 @@ from sqlagent.databases import active_database
 # lookup) still go to the model.
 
 # The database's own names ("Northwind", "North Wind") come from its
-# identity in config/settings/databases.yaml.
+# config/<database>/identity.yaml.
 
 _GENERIC_NOUN = (r"(?:(?:kinds?|sorts?|types?)\s+of\s+)?"
                  r"(?:data|information|info|tables?|records|stuff|things|"

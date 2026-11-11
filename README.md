@@ -92,9 +92,10 @@ tests/                     unit tests (no database or model needed)
 | `sqlagent/config_files.py`              | Shared YAML loading (rejects duplicate keys)                                            |
 | `sqlagent/settings.py`                  | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
 | `sqlagent/databases.py`                 | Loads `config/settings/databases.yaml` and picks the active database (fails closed)     |
-| `config/settings/databases.yaml`        | Database profiles: connection, security file, semantic folder, roles, identity          |
+| `config/settings/databases.yaml`        | Database profiles: engine, connection, roles, and where each database's files are       |
+| `config/<database>/identity.yaml`       | How the agent talks about a database: name, example questions, worked SQL examples      |
 | `config/settings/*.yaml`                | Runtime settings: LLM, API limits, query limits, retrieval, REPL                        |
-| `config/northwind_mssql/`               | Security policy and semantic model for Northwind on SQL Server                          |
+| `config/northwind_mssql/`               | Security policy, semantic model and identity for Northwind on SQL Server                |
 | `tools/check_engine.py`                 | Checks a configured database end to end without the LLM (PASS/FAIL per check)           |
 | `tools/probe_sqlserver.py`              | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors  |
 | `config/northwind/security.yaml`        | Security policy: roles, allowed tables, denied columns, group-to-role mapping           |
@@ -151,7 +152,7 @@ GRANT SELECT ON public.customers, public.orders, public.order_details,
 
 ### SQL Server
 
-The original SQL Server Northwind (`dbo` schema, PascalCase names, `[Order Details]`) is configured as `northwind_mssql`, with its own `config/northwind_mssql/security.yaml` and `semantic/`.
+The original SQL Server Northwind (`dbo` schema, PascalCase names, `[Order Details]`) is configured as `northwind_mssql`, with its own `config/northwind_mssql/` security policy, semantic model and identity.
 
 SQL Server has no read-only session, so **the login's permissions are the database's own boundary**. Use a dedicated SQL login whose database user is in `db_datareader` only: no `db_datawriter`, no `EXECUTE`, no DDL, and never `db_owner` or `sysadmin`. A Windows login (`Trusted_Connection`) would run every generated query with your own rights. The server must allow SQL logins: in SSMS, server Properties → Security → *SQL Server and Windows Authentication mode*, then restart the service.
 
@@ -335,14 +336,15 @@ All runtime settings live in YAML under `config/settings/`, next to each databas
 ```
 config/
   settings/
-    databases.yaml   which databases exist, how to reach them, how to name them
+    databases.yaml   which databases exist and how to reach them
     llm.yaml         Ollama host and model, timeouts, conversation history
     api.yaml         public demo API: CORS, proxy hops, rate limits, concurrency, timeouts
     query.yaml       limits on every generated query: statement timeout, max rows, max result bytes
     retrieval.yaml   which authorised tables are shown to the LLM per question
     repl.yaml        local REPL user
-  northwind/         per database: security.yaml, semantic/
+  northwind/         per database: security.yaml, semantic/, identity.yaml
   adventureworks/
+  northwind_mssql/
 ```
 
 Each file documents its own keys. They are loaded once at startup by `sqlagent/settings.py` and validated: an unknown key, a value out of range (e.g. `max_rows: 0`), weights that don't add up to 1, or a statement timeout that isn't below the API timeout stops startup. The `[settings]` startup line shows the folder in use and any environment overrides.
@@ -378,22 +380,32 @@ databases:
                  password_env: PG_PASSWORD}
     repl_roles: [sales]      # main.py
     demo_roles: [demo]       # api.py
-    identity:
-      display_name: Northwind
-      names: [Northwind, North Wind]
-      about: a sample trading company's database
-      example_questions:
-        - Which customers are in Germany?
-        - Which products are low on stock?
 ```
 
 `engine` names the database product: `postgresql` (the default) or `sqlserver`. It decides the SQL dialect, the driver and the catalog queries; see `sqlagent/execution/engines/`. `default_schema` sets the schema for a bare table name, otherwise the engine's (`public` for PostgreSQL, `dbo` for SQL Server). SQL Server connections also take `driver`, `encrypt` and `trust_server_certificate`, and `host` may name an instance (`SERVER\SQLEXPRESS`).
 
-`identity.sql_examples` gives the model a few worked question → SQL examples in that database's own names and dialect.
+By convention the name also finds the database's own files in `config/<name>/`; set `security_file`, `semantic_path` or `identity_file` to use other locations:
 
-By convention the name also finds `config/<name>/security.yaml` (required) and `config/<name>/semantic/` (optional); set `security_file` or `semantic_path` to use other locations.
+| File | |
+| ---- | - |
+| `security.yaml` (required) | who may see what |
+| `semantic/` (optional) | what the data means |
+| `identity.yaml` (optional) | how the agent talks about the database |
 
-`identity` is how the agent talks about the database: the name in the LLM prompt and in user-facing messages, the names users call it (recognised in "what does Northwind have?", and never used as a filter value by the LLM), and the example questions offered when a question is vague or off topic. It never affects access. Without it, the database's key is used as its name and no examples are offered.
+`identity.yaml` holds the name used in the LLM prompt and in user-facing messages, the names users call the database (recognised in "what does Northwind have?", and never used as a filter value by the LLM), the example questions offered when a question is vague or off topic, and `sql_examples`: a few worked question → SQL examples for the model in that database's own names and dialect. It never affects access. Without the file, the database's key is used as its name and no examples are offered; an invalid file stops startup.
+
+```yaml
+# config/northwind/identity.yaml
+version: 1
+display_name: Northwind
+names: [Northwind, North Wind]
+about: a sample trading company's database
+example_questions:
+  - Which customers are in Germany?
+sql_examples:
+  - question: how many customers are there?
+    sql: SELECT COUNT(*) FROM customers
+```
 
 Pick a database with `-db`, or set it once as a user variable:
 
@@ -404,7 +416,7 @@ setx SQLAGENT_DATABASE adventureworks
 
 Without either, the file's `default` is used. Startup prints the choice (`[database] northwind: sqlagent_ro@localhost:5432/northwind ...`) and the API records it in the `startup` audit line. An unknown name, a missing security file or an invalid `databases.yaml` stops startup. `PG_HOST`, `PG_DATABASE` and the like are ignored, so a value left over in a PowerShell window can't pair one database's security policy with another database. The unit tests always use Northwind, whatever is selected.
 
-To add a database: load it, grant `sqlagent_ro` read access, add an entry (with an `identity`) to `databases.yaml`, then create `config/<name>/security.yaml` and (optionally) `config/<name>/semantic/`.
+To add a database: load it, grant `sqlagent_ro` read access, add an entry to `databases.yaml`, then create `config/<name>/security.yaml` and (optionally) `config/<name>/semantic/` and `config/<name>/identity.yaml`. Check it with `tools/check_engine.py --db <name>`.
 
 ### Environment variables
 

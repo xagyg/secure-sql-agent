@@ -1,0 +1,33 @@
+# How the agent talks about the Northwind (SQL Server) database. It never affects
+# access - that is security.yaml, next to this file.
+#
+#   display_name       the name in the LLM prompt and in user-facing messages
+#   names              what users call the company/database ("what does
+#                      Northwind have?"): matched in overview questions, and
+#                      the LLM is told never to filter on them
+#   about              completes "<display_name> is ..." in the overview
+#   example_questions  offered when a question is vague or off topic
+#   sql_examples       worked question -> SQL examples for the LLM, in this
+#                      database's own table and column names and dialect
+#                      (question, sql, and an optional note)
+#
+# Loaded with this database's profile (sqlagent/databases.py); set
+# identity_file in config/settings/databases.yaml to use another file.
+# Without one, the database's key is its name and no examples are offered.
+
+version: 1
+display_name: Northwind
+names: [Northwind, North Wind]
+about: a sample trading company's database
+example_questions:
+  - Which customers are in Germany?
+  - Which products are low on stock?
+  - Who are our top 5 customers by order value?
+sql_examples:
+  - question: what products does Northwind sell?
+    sql: SELECT ProductName FROM dbo.Products
+  - question: how many customers are there?
+    sql: SELECT COUNT(*) FROM dbo.Customers
+  - question: what information do you have about Jose?
+    note: after an answer naming Jose Pavarotti, a customer contact
+    sql: SELECT * FROM dbo.Customers WHERE ContactName = 'Jose Pavarotti'
