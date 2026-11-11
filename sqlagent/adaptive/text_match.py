@@ -8,6 +8,8 @@
 
 import re
 
+from sqlagent.settings import get_settings
+
 
 # Everyday words that say nothing about WHICH table is wanted. They are
 # ignored when matching a question to tables, so e.g. "show me Margaret's
@@ -22,14 +24,16 @@ GENERIC_TERMS = frozenset({
 })
 
 # Scores used to rank tables against a question (see
-# SchemaCatalog.score_table). FULL_NAME_MATCH is also the line between a
-# strong match (a table named in full or by alias) and a weak one (only
+# SchemaCatalog.score_table). The values are set under table_match: in
+# config/settings/retrieval.yaml. FULL_NAME_MATCH is also the line between
+# a strong match (a table named in full or by alias) and a weak one (only
 # partial names or column words), used by schema search and routing.
-FULL_NAME_MATCH = 20    # per name part, when EVERY part of the name matched
-                        # (e.g. "employees", or "order details" for order_details)
-PARTIAL_NAME_MATCH = 5  # per name part, when only SOME parts matched
-                        # (e.g. just "order" for order_details)
-COLUMN_MATCH = 3        # per matching column-name word
+_POINTS = get_settings().retrieval.table_match
+FULL_NAME_MATCH = _POINTS.full_name        # per name part, when EVERY part of the name matched
+                                           # (e.g. "employees", or "order details" for order_details)
+PARTIAL_NAME_MATCH = _POINTS.partial_name  # per name part, when only SOME parts matched
+                                           # (e.g. just "order" for order_details)
+COLUMN_MATCH = _POINTS.column              # per matching column-name word
 ALIAS_MATCH = FULL_NAME_MATCH  # an alias (or label) counts as naming the table in full
 TERM_MATCH = FULL_NAME_MATCH   # a business term ("shipped late") points at its table
 

@@ -1,0 +1,51 @@
+# The public demo API (api.py). Every anonymous visitor shares these
+# limits; the Agent Behavioural Controls themselves are not configured
+# here and can't be loosened from this file.
+#
+# Environment variables override these (names in brackets).
+
+# Origins allowed to call the API from a browser [DEMO_ALLOWED_ORIGIN,
+# comma-separated]. Empty = same-origin only, no CORS (fine for local
+# testing). Needed when the page is served from a different site than the
+# API (e.g. the API on the ngrok domain). Wildcards are rejected.
+allowed_origins: []
+
+# Reverse proxies in front of the API [DEMO_TRUSTED_PROXY_HOPS]. The
+# client IP is read this many entries from the RIGHT of X-Forwarded-For,
+# i.e. the entry your own proxy added, which a visitor can't forge.
+# 0 if nothing is in front, 1 for ngrok, 2 for e.g. Cloudflare + nginx.
+trusted_proxy_hops: 1
+
+max_question_chars: 300           # [DEMO_MAX_QUESTION_CHARS]
+
+# Per session: a convenience bucket keyed on the browser-generated
+# session_id; not authentication. Per IP: the real backstop.
+rate_limits:
+  session_per_minute: 4           # [DEMO_SESSION_RPM]
+  session_per_day: 40             # [DEMO_SESSION_RPD]
+  ip_per_minute: 10               # [DEMO_IP_RPM]
+  ip_per_day: 150                 # [DEMO_IP_RPD]
+
+# Agent runs allowed at once [DEMO_MAX_CONCURRENCY]. Keep this equal to
+# OLLAMA_NUM_PARALLEL (1 by default; see run_with_ollama.ps1). If it is
+# higher, extra runs are admitted but then wait inside Ollama, where the
+# wait counts against agent_timeout and can end in a 504. At 1 the queue
+# stays in the API: a second visitor waits up to queue_wait seconds and
+# then gets a prompt "busy" reply. To let visitors wait longer, raise
+# queue_wait rather than this.
+max_concurrency: 1
+
+agent_timeout: 120                # seconds per request [DEMO_AGENT_TIMEOUT]
+queue_wait: 5                     # seconds to wait for a free slot [DEMO_QUEUE_WAIT]
+
+# A timed-out request's worker thread can't be killed, so its slot stays
+# taken until the thread finishes. This caps how long a stuck thread can
+# hold a slot [DEMO_MAX_SLOT_HOLD]. Must be at least agent_timeout.
+max_slot_hold: 150
+
+# Sessions whose conversation history is kept in memory; oldest evicted
+# first [DEMO_MAX_SESSIONS]. History length per session is
+# llm.yaml history_turns.
+max_sessions: 2000
+
+audit_log: audit.log              # [DEMO_AUDIT_LOG]

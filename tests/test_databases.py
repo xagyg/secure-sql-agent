@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Database profiles (config/databases.yaml, sqlagent/databases.py).
+# Database profiles (config/settings/databases.yaml, sqlagent/databases.py).
 
 import os
 import tempfile

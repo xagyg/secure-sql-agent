@@ -8,8 +8,10 @@
 # agent_controls.py.
 
 import re
+from functools import lru_cache
 
 from sqlagent.adaptive.text_match import names_column, phrase_matches, tokenize
+from sqlagent.databases import active_database
 
 
 # ---------------------------------------------------------------------------
@@ -27,46 +29,60 @@ from sqlagent.adaptive.text_match import names_column, phrase_matches, tokenize
 # question) and "what information do you have about Jose?" (a record
 # lookup) still go to the model.
 
-_SUBJECT = (r"(?:you|northwind|north\s*wind|the\s+database|this\s+database|"
-            r"the\s+system|this\s+system|it|we|i)")
+# The database's own names ("Northwind", "North Wind") come from its
+# identity in config/settings/databases.yaml.
+
 _GENERIC_NOUN = (r"(?:(?:kinds?|sorts?|types?)\s+of\s+)?"
                  r"(?:data|information|info|tables?|records|stuff|things|"
                  r"questions|details)")
 
-_OVERVIEW_PATTERNS = [
-    # what (data) do you / does northwind have|hold|contain|...
-    re.compile(
-        rf"^(?:so\s+|ok\s+|okay\s+)?(?:what|which)(?:\s+{_GENERIC_NOUN})?\s+"
-        rf"(?:do|does|can|is|are)\s+{_SUBJECT}\s+"
-        r"(?:have|hold|contain|store|keep|know|cover|offer|got|ask|see|"
-        r"access|query|show(?:\s+me)?)"
-        r"(?:\s+(?:access\s+to|in\s+it|available|here|there|you))?\s*$",
-        re.IGNORECASE),
-    # what's in northwind / the database
-    re.compile(
-        r"^(?:what\s+is|what's|whats)\s+(?:in|inside)\s+"
-        r"(?:northwind|north\s*wind|the\s+database|this\s+database|the\s+data)\s*$",
-        re.IGNORECASE),
-    # tell me about / describe / overview of northwind / the database
-    re.compile(
-        r"^(?:tell\s+me\s+about|describe|explain|give\s+me\s+an\s+overview\s+of|"
-        r"overview\s+of)\s+(?:northwind|north\s*wind|the\s+database|"
-        r"this\s+database|the\s+data|your\s+data)\s*$",
-        re.IGNORECASE),
-    # what can you do / help
-    re.compile(r"^(?:what\s+can\s+you\s+do|help|what\s+can\s+i\s+ask(?:\s+you)?)\s*$",
-               re.IGNORECASE),
-    # what tables are there / are available
-    re.compile(rf"^(?:what|which)\s+{_GENERIC_NOUN}\s+(?:are|is)\s+"
-               r"(?:there|available)\s*$", re.IGNORECASE),
-]
+
+def _name_pattern(name):
+    """'North Wind' -> north\\s*wind: spaces optional, case ignored."""
+    return r"\s*".join(re.escape(word.lower()) for word in name.split())
+
+
+@lru_cache(maxsize=8)
+def _overview_patterns(names):
+    db = "|".join(_name_pattern(n) for n in names if n.strip())
+    db = f"{db}|" if db else ""
+    subject = (rf"(?:you|{db}the\s+database|this\s+database|"
+               r"the\s+system|this\s+system|it|we|i)")
+    return [
+        # what (data) do you / does northwind have|hold|contain|...
+        re.compile(
+            rf"^(?:so\s+|ok\s+|okay\s+)?(?:what|which)(?:\s+{_GENERIC_NOUN})?\s+"
+            rf"(?:do|does|can|is|are)\s+{subject}\s+"
+            r"(?:have|hold|contain|store|keep|know|cover|offer|got|ask|see|"
+            r"access|query|show(?:\s+me)?)"
+            r"(?:\s+(?:access\s+to|in\s+it|available|here|there|you))?\s*$",
+            re.IGNORECASE),
+        # what's in northwind / the database
+        re.compile(
+            r"^(?:what\s+is|what's|whats)\s+(?:in|inside)\s+"
+            rf"(?:{db}the\s+database|this\s+database|the\s+data)\s*$",
+            re.IGNORECASE),
+        # tell me about / describe / overview of northwind / the database
+        re.compile(
+            r"^(?:tell\s+me\s+about|describe|explain|give\s+me\s+an\s+overview\s+of|"
+            rf"overview\s+of)\s+(?:{db}the\s+database|"
+            r"this\s+database|the\s+data|your\s+data)\s*$",
+            re.IGNORECASE),
+        # what can you do / help
+        re.compile(r"^(?:what\s+can\s+you\s+do|help|what\s+can\s+i\s+ask(?:\s+you)?)\s*$",
+                   re.IGNORECASE),
+        # what tables are there / are available
+        re.compile(rf"^(?:what|which)\s+{_GENERIC_NOUN}\s+(?:are|is)\s+"
+                   r"(?:there|available)\s*$", re.IGNORECASE),
+    ]
 
 
 def is_overview_question(question):
     """True if the question asks what the database/agent covers rather
     than for data. Chooses a message only; it never grants access."""
     text = " ".join(question.strip().rstrip("?.! ").split())
-    return any(p.match(text) for p in _OVERVIEW_PATTERNS)
+    patterns = _overview_patterns(tuple(active_database().names))
+    return any(p.match(text) for p in patterns)
 
 
 def mentions_denied_column(question, security, tables=None):

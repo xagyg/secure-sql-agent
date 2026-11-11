@@ -13,13 +13,13 @@ import unittest
 from pathlib import Path
 
 from sqlagent.adaptive.semantic_model import (
-    DEFAULT_SEMANTIC_PATH,
     SemanticModelError,
     load_semantic_model,
     parse_endpoint,
 )
 from sqlagent.execution.sql_diagnostics import get_column_alias
 from tests.fixtures import NORTHWIND, make_catalog
+from tests.fixtures import NORTHWIND_SEMANTIC_PATH as DEFAULT_SEMANTIC_PATH
 
 
 def write_files(folder, files):
@@ -131,13 +131,15 @@ class Loading(unittest.TestCase):
         self.assertEqual(set(model.tables), {"public.customers"})
 
     def test_default_paths_are_per_database(self):
-        from sqlagent.adaptive.semantic_model import DEFAULT_SEMANTIC_PATH
-        from sqlagent.controls.security_policy import DEFAULT_SECURITY_FILE
-        self.assertEqual(DEFAULT_SEMANTIC_PATH.parts[-2:], ("northwind", "semantic"))
-        self.assertEqual(DEFAULT_SECURITY_FILE.parts[-2:], ("northwind", "security.yaml"))
-        self.assertTrue((DEFAULT_SEMANTIC_PATH / "model.yaml").is_file())
-        self.assertTrue((DEFAULT_SEMANTIC_PATH / "domains.yaml").is_file())
-        self.assertTrue(DEFAULT_SECURITY_FILE.is_file())
+        # Each database's paths follow its name (config/<name>/...).
+        from sqlagent.databases import load_database_profile
+        for name in ("northwind", "adventureworks"):
+            profile = load_database_profile(name)
+            self.assertEqual(profile.semantic_path.parts[-2:], (name, "semantic"))
+            self.assertEqual(profile.security_file.parts[-2:], (name, "security.yaml"))
+            self.assertTrue((profile.semantic_path / "model.yaml").is_file())
+            self.assertTrue((profile.semantic_path / "domains.yaml").is_file())
+            self.assertTrue(profile.security_file.is_file())
 
     def test_missing_path_gives_empty_model(self):
         model = load_semantic_model("/no/such/folder")

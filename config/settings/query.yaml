@@ -1,0 +1,18 @@
+# Limits applied to every generated query, whoever asks.
+#
+# These are guardrails: the loader enforces upper bounds, so a typo can't
+# switch them off.
+
+# PostgreSQL statement_timeout, in seconds [PG_STATEMENT_TIMEOUT_SECONDS].
+# Must be below api.yaml agent_timeout: when the API gives up on a
+# request, its worker thread and database query keep running, so a long
+# timeout lets abandoned queries (a cross join, pg_sleep, ...) tie up
+# connections after the visitor has gone.
+statement_timeout_seconds: 10
+
+# LIMIT added to every query that doesn't have one (sql_policy.py), and
+# the most rows the result policy will return.
+max_rows: 100
+
+# Most result bytes returned (result_policy.py).
+max_result_bytes: 1000000

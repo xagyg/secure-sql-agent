@@ -18,17 +18,11 @@ Run from the project root (alongside agent.py, sql_policy.py, etc):
 Keep --workers 1 (or move the in-memory rate limiter / session store to
 Redis) — neither is shared across worker processes.
 
-Deployment settings worth checking (all environment variables):
-    DEMO_TRUSTED_PROXY_HOPS  how many reverse proxies sit in front of this
-                             process (default 1). The client IP is read that
-                             many entries from the RIGHT of X-Forwarded-For,
-                             i.e. the entry your own proxy added, which a
-                             visitor can't forge. Use 0 if nothing is in
-                             front (the header is then ignored), 2 for e.g.
-                             Cloudflare + nginx.
-    DEMO_ALLOWED_ORIGIN      only needed if the page is served from a
-                             different origin than this API (comma-separated
-                             list). Unset = same-origin only, no CORS.
+Deployment settings are in config/settings/api.yaml; the ones worth
+checking first are trusted_proxy_hops (how many reverse proxies sit in
+front of this process) and allowed_origins (only needed if the page is
+served from a different origin). DEMO_* environment variables override
+the file.
 """
 
 from __future__ import annotations
@@ -36,7 +30,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import time
 import uuid
 from collections import OrderedDict, defaultdict, deque
@@ -48,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sqlagent.agent import run_agent
+from sqlagent.settings import get_settings
 from sqlagent.databases import active_database
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.controls.security_policy import load_security_policy
@@ -59,60 +53,56 @@ from pathlib import Path
 
 
 # ==========================================================================
-# Configuration
+# Configuration — config/settings/api.yaml (explains each value). The
+# DEMO_* environment variables override it; see sqlagent/settings.py.
 # ==========================================================================
 
-# Unset (the default) means same-origin only: the page calls this API via a
-# relative URL, so no CORS is needed and none is enabled. Set it only if the
-# page is hosted on a different origin.
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get("DEMO_ALLOWED_ORIGIN", "").split(",")
-    if origin.strip()
-]
+_API = get_settings().api
+
+# Empty (the default) means same-origin only: the page calls this API via a
+# relative URL, so no CORS is needed and none is enabled.
+ALLOWED_ORIGINS = list(_API.allowed_origins)
 
 # Number of reverse proxies in front of this process. See _client_ip().
-TRUSTED_PROXY_HOPS = int(os.environ.get("DEMO_TRUSTED_PROXY_HOPS", "1"))
+TRUSTED_PROXY_HOPS = _API.trusted_proxy_hops
 
-MAX_QUESTION_CHARS = int(os.environ.get("DEMO_MAX_QUESTION_CHARS", "300"))
+MAX_QUESTION_CHARS = _API.max_question_chars
 
 # Per-session limits — a convenience bucket keyed on the browser-generated
 # session_id the frontend sends. Not authentication; stops one tab from
 # hammering the endpoint. The per-IP limit below is the real backstop.
-SESSION_REQUESTS_PER_MINUTE = int(os.environ.get("DEMO_SESSION_RPM", "4"))
-SESSION_REQUESTS_PER_DAY = int(os.environ.get("DEMO_SESSION_RPD", "40"))
+SESSION_REQUESTS_PER_MINUTE = _API.rate_limits.session_per_minute
+SESSION_REQUESTS_PER_DAY = _API.rate_limits.session_per_day
 
-IP_REQUESTS_PER_MINUTE = int(os.environ.get("DEMO_IP_RPM", "10"))
-IP_REQUESTS_PER_DAY = int(os.environ.get("DEMO_IP_RPD", "150"))
+IP_REQUESTS_PER_MINUTE = _API.rate_limits.ip_per_minute
+IP_REQUESTS_PER_DAY = _API.rate_limits.ip_per_day
 
 # How many agent runs (i.e. Ollama calls) may be in flight at once, across
 # every visitor combined — protects your GPU/CPU.
-MAX_CONCURRENT_AGENT_RUNS = int(os.environ.get("DEMO_MAX_CONCURRENCY", "2"))
+MAX_CONCURRENT_AGENT_RUNS = _API.max_concurrency
 
-AGENT_TIMEOUT_SECONDS = float(os.environ.get("DEMO_AGENT_TIMEOUT", "25"))
+AGENT_TIMEOUT_SECONDS = _API.agent_timeout
 
 # How long a request will wait for a free agent slot before being told the
 # demo is busy (instead of queueing behind other visitors indefinitely).
-QUEUE_WAIT_SECONDS = float(os.environ.get("DEMO_QUEUE_WAIT", "5"))
+QUEUE_WAIT_SECONDS = _API.queue_wait
 
 # A timed-out request's worker thread can't be killed, so its slot stays
 # taken until the thread really finishes. This caps how long a stuck thread
 # (e.g. a hung model call) can keep a slot before it is released anyway.
-MAX_SLOT_HOLD_SECONDS = float(os.environ.get("DEMO_MAX_SLOT_HOLD", "90"))
+MAX_SLOT_HOLD_SECONDS = _API.max_slot_hold
 
 # How many distinct sessions' conversation history to keep in memory at
 # once. Oldest sessions are evicted first — this bounds memory even if
-# thousands of anonymous visitors show up.
-MAX_TRACKED_SESSIONS = int(os.environ.get("DEMO_MAX_SESSIONS", "2000"))
-# Per-conversation history length is capped by MAX_HISTORY_TURNS inside
-# llm.py, not here — this store only caps how many sessions total are
-# kept in memory.
+# thousands of anonymous visitors show up. Per-conversation history length
+# is history_turns in config/settings/llm.yaml.
+MAX_TRACKED_SESSIONS = _API.max_sessions
 
-AUDIT_LOG_PATH = os.environ.get("DEMO_AUDIT_LOG", "audit.log")
+AUDIT_LOG_PATH = str(_API.audit_log)
 
 
 # ==========================================================================
-# Demo SecurityContext — the active database's demo_roles (config/databases.yaml),
+# Demo SecurityContext — the active database's demo_roles (config/settings/databases.yaml),
 # e.g. the "demo" role in config/northwind/security.yaml.
 #
 # Every anonymous demo visitor gets this same read-only, narrow view,

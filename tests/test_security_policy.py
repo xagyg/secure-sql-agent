@@ -17,12 +17,12 @@ from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
 from sqlagent.controls.security_context import SecurityContext
 
 from sqlagent.controls.security_policy import (
-    DEFAULT_SECURITY_FILE,
     SecurityPolicy,
     SecurityPolicyError,
     load_security_policy,
 )
 from sqlagent.controls.security_utils import get_denied_columns, is_authorized_table
+from tests.fixtures import NORTHWIND_SECURITY_FILE as DEFAULT_SECURITY_FILE
 from tests.fixtures import NORTHWIND
 
 

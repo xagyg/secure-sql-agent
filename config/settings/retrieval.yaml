@@ -1,0 +1,82 @@
+# Retrieval: which of the role's authorised tables are shown to the LLM
+# for each question.
+#
+# Runs after discovery (which tables the agent knows about: the include
+# patterns in config/<database>/semantic/) and security filtering (which
+# of those the role may see: config/<database>/security.yaml). Nothing
+# here can widen access: only tables the role is authorised for are ever
+# scored or routed to.
+#
+#   table_match  scores each table against the question
+#                (sqlagent/adaptive/text_match.py, schema_catalog.py).
+#                Used for every database.
+#   domains      Domain of Discourse routing (sqlagent/adaptive/domains.py).
+#                Only used when the database has a semantic/domains.yaml.
+#
+# The two are tuned together (explicit_domain_points is set relative to
+# table_match.full_name). Change them deliberately and re-run the tests
+# (run_tests.ps1), which pin the shipped behaviour. No environment
+# overrides.
+
+# ---------------------------------------------------------------------------
+# Table matching
+# ---------------------------------------------------------------------------
+# Points per match when ranking tables against a question
+# (SchemaCatalog.score_table). An alias, label or business term counts as
+# full_name. full_name is also the line between a strong match (a table
+# named in full or by alias) and a weak one (only partial names or column
+# words), used by schema search and by domain routing.
+# Must be full_name > partial_name >= column.
+table_match:
+  full_name: 20      # per name part, when EVERY part of the name matched
+                     # (e.g. "employees", or "order details" for order_details)
+  partial_name: 5    # per name part, when only SOME parts matched
+                     # (e.g. just "order" for order_details)
+  column: 3          # per matching column-name word
+
+# ---------------------------------------------------------------------------
+# Domain of Discourse routing
+# ---------------------------------------------------------------------------
+domains:
+  # Signal weights; must add up to 1.
+  #   what  - the tables, aliases, terms and domains the question names
+  #   where - the location: a [where=...] tag, a screen code, a location phrase
+  #   who   - the asker's role affinity
+  # When a signal is absent (no [where=...] tag, say) its weight is shared
+  # among the signals that are present, so questions without a tag aren't
+  # penalised.
+  weights:
+    what: 0.45
+    where: 0.35
+    who: 0.20
+
+  # Bonus for the domain used on the previous turn, so follow-ups such as
+  # "and which of those were late?" stay in the same area.
+  sticky_bonus: 0.10
+
+  # Weak evidence never moves a conversation. When the question names no
+  # table (in full or by alias) and no domain, and there is no [where=...]
+  # tag, the only What signal is column words ("phone") or partial names.
+  # Normalising would still turn that into "what 1.00" and outvote the
+  # sticky bonus, so e.g. "What is Maria's phone number?" after a question
+  # about customers jumped to Purchasing (suppliers.phone) because
+  # customers.phone is hidden from the role. With this on, weak evidence
+  # plus a previous domain stays in the previous domain.
+  weak_evidence_follow_up: true
+
+  # A question that names the domain ("in purchasing") is worth two tables
+  # named in full (table_match.full_name).
+  explicit_domain_points: 40
+
+  # Points per word of a matched location phrase. Longer, more specific
+  # phrases ("purchase order entry") beat single words ("entry").
+  where_phrase_points: 10
+
+  # Decision rule.
+  min_domain_score: 0.25   # below this, no domain: search the whole UoD
+  blend_margin: 0.15       # top two closer than this: use both domains
+
+  # Demo only: lets the person asking set Who with "[who=buyer]". This
+  # affects ROUTING only - never authorisation, which always comes from the
+  # authenticated SecurityContext. Turn off in any real deployment.
+  allow_who_tag: true

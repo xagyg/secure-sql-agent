@@ -8,22 +8,27 @@
 # Without -local, starts the FastAPI API on 127.0.0.1:8000.
 # With -local, starts the interactive command-line REPL.
 #
-# -db picks a database from config/databases.yaml, which holds each
+# -db picks a database from config/settings/databases.yaml, which holds each
 # database's connection and points at its security and semantic config.
 # Without -db: the SQLAGENT_DATABASE user variable (setx SQLAGENT_DATABASE
 # adventureworks) if set, otherwise the file's default.
+#
+# All other settings are in config/settings/*.yaml (llm.yaml for the Ollama
+# host and model, api.yaml for the API limits, ...). This script no longer
+# sets them; an environment variable such as OLLAMA_MODEL or
+# DEMO_AGENT_TIMEOUT still overrides the file for a one-off run, and
+# startup prints which ones are in effect.
 #
 # Secrets are NOT stored in this file. Set them once as Windows user
 # environment variables (then open a new PowerShell window):
 #     setx PG_PASSWORD "your-sqlagent_ro-password"
 #
-# ASSUMES OLLAMA IS ALREADY RUNNING on http://localhost:11434 (e.g. the
-# Windows tray app, or an 'ollama serve' you started yourself). This script
-# does not start Ollama or set its server options. Settings such as
-# OLLAMA_NUM_PARALLEL and OLLAMA_MAX_LOADED_MODELS are read only when the
-# Ollama server starts, so setting them here would have no effect.
-# (OLLAMA_HOST and OLLAMA_MODEL below are different: they tell the agent
-# where to find Ollama and which model to use.)
+# ASSUMES OLLAMA IS ALREADY RUNNING at the host in config/settings/llm.yaml
+# (http://localhost:11434: the Windows tray app, or an 'ollama serve' you
+# started yourself). This script does not start Ollama or set its server
+# options. Settings such as OLLAMA_NUM_PARALLEL and OLLAMA_MAX_LOADED_MODELS
+# are read only when the Ollama server starts, so setting them here would
+# have no effect.
 #
 # To start Ollama with this project's server settings, use
 # run_with_ollama.ps1 instead. Note that it shuts down any Ollama that is
@@ -38,12 +43,12 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 # --- Ollama: same machine, so no tunnel and no auth needed --------------
-$env:OLLAMA_HOST  = "http://localhost:11434"
-$env:OLLAMA_MODEL = "qwen3-coder"
+# llm.yaml names OLLAMA_USERNAME / OLLAMA_PASSWORD for a tunnelled Ollama;
+# clear them so no credentials are sent to the local one.
 Remove-Item Env:OLLAMA_USERNAME -ErrorAction SilentlyContinue
 Remove-Item Env:OLLAMA_PASSWORD -ErrorAction SilentlyContinue
 
-# --- Database: chosen by name, details in config/databases.yaml -----------
+# --- Database: chosen by name, details in config/settings/databases.yaml --
 # Set from -db or the user variable every time, so a value left in this
 # window by an earlier run can't select the wrong database.
 if ($db) {
@@ -51,11 +56,12 @@ if ($db) {
 } else {
     $env:SQLAGENT_DATABASE = [Environment]::GetEnvironmentVariable("SQLAGENT_DATABASE", "User")
 }
-# Host, port, database and user now come from config/databases.yaml; clear
+# Host, port, database and user come from config/settings/databases.yaml; clear
 # any left over from older versions of this script so nothing suggests
 # otherwise.
 Remove-Item Env:PG_HOST, Env:PG_PORT, Env:PG_DATABASE, Env:PG_USER -ErrorAction SilentlyContinue
-# Password lookup, in order:
+# The password is never in the YAML: databases.yaml names the variable
+# (password_env: PG_PASSWORD). Lookup, in order:
 #   1. already set in this window ($env:PG_PASSWORD = "...")
 #   2. saved with setx; read straight from the Windows user settings, so
 #      it works even in a window opened before setx was run
@@ -72,31 +78,17 @@ if (-not $env:PG_PASSWORD) {
     throw "No Postgres password given."
 }
 
-# --- API limits ------------------------------------------------------------
-# Agent runs allowed at once. Keep this equal to OLLAMA_NUM_PARALLEL (1 by
-# default; see run_with_ollama.ps1 and the README). If it is higher, extra
-# runs are admitted but then wait inside Ollama, where the wait counts
-# against DEMO_AGENT_TIMEOUT and can end in a 504. At 1, the queue stays in
-# the API: a second visitor waits up to DEMO_QUEUE_WAIT seconds (default 5)
-# and then gets a prompt "busy" reply. To make visitors wait longer for a
-# turn, raise DEMO_QUEUE_WAIT rather than this. If you raise NUM_PARALLEL,
-# raise this to match, but note each extra Ollama slot uses more GPU memory
-# and can push the model partly onto the CPU, slowing every request.
-$env:DEMO_MAX_CONCURRENCY = "1"
-$env:DEMO_AGENT_TIMEOUT = "120"
-$env:DEMO_MAX_SLOT_HOLD = "150"
-
-# The page is served from a different site than the API (which is on the
-# ngrok domain), so the browser needs CORS permission for the site's origin.
-# Set your site's origin(s) once, comma-separated, e.g.:
+# --- API --------------------------------------------------------------------
+# Limits, timeouts and proxy hops are in config/settings/api.yaml.
+#
+# CORS origins: put them in api.yaml (allowed_origins), or keep them
+# per-machine as a user variable, which overrides the file:
 #     setx DEMO_ALLOWED_ORIGIN "https://example.com,https://www.example.com"
-# If unset, the API allows same-origin requests only (fine for local testing).
+# Read straight from the Windows user settings so it also works in a window
+# opened before setx was run.
 if (-not $env:DEMO_ALLOWED_ORIGIN) {
     $env:DEMO_ALLOWED_ORIGIN = [Environment]::GetEnvironmentVariable("DEMO_ALLOWED_ORIGIN", "User")
 }
-
-# ngrok is the one proxy in front of the API and adds X-Forwarded-For.
-$env:DEMO_TRUSTED_PROXY_HOPS = "1"
 
 # Windows consoles default to a legacy code page; without this, printing a
 # result such as "Folk och fä HB" can crash the request.

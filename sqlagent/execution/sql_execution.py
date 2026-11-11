@@ -5,7 +5,6 @@
 # boundary this module provides — a final structural-safety check
 # immediately before execution — is unchanged.
 
-import os
 from contextlib import closing
 
 import psycopg2
@@ -13,21 +12,22 @@ import psycopg2.extras
 
 from sqlagent.controls.sql_policy import is_safe_sql
 from sqlagent.databases import active_database
+from sqlagent.settings import get_settings
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 # Host, port, database and user come from the active database's profile
-# in config/databases.yaml (sqlagent/databases.py); the password from the
-# environment variable that profile names (PG_PASSWORD by default).
+# in config/settings/databases.yaml (sqlagent/databases.py); the password
+# from the environment variable that profile names (PG_PASSWORD by default).
 
-# Keep this comfortably below the API's request timeout (DEMO_AGENT_TIMEOUT
-# in api.py). When the API gives up on a request, the worker thread and its
-# database query keep running, so a long statement_timeout lets abandoned
-# queries (a cross join, pg_sleep, ...) tie up connections long after the
-# visitor has gone.
-QUERY_TIMEOUT_SECONDS = int(os.getenv("PG_STATEMENT_TIMEOUT_SECONDS", "10"))
+# statement_timeout in config/settings/query.yaml. Validated to be below
+# the API's agent_timeout: when the API gives up on a request, the worker
+# thread and its database query keep running, so a long statement_timeout
+# lets abandoned queries (a cross join, pg_sleep, ...) tie up connections
+# long after the visitor has gone.
+QUERY_TIMEOUT_SECONDS = get_settings().query.statement_timeout_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ def execute_sql_with_sources(sql):
     The AI execution path performs the additional authorisation checks
     in validate_agent_sql().
 
-    The connecting user (connection.user in config/databases.yaml)
+    The connecting user (connection.user in config/settings/databases.yaml)
     should be a dedicated, least-privileged Postgres role with
     SELECT-only grants on the authorised tables — REVOKE INSERT/UPDATE/
     DELETE from it. That gives you a second boundary enforced by the

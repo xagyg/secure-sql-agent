@@ -3,11 +3,12 @@
 #
 # Shared helpers for the YAML configuration files:
 #
+#   config/settings/*.yaml            runtime settings (sqlagent/settings.py)
 #   config/<database>/security.yaml   who may see what (controls/security_policy.py)
 #   config/<database>/semantic/       what the data means (adaptive/semantic_model.py)
 #
-# One security file and one semantic folder per database; the defaults
-# are the Northwind demo's (DEFAULT_DATABASE).
+# One security file and one semantic folder per database; which database
+# is active is chosen in config/settings/databases.yaml.
 #
 # Both are read with yaml.safe_load (no Python objects can be built from
 # the file) and a loader that REJECTS duplicate keys. PyYAML's default is
@@ -21,9 +22,6 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
-
-# The database whose configuration is used when no path is given.
-DEFAULT_DATABASE = "northwind"
 
 
 class ConfigFileError(ValueError):

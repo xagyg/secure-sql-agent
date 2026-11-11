@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Runs against the database chosen in config/databases.yaml
+# Runs against the database chosen in config/settings/databases.yaml
 # (SQLAGENT_DATABASE, or the file's default; .\run.ps1 -local -db <name>).
 # That profile gives the connection, the security file
 # (config/<database>/security.yaml) and the semantic model
@@ -14,6 +14,16 @@
 import json
 import os
 import sys
+
+# Settings are read when the modules below are imported; load them first
+# so a bad settings file is reported plainly rather than as a traceback.
+from sqlagent.settings import SettingsError, get_settings
+
+try:
+    get_settings()
+except SettingsError as ex:
+    print(f"Configuration error: {ex}")
+    sys.exit(1)
 
 from sqlagent.agent import run_agent
 from sqlagent.databases import DatabaseConfigError, active_database
@@ -30,14 +40,15 @@ from sqlagent.execution.sql_execution import get_connection, execute_sql, list_t
 # Configuration
 # ---------------------------------------------------------------------------
 
-# History length is llm.MAX_HISTORY_TURNS; run_agent() trims it.
+# History length is history_turns in config/settings/llm.yaml;
+# run_agent() trims it.
 conversation_history = []
 
 # The local user and their roles. In a real deployment both come from
 # the user's sign-in (identity-provider groups -> roles, see group_roles
-# in config/<database>/security.yaml); here the user is SQLAGENT_USER and
-# the roles are SQLAGENT_ROLES, else the database profile's repl_roles.
-LOCAL_USER = os.environ.get("SQLAGENT_USER", "brad")
+# in config/<database>/security.yaml); here the user is config/settings/
+# repl.yaml (SQLAGENT_USER overrides) and the roles are SQLAGENT_ROLES,
+# else the database profile's repl_roles.
 
 
 # Typing one of these on its own ends the REPL. The whole input must be
@@ -80,6 +91,7 @@ def main():
 
     # Configuration errors stop here, before the database is touched.
     try:
+        local_user = get_settings().repl.user
         profile = active_database()
         policy = load_security_policy()
         semantic = load_semantic_model()
@@ -89,7 +101,7 @@ def main():
 
     try:
         security = policy.build_context(
-            LOCAL_USER, local_roles(profile), list_tables(get_connection))
+            local_user, local_roles(profile), list_tables(get_connection))
         catalog = SchemaCatalog(get_connection, security, semantic=semantic)
         catalog.refresh()
     except SecurityPolicyError as ex:
@@ -166,8 +178,8 @@ def main():
         try:
             run_agent(question, catalog, conversation_history, security)
         except Exception as ex:
-            # e.g. Ollama unreachable or too slow (see OLLAMA_*_TIMEOUT in
-            # sqlagent/adaptive/llm.py). Report it and keep the REPL going.
+            # e.g. Ollama unreachable or too slow (see the timeouts in
+            # config/settings/llm.yaml). Report it and keep the REPL going.
             print(f"\n[error] {type(ex).__name__}: {ex}")
             print("\n[answer] Something went wrong answering that question. "
                   "Please try again.")
