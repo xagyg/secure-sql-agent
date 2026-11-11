@@ -1,11 +1,9 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Ported from SQL Server's INFORMATION_SCHEMA / sys.foreign_key_columns
-# to PostgreSQL's information_schema. Row access changed from pyodbc's
-# attribute-style rows (row.TABLE_SCHEMA) to psycopg2 RealDictCursor's
-# dict-style rows (row["table_schema"]) — Postgres's information_schema
-# columns are lowercase.
+# The catalog queries themselves (columns, foreign keys) are the database
+# engine's (sqlagent/execution/engines/), which returns rows as dicts with
+# lowercase keys whatever the driver, so this module is engine-neutral.
 #
 # Load order (refresh):
 #   1. Discover tables and views: the semantic model's sources.include /
@@ -27,6 +25,7 @@ from contextlib import closing
 
 from sqlagent.adaptive.domains import DomainResolver
 from sqlagent.adaptive.semantic_model import default_semantic_model
+from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.controls.security_utils import (
     contains_case_insensitive,
     full_table_name,
@@ -63,10 +62,13 @@ def _words_of(name):
 class SchemaCatalog:
 
     def __init__(self, connection_factory, security=None, semantic=None,
-                 fallback_tables=None):
+                 fallback_tables=None, engine=None):
         self.connection_factory = connection_factory
+        # The database engine whose catalog queries are used (the active
+        # database's unless one is passed in).
+        self._engine = engine
         self.security = security
-        # The semantic model (config/northwind/semantic/ unless one is passed in).
+        # The semantic model (the active database's unless one is passed in).
         self.semantic = semantic if semantic is not None else default_semantic_model()
         self.fallback_tables = (
             tuple(fallback_tables) if fallback_tables is not None
@@ -229,7 +231,7 @@ class SchemaCatalog:
                 definition = f"{column['name']} is true"
             else:
                 try:
-                    condition = sqlglot.parse_one(term.predicate, read="postgres")
+                    condition = sqlglot.parse_one(term.predicate, read=active_dialect())
                 except Exception:
                     print(f"[schema] Term '{term.name}': predicate can't be "
                           "parsed - skipped")
@@ -246,7 +248,7 @@ class SchemaCatalog:
                     print(f"[schema] Term '{term.name}': column(s) "
                           f"{', '.join(sorted(set(missing)))} not available - skipped")
                     continue
-                definition = condition.sql(dialect="postgres")
+                definition = condition.sql(dialect=active_dialect())
 
             table["terms"].append({
                 "name": term.name,
@@ -279,80 +281,65 @@ class SchemaCatalog:
         print(f"[schema] Fallback schema built from {len(selected)} table(s)")
         return self._format_context(selected) if selected else ""
 
-    def _load_tables(self):
-        # information_schema.columns covers tables AND views, so a view
-        # such as semantic.employees_v is discovered like any table.
-        sql = """
-        SELECT
-            c.table_schema,
-            c.table_name,
-            c.column_name,
-            c.data_type,
-            c.is_nullable,
-            c.ordinal_position
-        FROM information_schema.columns c
-        WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
-        ORDER BY
-            c.table_schema,
-            c.table_name,
-            c.ordinal_position
-        """
+    @property
+    def engine(self):
+        return self._engine if self._engine is not None else active_engine()
 
+    def _load_tables(self):
+        # The engine's column query covers tables AND views, so a view
+        # such as semantic.employees_v is discovered like any table.
         tables = {}
         not_discovered = set()
         seen_columns = {}   # full name -> every column name, before denial
 
-        # closing(): a psycopg2 "with connection" block only ends the
-        # transaction, it does not close the connection.
+        # closing(): a DB-API "with connection" block (psycopg2, pyodbc)
+        # only ends the transaction, it does not close the connection.
         with closing(self.connection_factory()) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql)
+            for row in self.engine.column_rows(conn):
+                full_name = f"{row['table_schema']}.{row['table_name']}"
 
-                for row in cursor.fetchall():
-                    full_name = f"{row['table_schema']}.{row['table_name']}"
+                # ------------------------------------------------------
+                # Discovery: the semantic model's sources
+                # ------------------------------------------------------
+                if not self.semantic.discovers(full_name):
+                    not_discovered.add(full_name)
+                    continue
 
-                    # ------------------------------------------------------
-                    # Discovery: the semantic model's sources
-                    # ------------------------------------------------------
-                    if not self.semantic.discovers(full_name):
-                        not_discovered.add(full_name)
-                        continue
+                # ------------------------------------------------------
+                # Security: table discovery
+                # ------------------------------------------------------
+                if (
+                    self.security
+                    and not is_authorized_table(self.security, full_name)
+                ):
+                    continue
 
-                    # ------------------------------------------------------
-                    # Security: table discovery
-                    # ------------------------------------------------------
-                    if (
-                        self.security
-                        and not is_authorized_table(self.security, full_name)
-                    ):
-                        continue
+                seen_columns.setdefault(full_name, set()).add(
+                    row["column_name"].lower())
 
-                    seen_columns.setdefault(full_name, set()).add(
-                        row["column_name"].lower())
+                denied = set()
 
-                    denied = set()
+                if self.security:
+                    denied = get_denied_columns(self.security, full_name)
 
-                    if self.security:
-                        denied = get_denied_columns(self.security, full_name)
+                # ------------------------------------------------------
+                # Security: column discovery
+                # ------------------------------------------------------
+                if contains_case_insensitive(denied, row["column_name"]):
+                    continue
 
-                    # ------------------------------------------------------
-                    # Security: column discovery
-                    # ------------------------------------------------------
-                    if contains_case_insensitive(denied, row["column_name"]):
-                        continue
+                if full_name not in tables:
+                    tables[full_name] = {
+                        "schema": row["table_schema"],
+                        "name": row["table_name"],
+                        "columns": [],
+                    }
 
-                    if full_name not in tables:
-                        tables[full_name] = {
-                            "schema": row["table_schema"],
-                            "name": row["table_name"],
-                            "columns": [],
-                        }
-
-                    tables[full_name]["columns"].append({
-                        "name": row["column_name"],
-                        "type": row["data_type"],
-                        "nullable": (row["is_nullable"] == "YES"),
-                    })
+                tables[full_name]["columns"].append({
+                    "name": row["column_name"],
+                    "type": row["data_type"],
+                    "nullable": (row["is_nullable"] == "YES"),
+                })
 
         if not_discovered:
             print(f"[schema] {len(not_discovered)} table(s)/view(s) outside "
@@ -377,67 +364,42 @@ class SchemaCatalog:
                           "the security policy for a typo")
 
     def _load_foreign_keys(self):
-        # pg_constraint gives each foreign key once, with its columns in
-        # order, so a composite key (company_id, order_no) comes back as
-        # one relationship rather than one per column.
-        sql = """
-        SELECT
-            con.oid AS constraint_id,
-            pn.nspname AS parent_schema,
-            pc.relname AS parent_table,
-            pa.attname AS parent_column,
-            rn.nspname AS referenced_schema,
-            rc.relname AS referenced_table,
-            ra.attname AS referenced_column
-        FROM pg_constraint con
-        CROSS JOIN LATERAL unnest(con.conkey, con.confkey)
-            WITH ORDINALITY AS k(parent_attnum, ref_attnum, ord)
-        JOIN pg_class pc     ON pc.oid = con.conrelid
-        JOIN pg_namespace pn ON pn.oid = pc.relnamespace
-        JOIN pg_attribute pa ON pa.attrelid = con.conrelid  AND pa.attnum = k.parent_attnum
-        JOIN pg_class rc     ON rc.oid = con.confrelid
-        JOIN pg_namespace rn ON rn.oid = rc.relnamespace
-        JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_attnum
-        WHERE con.contype = 'f'
-        ORDER BY pn.nspname, pc.relname, con.conname, k.ord
-        """
-
+        # The engine returns each foreign key's columns in order, so a
+        # composite key (company_id, order_no) becomes one relationship
+        # rather than one per column.
         by_constraint = {}
 
-        # closing(): a psycopg2 "with connection" block only ends the
-        # transaction, it does not close the connection.
+        # closing(): a DB-API "with connection" block (psycopg2, pyodbc)
+        # only ends the transaction, it does not close the connection.
         with closing(self.connection_factory()) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql)
+            for row in self.engine.foreign_key_rows(conn):
+                parent = f"{row['parent_schema']}.{row['parent_table']}"
+                referenced = f"{row['referenced_schema']}.{row['referenced_table']}"
 
-                for row in cursor.fetchall():
-                    parent = f"{row['parent_schema']}.{row['parent_table']}"
-                    referenced = f"{row['referenced_schema']}.{row['referenced_table']}"
+                # ------------------------------------------------------
+                # Security: don't expose relationships involving
+                # unauthorised tables. (_build_relationships also
+                # drops any that use a column the role can't see.)
+                # ------------------------------------------------------
+                if self.security:
+                    if not is_authorized_table(self.security, parent):
+                        continue
 
-                    # ------------------------------------------------------
-                    # Security: don't expose relationships involving
-                    # unauthorised tables. (_build_relationships also
-                    # drops any that use a column the role can't see.)
-                    # ------------------------------------------------------
-                    if self.security:
-                        if not is_authorized_table(self.security, parent):
-                            continue
+                    if not is_authorized_table(self.security, referenced):
+                        continue
 
-                        if not is_authorized_table(self.security, referenced):
-                            continue
-
-                    key = row["constraint_id"]
-                    if key not in by_constraint:
-                        by_constraint[key] = {
-                            "from_table": parent,
-                            "from_columns": [],
-                            "to_table": referenced,
-                            "to_columns": [],
-                            "cardinality": None,
-                            "source": "database",
-                        }
-                    by_constraint[key]["from_columns"].append(row["parent_column"])
-                    by_constraint[key]["to_columns"].append(row["referenced_column"])
+                key = row["constraint_id"]
+                if key not in by_constraint:
+                    by_constraint[key] = {
+                        "from_table": parent,
+                        "from_columns": [],
+                        "to_table": referenced,
+                        "to_columns": [],
+                        "cardinality": None,
+                        "source": "database",
+                    }
+                by_constraint[key]["from_columns"].append(row["parent_column"])
+                by_constraint[key]["to_columns"].append(row["referenced_column"])
 
         return [
             dict(r, from_columns=tuple(r["from_columns"]),
@@ -566,7 +528,7 @@ class SchemaCatalog:
             return set()
 
         try:
-            tree = sqlglot.parse_one(sql, read="postgres")
+            tree = sqlglot.parse_one(sql, read=active_dialect())
         except Exception:
             return set()
 
@@ -730,7 +692,7 @@ class SchemaCatalog:
             if not table:
                 continue
 
-            header = f"TABLE {full_name}"
+            header = f"TABLE {self.engine.display_table(full_name)}"
             notes = self._notes(table)
             if notes:
                 header += f"  -- {notes}"
@@ -739,7 +701,8 @@ class SchemaCatalog:
             for column in table["columns"]:
                 nullable = "NULL" if column["nullable"] else "NOT NULL"
 
-                line = f"  - {column['name']} {column['type']} {nullable}"
+                line = (f"  - {self.engine.quote_name(column['name'])} "
+                        f"{column['type']} {nullable}")
 
                 notes = self._notes(column)
                 if notes:
@@ -778,7 +741,8 @@ class SchemaCatalog:
             lines.append("TERMS (business words and the rows they mean)")
             for full_name, term in terms:
                 words = ", ".join(_words_of(p) for p in term["phrases"])
-                line = f"  - {words}: {full_name} WHERE {term['definition']}"
+                line = (f"  - {words}: {self.engine.display_table(full_name)} "
+                        f"WHERE {term['definition']}")
                 if term.get("description"):
                     line += f"  -- {term['description']}"
                 lines.append(line)
@@ -795,8 +759,7 @@ class SchemaCatalog:
             parts.append(item["description"])
         return ": ".join(parts)
 
-    @staticmethod
-    def _format_relationship(relationship):
+    def _format_relationship(self, relationship):
         """
         One relationship line. A single-column key keeps the original
         "a.col -> b.col" form; a composite key is written
@@ -804,14 +767,16 @@ class SchemaCatalog:
         their cardinality, which helps the model avoid joins that
         double-count.
         """
-        from_cols = relationship["from_columns"]
-        to_cols = relationship["to_columns"]
+        quote = self.engine.quote_name
+        from_table = self.engine.display_table(relationship["from_table"])
+        to_table = self.engine.display_table(relationship["to_table"])
+        from_cols = [quote(c) for c in relationship["from_columns"]]
+        to_cols = [quote(c) for c in relationship["to_columns"]]
         if len(from_cols) == 1:
-            text = (f"{relationship['from_table']}.{from_cols[0]} -> "
-                    f"{relationship['to_table']}.{to_cols[0]}")
+            text = f"{from_table}.{from_cols[0]} -> {to_table}.{to_cols[0]}"
         else:
-            text = (f"{relationship['from_table']}({', '.join(from_cols)}) -> "
-                    f"{relationship['to_table']}({', '.join(to_cols)})")
+            text = (f"{from_table}({', '.join(from_cols)}) -> "
+                    f"{to_table}({', '.join(to_cols)})")
         if relationship.get("cardinality"):
             text += f" ({relationship['cardinality'].replace('_', '-')})"
         if relationship.get("description"):

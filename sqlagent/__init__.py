@@ -8,6 +8,7 @@
 #               may see and where it starts)
 #   controls/   the Agent Behavioural Controls (ABCs): deterministic
 #               validation, authorisation, rewriting and result policy
-#   execution/  controlled execution against PostgreSQL
+#   execution/  controlled execution against the database (engines/
+#               holds what is specific to each database product)
 #
 # agent.py orchestrates the pipeline across the three layers.

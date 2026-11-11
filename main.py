@@ -33,6 +33,7 @@ from sqlagent.controls.security_policy import (
 )
 from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
 from sqlagent.adaptive.semantic_model import SemanticModelError, load_semantic_model
+from sqlagent.execution.engines import active_engine
 from sqlagent.execution.sql_execution import get_connection, execute_sql, list_tables
 
 
@@ -74,7 +75,7 @@ def local_roles(profile):
 def print_banner():
     print()
     print("==============================================")
-    print("        Ollama PostgreSQL Agent")
+    print(f"        Ollama {active_engine().label} Agent")
     print("==============================================")
     print()
     print("Commands:")
@@ -87,8 +88,6 @@ def print_banner():
 
 
 def main():
-    print_banner()
-
     # Configuration errors stop here, before the database is touched.
     try:
         local_user = get_settings().repl.user
@@ -98,6 +97,8 @@ def main():
     except (DatabaseConfigError, SecurityPolicyError, SemanticModelError) as ex:
         print(f"Configuration error: {ex}")
         sys.exit(1)
+
+    print_banner()
 
     try:
         security = policy.build_context(
@@ -111,7 +112,7 @@ def main():
         print(f"Startup stopped: {ex}")
         sys.exit(1)
     except Exception as ex:
-        print("Unable to connect to PostgreSQL.")
+        print(f"Unable to connect to {active_engine().label}.")
         print(ex)
         sys.exit(1)
 

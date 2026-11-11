@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 from sqlagent.agent import run_agent
 from sqlagent.settings import get_settings
 from sqlagent.databases import active_database
+from sqlagent.execution.engines import active_engine
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.controls.security_policy import load_security_policy
 from sqlagent.adaptive.schema_catalog import SchemaCatalog
@@ -194,7 +195,7 @@ rate_limiter = RateLimiter()
 # __context__, so e.g. ollama's ConnectionError still reads as "ollama".
 _ERROR_SOURCES = (
     (("ollama", "httpx", "httpcore"), "model (ollama)"),
-    (("psycopg2",), "database (postgres)"),
+    ((active_engine().driver_module,), f"database ({active_engine().name})"),
 )
 
 

@@ -4,6 +4,7 @@
 #     .\run.ps1
 #     .\run.ps1 -local
 #     .\run.ps1 -local -db adventureworks
+#     .\run.ps1 -local -db northwind_mssql
 #
 # Without -local, starts the FastAPI API on 127.0.0.1:8000.
 # With -local, starts the interactive command-line REPL.
@@ -21,7 +22,8 @@
 #
 # Secrets are NOT stored in this file. Set them once as Windows user
 # environment variables (then open a new PowerShell window):
-#     setx PG_PASSWORD "your-sqlagent_ro-password"
+#     setx PG_PASSWORD "your-sqlagent_ro-password"          (PostgreSQL)
+#     setx SQLSERVER_PASSWORD "your-sqlagent_ro-password"   (SQL Server)
 #
 # ASSUMES OLLAMA IS ALREADY RUNNING at the host in config/settings/llm.yaml
 # (http://localhost:11434: the Windows tray app, or an 'ollama serve' you
@@ -60,23 +62,33 @@ if ($db) {
 # any left over from older versions of this script so nothing suggests
 # otherwise.
 Remove-Item Env:PG_HOST, Env:PG_PORT, Env:PG_DATABASE, Env:PG_USER -ErrorAction SilentlyContinue
-# The password is never in the YAML: databases.yaml names the variable
-# (password_env: PG_PASSWORD). Lookup, in order:
+# The password is never in the YAML: the database's entry in
+# databases.yaml names the environment variable that holds it
+# (password_env: PG_PASSWORD, SQLSERVER_PASSWORD, ...). Python reports
+# which one, so this script doesn't parse YAML itself. Lookup, in order:
 #   1. already set in this window ($env:PG_PASSWORD = "...")
 #   2. saved with setx; read straight from the Windows user settings, so
 #      it works even in a window opened before setx was run
 #   3. otherwise ask for it (input is hidden, used for this run only)
-if (-not $env:PG_PASSWORD) {
-    $env:PG_PASSWORD = [Environment]::GetEnvironmentVariable("PG_PASSWORD", "User")
+$passwordVar = & .\.venv\Scripts\python.exe -c "from sqlagent.databases import load_database_profile; print(load_database_profile().connection.password_env)"
+if ($LASTEXITCODE -ne 0 -or -not $passwordVar) {
+    throw "Could not read the database settings (see the error above)."
 }
-if (-not $env:PG_PASSWORD) {
-    $secure = Read-Host "Postgres password (PG_PASSWORD)" -AsSecureString
-    $env:PG_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+$passwordVar = "$passwordVar".Trim()
+$password = [Environment]::GetEnvironmentVariable($passwordVar, "Process")
+if (-not $password) {
+    $password = [Environment]::GetEnvironmentVariable($passwordVar, "User")
+}
+if (-not $password) {
+    $secure = Read-Host "Database password ($passwordVar)" -AsSecureString
+    $password = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
 }
-if (-not $env:PG_PASSWORD) {
-    throw "No Postgres password given."
+if (-not $password) {
+    throw "No database password given ($passwordVar)."
 }
+[Environment]::SetEnvironmentVariable($passwordVar, $password, "Process")
+Remove-Variable password, secure -ErrorAction SilentlyContinue
 
 # --- API --------------------------------------------------------------------
 # Limits, timeouts and proxy hops are in config/settings/api.yaml.

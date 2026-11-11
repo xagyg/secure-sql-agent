@@ -9,6 +9,7 @@ import httpx
 from ollama import Client
 
 from sqlagent.databases import active_database
+from sqlagent.execution.engines import active_engine
 from sqlagent.settings import get_settings
 
 
@@ -104,6 +105,31 @@ def ask_ollama(messages):
     return response.message.content
 
 
+def _format_examples(examples):
+    """
+    The database's own SQL examples (identity.sql_examples in
+    databases.yaml) in the prompt's "message -> reply" layout:
+
+      "how many customers are there?"    -> SELECT COUNT(*) FROM customers
+      "a question too long for the column"
+                                         -> SELECT ...
+        (an optional note)
+
+    Each line ends with a newline, so no examples means no lines.
+    """
+    lines = []
+    for example in examples:
+        message = f'"{example.question}"'
+        if example.note is None and len(message) <= 34:
+            lines.append(f"  {message:<35}-> {example.sql}")
+        else:
+            lines.append(f"  {message}")
+            if example.note:
+                lines.append(f"    ({example.note})")
+            lines.append(f"{'':<37}-> {example.sql}")
+    return "".join(line + "\n" for line in lines)
+
+
 def generate_sql(question, schema, history):
     history_text = ""
 
@@ -126,9 +152,13 @@ Previous answer:
     db_names = " (or ".join(f'"{n}"' for n in db.names[:2]) + (")" if len(db.names) > 1 else "")
     db_values = " or ".join(f"'{n}'" for n in db.names)
 
+    engine = active_engine().label
+    engine_rules = active_engine().prompt_rules
+    sql_examples = _format_examples(db.sql_examples)
+
     system_prompt = f"""
-You are a PostgreSQL assistant working with the {db.name} database.
-Your job is to generate ONE PostgreSQL SELECT statement that answers
+You are a {engine} assistant working with the {db.connection.database} database.
+Your job is to generate ONE {engine} SELECT statement that answers
 the user's current question.
 
 DATABASE SCHEMA
@@ -143,7 +173,7 @@ IMPORTANT:
 * Generate SQL for the CURRENT user question.
 * Use previous questions and answers to resolve references such as:
   "them", "those customers", "the previous result", "now show me..."
-* PostgreSQL syntax.
+* {engine} syntax.
 * Only SELECT queries.
 * Do not modify data.
 * If the current message explicitly asks to add, change, delete or
@@ -197,19 +227,10 @@ EXAMPLES (message -> correct reply)
     (only when no phone column is listed in the schema above)
   "what does North wind have"        -> {UNCLEAR_QUESTION_SENTINEL}
   "show me some data"                -> {UNCLEAR_QUESTION_SENTINEL}
-  "what products does Northwind sell?"
-                                     -> SELECT product_name FROM products
-  "how many customers are there?"    -> SELECT COUNT(*) FROM customers
-  "what information do you have about Jose?"
-    (after an answer naming Jose Pavarotti, a customer contact)
-                                     -> SELECT * FROM customers WHERE contact_name = 'Jose Pavarotti'
-Insults, complaints and comments about you are NEVER data questions:
+{sql_examples}Insults, complaints and comments about you are NEVER data questions:
 always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
 * Do not use WITH clauses (CTEs); use joins or subqueries instead.
-* Table and column names are lowercase/snake_case unless the schema
-  above shows otherwise — do not invent camelCase names.
-* Only use double quotes around an identifier if the schema above
-  shows it needs them (e.g. a mixed-case or reserved-word name).
+{engine_rules}
 * Return ONLY the SQL statement.
 * Do not return markdown.
 * Do not return JSON.
@@ -228,8 +249,10 @@ always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
 
 
 def correct_sql(question, schema, sql, error, correction_hint=""):
+    engine = active_engine().label
+
     prompt = f"""
-You are correcting a PostgreSQL query.
+You are correcting a {engine} query.
 
 DATABASE SCHEMA
 {schema}
@@ -263,7 +286,7 @@ IMPORTANT:
     return clean_sql(ask_ollama([
         {
             "role": "system",
-            "content": "You are a PostgreSQL query correction assistant.",
+            "content": f"You are a {engine} query correction assistant.",
         },
         {"role": "user", "content": prompt},
     ]))
