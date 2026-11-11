@@ -55,57 +55,64 @@ Each layer, and the file that implements it:
 The code is grouped by IBAAM layer. Entry points stay at the root.
 
 ```
-api.py, main.py            entry points (public demo API, local REPL)
-config/                    one folder per database
-  databases.yaml           which databases exist, how to connect, which roles to use
-  northwind/
-    security.yaml          who may see what (roles, allowed tables, denied columns)
-    semantic/
-      model.yaml           what the data means (sources, labels, aliases, relationships, terms)
-      domains.yaml         Domains of Discourse, role aliases, function codes
+api.py, main.py              entry points (public demo API, local REPL)
+run.ps1, run_with_ollama.ps1 start the API or REPL on Windows
+config/
+  settings/                  how the agent runs
+    databases.yaml           which databases exist: engine, connection, roles
+    llm.yaml, api.yaml, query.yaml, retrieval.yaml, repl.yaml
+  databases/                 one folder per database, named as in databases.yaml
+    northwind/               PostgreSQL Northwind (also northwind_mssql/, adventureworks/)
+      security.yaml          who may see what (roles, allowed tables, denied columns)
+      identity.yaml          how the agent talks about it (name, examples)
+      semantic/
+        model.yaml           what the data means (sources, labels, aliases, relationships, terms)
+        domains.yaml         Domains of Discourse, role aliases, function codes
 sqlagent/
-  agent.py                 run_agent(): orchestrates the question -> answer pipeline
-  adaptive/                Adaptive layer: the LLM, what it sees and where it starts
-  controls/                Control layer: the Agent Behavioural Controls (ABCs)
-  execution/               Execution layer: controlled PostgreSQL execution
-tests/                     unit tests (no database or model needed)
+  agent.py                   run_agent(): orchestrates the question -> answer pipeline
+  settings.py, databases.py  load and validate the configuration
+  adaptive/                  Adaptive layer: the LLM, what it sees and where it starts
+  controls/                  Control layer: the Agent Behavioural Controls (ABCs)
+  execution/                 Execution layer: controlled, read-only execution
+    engines/                 what is specific to PostgreSQL / SQL Server
+tools/                       check a database end to end; probe a SQL Server
+tests/                       unit tests (no database or model needed)
 ```
 
-| File                                         | Purpose |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sqlagent/agent.py`                          | `run_agent()`: the full question → answer pipeline |
-| `sqlagent/adaptive/llm.py`                   | Ollama client, prompts for SQL generation, correction and explanation |
-| `sqlagent/adaptive/schema_catalog.py`        | Reads the schema at startup and picks the relevant tables for each question |
-| `sqlagent/adaptive/semantic_model.py`        | Loads and validates the semantic model in `config/databases/<database>/semantic/` |
-| `sqlagent/adaptive/domains.py`               | Domains of Discourse and Who / What / Where routing |
-| `sqlagent/adaptive/text_match.py`            | Shared tokenizing and phrase matching for schema search, routing and policy checks |
-| `sqlagent/controls/sql_policy.py`            | Structural safety, authorisation, `SELECT *` rewriting, column stripping, row limit |
-| `sqlagent/controls/result_policy.py`         | Removes restricted columns from results (by source table); caps result size |
-| `sqlagent/controls/question_policy.py`       | Restricted columns named in the question; the follow-up "restricted" pre-check |
-| `sqlagent/controls/messages.py`              | Block rules and generic user-facing messages |
-| `sqlagent/controls/security_context.py`      | `SecurityContext`: user, roles, authorised tables, denied columns |
-| `sqlagent/controls/security_policy.py`       | Loads `config/databases/<database>/security.yaml` and builds each user's `SecurityContext` (fails closed) |
-| `sqlagent/controls/security_utils.py`        | Case-insensitive authorisation and table-naming helpers |
-| `sqlagent/execution/sql_execution.py`        | Database connection and the final execution gate |
-| `sqlagent/execution/engines/`                | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`postgres.py`, `sqlserver.py`) |
-| `sqlagent/execution/sql_diagnostics.py`      | Diagnoses SQL errors to guide the correction attempt |
-| `sqlagent/config_files.py`                   | Shared YAML loading (rejects duplicate keys) |
-| `sqlagent/settings.py`                       | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
-| `sqlagent/databases.py`                      | Loads `config/settings/databases.yaml` and picks the active database (fails closed) |
-| `config/settings/databases.yaml`             | Database profiles: engine, connection, roles, and where each database's files are |
-| `config/databases/<database>/identity.yaml`  | How the agent talks about a database: name, example questions, worked SQL examples |
-| `config/settings/*.yaml`                     | Runtime settings: LLM, API limits, query limits, retrieval, REPL |
-| `config/databases/northwind_mssql/`          | Security policy, semantic model and identity for Northwind on SQL Server |
-| `tools/check_engine.py`                      | Checks a configured database end to end without the LLM (PASS/FAIL per check) |
-| `tools/probe_sqlserver.py`                   | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors |
-| `config/databases/northwind/security.yaml`   | Security policy: roles, allowed tables, denied columns, group-to-role mapping |
-| `config/databases/northwind/semantic/*.yaml` | Semantic model: discovery, labels, aliases, relationships, terms, domains |
-| `tests/`                                     | Unit tests; `tests/fixtures.py` holds a static Northwind schema |
-| `api.py`                                     | FastAPI wrapper for the public demo |
-| `main.py`                                    | Interactive command-line REPL for local use |
-| `run.ps1`                                    | Starts the API or local REPL on Windows (assumes Ollama is already running) |
-| `run_with_ollama.ps1`                        | Restarts Ollama with the recommended server settings, then runs `run.ps1` |
-| `demo_enabled.flag`                          | Turns the public demo on (see below) |
+| File | Purpose |
+| ---- | ------- |
+| `api.py` | FastAPI wrapper for the public demo |
+| `main.py` | Interactive command-line REPL for local use |
+| `run.ps1` | Starts the API or local REPL on Windows (assumes Ollama is already running) |
+| `run_with_ollama.ps1` | Restarts Ollama with the recommended server settings, then runs `run.ps1` |
+| `demo_enabled.flag` | Turns the public demo on (see below) |
+| `config/settings/databases.yaml` | Database profiles: engine, connection, roles, and where each database's files are |
+| `config/settings/*.yaml` | Runtime settings: LLM, API limits, query limits, retrieval, REPL |
+| `config/databases/<database>/security.yaml` | Security policy: roles, allowed tables, denied columns, group-to-role mapping |
+| `config/databases/<database>/semantic/` | Semantic model: discovery, labels, aliases, relationships, terms, domains |
+| `config/databases/<database>/identity.yaml` | How the agent talks about a database: name, example questions, worked SQL examples |
+| `sqlagent/agent.py` | `run_agent()`: the full question → answer pipeline |
+| `sqlagent/settings.py` | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
+| `sqlagent/databases.py` | Loads `config/settings/databases.yaml` and picks the active database (fails closed) |
+| `sqlagent/config_files.py` | Shared YAML loading (rejects duplicate keys) |
+| `sqlagent/adaptive/llm.py` | Ollama client, prompts for SQL generation, correction and explanation |
+| `sqlagent/adaptive/schema_catalog.py` | Reads the schema at startup and picks the relevant tables for each question |
+| `sqlagent/adaptive/semantic_model.py` | Loads and validates the semantic model |
+| `sqlagent/adaptive/domains.py` | Domains of Discourse and Who / What / Where routing |
+| `sqlagent/adaptive/text_match.py` | Shared tokenizing and phrase matching for schema search, routing and policy checks |
+| `sqlagent/controls/sql_policy.py` | Structural safety, authorisation, `SELECT *` rewriting, column stripping, row limit |
+| `sqlagent/controls/result_policy.py` | Removes restricted columns from results (by source table); caps result size |
+| `sqlagent/controls/question_policy.py` | Restricted columns named in the question; the follow-up "restricted" pre-check |
+| `sqlagent/controls/messages.py` | Block rules and generic user-facing messages |
+| `sqlagent/controls/security_context.py` | `SecurityContext`: user, roles, authorised tables, denied columns |
+| `sqlagent/controls/security_policy.py` | Loads the security policy and builds each user's `SecurityContext` (fails closed) |
+| `sqlagent/controls/security_utils.py` | Case-insensitive authorisation and table-naming helpers |
+| `sqlagent/execution/sql_execution.py` | Database connection and the final execution gate |
+| `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt |
+| `sqlagent/execution/engines/` | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`postgres.py`, `sqlserver.py`) |
+| `tools/check_engine.py` | Checks a configured database end to end without the LLM (PASS/FAIL per check) |
+| `tools/probe_sqlserver.py` | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors |
+| `tests/` | Unit tests; `tests/fixtures.py` holds a static Northwind schema |
 
 ---
 
