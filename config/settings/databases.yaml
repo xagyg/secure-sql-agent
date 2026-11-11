@@ -12,10 +12,10 @@
 # a bare table name; otherwise the engine's (public for PostgreSQL, dbo
 # for SQL Server).
 #
-# Each database brings its own configuration, found by its name:
-#     config/<name>/security.yaml     who may see what (required)
-#     config/<name>/semantic/         what the data means (optional)
-#     config/<name>/identity.yaml     how the agent talks about it (optional)
+# Each database brings its own files, in config/databases/<name>/:
+#     security.yaml     who may see what (required)
+#     semantic/         what the data means (optional)
+#     identity.yaml     how the agent talks about it (optional)
 # Set security_file / semantic_path / identity_file to point elsewhere.
 #
 # SECRETS: the password is never stored here. password_env names the
@@ -24,10 +24,10 @@
 # window, then your Windows user variables, then a hidden prompt), and
 # startup prints whether it was found.
 #
-# How the agent talks about each database - its name in prompts and
-# messages, example questions, and worked SQL examples for the LLM - is in
-# config/<name>/identity.yaml, next to its security and semantic files
-# (identity_file to use another).
+# How the agent talks about each database - its name in prompts and messages,
+# example questions, and worked SQL examples for the LLM - is in
+# config/databases/<name>/identity.yaml, next to its security and semantic
+# files (identity_file to use another).
 
 version: 1
 default: northwind
@@ -42,7 +42,7 @@ databases:
       database: northwind
       user: sqlagent_ro
       password_env: PG_PASSWORD     # value from the environment, never here
-    # Roles from config/northwind/security.yaml.
+    # Roles from config/databases/northwind/security.yaml.
     repl_roles: [sales]      # main.py (SQLAGENT_ROLES overrides)
     demo_roles: [demo]       # api.py, every anonymous visitor
 
@@ -62,7 +62,7 @@ databases:
 
   # Northwind on SQL Server: the original Northwind (dbo schema,
   # PascalCase names, "Order Details" with a space). Its security policy
-  # and semantic model are in config/northwind_mssql/.
+  # and semantic model are in config/databases/northwind_mssql/.
   northwind_mssql:
     description: Northwind on SQL Server (BRAD-Z640)
     engine: sqlserver

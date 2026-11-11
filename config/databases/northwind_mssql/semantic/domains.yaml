@@ -1,8 +1,8 @@
 # Domains of Discourse for Northwind on SQL Server: the same domains as the
-# PostgreSQL Northwind (config/northwind/semantic/domains.yaml), with SQL
-# Server's table names (bare names are in dbo). See sqlagent/adaptive/domains.py
-# for how they are scored. A domain only changes WHERE the schema search
-# starts; it never changes what a user may see.
+# PostgreSQL Northwind (config/databases/northwind/semantic/domains.yaml), with
+# SQL Server's table names (bare names are in dbo). See
+# sqlagent/adaptive/domains.py for how they are scored. A domain only changes
+# WHERE the schema search starts; it never changes what a user may see.
 #
 # Keys per domain:
 #   label            Name shown in logs and the UI.

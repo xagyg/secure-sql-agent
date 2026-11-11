@@ -14,10 +14,10 @@
 #   connection        host, port, database, user; password_env names the
 #                     environment variable holding the password (a
 #                     literal password in the file is rejected)
-#   security_file     config/<name>/security.yaml unless set
-#   semantic_path     config/<name>/semantic/ unless set
-#   identity_file     config/<name>/identity.yaml unless set: how the
-#                     agent names the database in prompts and messages,
+#   security_file     config/databases/<name>/security.yaml unless set
+#   semantic_path     config/databases/<name>/semantic/ unless set
+#   identity_file     config/databases/<name>/identity.yaml unless set:
+#                     how the agent names the database in prompts and messages,
 #                     its example questions and worked SQL examples.
 #                     Optional; without it the defaults below apply.
 #   repl_roles        roles for the local REPL (main.py)
@@ -48,6 +48,9 @@ from sqlagent.settings import reject_secret_keys, settings_dir
 
 
 DATABASES_FILE = CONFIG_DIR / "settings" / "databases.yaml"
+
+# Each database's own files: config/databases/<name>/.
+DATABASES_DIR = CONFIG_DIR / "databases"
 
 
 class DatabaseConfigError(ConfigFileError):
@@ -89,8 +92,8 @@ class SqlExample(_Strict):
 
 
 class Identity(_Strict):
-    """How the agent talks about the database (config/<name>/identity.yaml).
-    Never affects access."""
+    """How the agent talks about the database
+    (config/databases/<name>/identity.yaml). Never affects access."""
     version: Literal[1] = 1
     # Used in the LLM prompt and in user-facing messages.
     display_name: str | None = None
@@ -123,8 +126,8 @@ class DatabaseSpec(_Strict):
     def _identity_moved(cls, data):
         if isinstance(data, dict) and "identity" in data:
             raise ValueError(
-                "identity: has moved to config/<name>/identity.yaml, next to "
-                "the database's security and semantic files (or set "
+                "identity: has moved to config/databases/<name>/identity.yaml, "
+                "next to the database's security and semantic files (or set "
                 "identity_file)")
         return data
 
@@ -157,13 +160,14 @@ class DatabasesFile(_Strict):
 class DatabaseProfile:
     """One database's settings, with paths resolved."""
 
-    def __init__(self, name, spec, config_dir=CONFIG_DIR):
+    def __init__(self, name, spec, config_dir=DATABASES_DIR):
         self.name = name
         self.description = spec.description
         self.engine = spec.engine
         engine = get_engine(spec.engine)
         self.default_schema = spec.default_schema or engine.default_schema
         self.connection = spec.connection
+        _check_not_in_old_location(name, spec, config_dir)
         if self.connection.port is None and engine.default_port:
             self.connection = self.connection.model_copy(
                 update={"port": engine.default_port})
@@ -194,6 +198,21 @@ class DatabaseProfile:
                 f"(password from ${c.password_env}: {found}; "
                 f"security {self.security_file}, semantic {self.semantic_path}, "
                 f"identity {self.identity_file if self.identity_file.is_file() else '(none)'})")
+
+
+def _check_not_in_old_location(name, spec, config_dir):
+    """
+    Database folders moved from config/<name>/ to config/databases/<name>/.
+    A folder left in the old place would otherwise surface as a bare
+    "security policy not found"; say what happened instead.
+    """
+    if spec.security_file is not None or config_dir != DATABASES_DIR:
+        return
+    old, new = CONFIG_DIR / name, config_dir / name
+    if not new.exists() and (old / "security.yaml").is_file():
+        raise DatabaseConfigError(
+            f"the files for database '{name}' have moved from {old} to {new}; "
+            f"move the folder (security.yaml, semantic/, identity.yaml)")
 
 
 def _load_identity(path):

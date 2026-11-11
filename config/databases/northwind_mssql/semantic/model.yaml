@@ -1,8 +1,8 @@
 # Semantic model for Northwind on SQL Server.
 #
 # The same vocabulary as the PostgreSQL Northwind
-# (config/northwind/semantic/model.yaml, which explains each key), in SQL
-# Server's names. Grants no access - that is ../security.yaml.
+# (config/databases/northwind/semantic/model.yaml, which explains each key), in
+# SQL Server's names. Grants no access - that is ../security.yaml.
 #
 # PascalCase names are split into words for matching (CompanyName ->
 # "company", "name"), so only words the names don't already contain are

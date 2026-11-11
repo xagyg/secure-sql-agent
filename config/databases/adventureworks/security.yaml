@@ -1,10 +1,10 @@
 # Security policy for AdventureWorks (Postgres port by Lorin Thwaits).
 #
 # Owned by security / IT, reviewed separately from the semantic model
-# (config/adventureworks/semantic/), which can never widen access. Loaded at
-# startup by sqlagent/controls/security_policy.py. Any problem in this file
-# stops the server from starting (fail closed). The rules are the same as
-# config/northwind/security.yaml; see that file's header.
+# (config/databases/adventureworks/semantic/), which can never widen access.
+# Loaded at startup by sqlagent/controls/security_policy.py. Any problem in
+# this file stops the server from starting (fail closed). The rules are the
+# same as config/databases/northwind/security.yaml; see that file's header.
 #
 # Every grant below is an explicit table name, never "sales.*". The database
 # has 68 tables, 20 views, 68 convenience views in the pe/hr/pr/pu/sa schemas
@@ -67,7 +67,7 @@ roles:
 
   # Sales reps and managers; also the local command-line REPL (main.py).
   # The name gives this role its affinity to the Sales domain
-  # (config/adventureworks/semantic/domains.yaml).
+  # (config/databases/adventureworks/semantic/domains.yaml).
   sales:
     description: Sales - orders, customers, stores, territories, offers and the product catalogue
     allow:

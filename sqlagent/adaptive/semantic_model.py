@@ -2,7 +2,7 @@
 # Author: Brad Long
 #
 # The semantic model: what the data MEANS, kept in YAML next to the code
-# (config/<database>/semantic/ for the active database in
+# (config/databases/<database>/semantic/ for the active database in
 # config/settings/databases.yaml, or SQLAGENT_SEMANTIC_PATH).
 # One folder per database.
 #
@@ -24,9 +24,9 @@
 #   fallback_tables  Tables used when a question names no table.
 #
 # Nothing here grants access. The model is applied to the catalog AFTER
-# security filtering, so a label, alias, relationship or term on a table
-# or column the role can't see is skipped and never shown. Access is
-# decided only by the security policy, config/<database>/security.yaml
+# security filtering, so a label, alias, relationship or term on a table or
+# column the role can't see is skipped and never shown. Access is decided only
+# by the security policy, config/databases/<database>/security.yaml
 # (controls/security_policy.py).
 #
 # Loading rules:

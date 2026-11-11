@@ -7,7 +7,7 @@
 # Split out of agent_controls.py.
 #
 # The database's name, description and example questions come from its
-# config/<database>/identity.yaml, so the wording follows the
+# config/databases/<database>/identity.yaml, so the wording follows the
 # active database.
 
 from sqlagent.databases import active_database

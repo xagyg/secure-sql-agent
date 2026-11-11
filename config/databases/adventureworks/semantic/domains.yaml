@@ -1,15 +1,15 @@
-# Domains of Discourse for AdventureWorks (see sqlagent/adaptive/domains.py
-# for how they are scored, and config/northwind/semantic/domains.yaml for
-# what each key means). A domain only changes WHERE the schema search
-# starts; it never changes what a user may see.
+# Domains of Discourse for AdventureWorks (see sqlagent/adaptive/domains.py for
+# how they are scored, and config/databases/northwind/semantic/domains.yaml for
+# what each key means). A domain only changes WHERE the schema search starts;
+# it never changes what a user may see.
 #
 # AdventureWorks is a bicycle manufacturer with five schemas, which map
 # roughly onto the domains below. Tables are always "schema.table" here:
 # a bare name would mean the public schema, which this database doesn't use.
 #
-# Role keys match the roles in config/adventureworks/security.yaml (sales,
-# purchasing, production, hr, finance) plus job titles that may arrive in
-# the [who=...] tag.
+# Role keys match the roles in config/databases/adventureworks/security.yaml
+# (sales, purchasing, production, hr, finance) plus job titles that may arrive
+# in the [who=...] tag.
 
 version: 1
 

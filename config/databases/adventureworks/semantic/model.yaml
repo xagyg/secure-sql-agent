@@ -1,8 +1,8 @@
 # Semantic model for AdventureWorks (Postgres port by Lorin Thwaits).
 #
 # What the data MEANS: labels, aliases, relationships and terms. This file
-# grants no access - that is config/adventureworks/security.yaml. Anything
-# here that names a table or column the role can't see is skipped at
+# grants no access - that is config/databases/adventureworks/security.yaml.
+# Anything here that names a table or column the role can't see is skipped at
 # startup and never shown to the model.
 #
 # All files in this folder are merged (domains are in domains.yaml).

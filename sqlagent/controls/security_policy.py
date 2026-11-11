@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Security policy: who may see what, kept in YAML separately from the
-# semantic model (config/<database>/security.yaml for the active database
-# in config/settings/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per database.
+# Security policy: who may see what, kept in YAML separately from the semantic
+# model (config/databases/<database>/security.yaml for the active database in
+# config/settings/databases.yaml, or SQLAGENT_SECURITY_FILE). One file per
+# database.
 #
 #   roles        Per role: the tables/views it may query (allow), any it
 #                may not even though a wildcard matched (deny), and the

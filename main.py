@@ -4,8 +4,8 @@
 # Runs against the database chosen in config/settings/databases.yaml
 # (SQLAGENT_DATABASE, or the file's default; .\run.ps1 -local -db <name>).
 # That profile gives the connection, the security file
-# (config/<database>/security.yaml) and the semantic model
-# (config/<database>/semantic/). The REPL's roles are the profile's
+# (config/databases/<database>/security.yaml) and the semantic model
+# (config/databases/<database>/semantic/). The REPL's roles are the profile's
 # repl_roles unless SQLAGENT_ROLES is set. Check the table and column
 # names in those files against your schema first:
 #     psql -c '\dt public.*'
@@ -45,11 +45,11 @@ from sqlagent.execution.sql_execution import get_connection, execute_sql, list_t
 # run_agent() trims it.
 conversation_history = []
 
-# The local user and their roles. In a real deployment both come from
-# the user's sign-in (identity-provider groups -> roles, see group_roles
-# in config/<database>/security.yaml); here the user is config/settings/
-# repl.yaml (SQLAGENT_USER overrides) and the roles are SQLAGENT_ROLES,
-# else the database profile's repl_roles.
+# The local user and their roles. In a real deployment both come from the
+# user's sign-in (identity-provider groups -> roles, see group_roles in
+# config/databases/<database>/security.yaml); here the user is
+# config/settings/repl.yaml (SQLAGENT_USER overrides) and the roles are
+# SQLAGENT_ROLES, else the database profile's repl_roles.
 
 
 # Typing one of these on its own ends the REPL. The whole input must be
