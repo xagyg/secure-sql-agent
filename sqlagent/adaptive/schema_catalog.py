@@ -17,8 +17,8 @@
 #      tables and every column are in the loaded catalog.
 #   4. Fallback schema and Domains of Discourse, from the semantic model.
 #
-# The vocabulary that used to be defined here (TABLE_ALIASES,
-# COLUMN_ALIASES, DEFAULT_FALLBACK_TABLES) now lives in config/<database>/semantic/
+# The vocabulary that used to be defined here (TABLE_ALIASES, COLUMN_ALIASES,
+# DEFAULT_FALLBACK_TABLES) now lives in config/databases/<database>/semantic/
 # (see semantic_model.py).
 
 from contextlib import closing

@@ -37,9 +37,9 @@ from sqlagent.settings import get_settings
 # Domain definitions
 # ---------------------------------------------------------------------------
 # The domains, role_aliases (friendly names for role codes) and
-# function_aliases (screen codes such as PUR0410) are part of the
-# semantic model: config/northwind/semantic/domains.yaml documents each key. The
-# resolver reads them from catalog.semantic, or from the arguments, as
+# function_aliases (screen codes such as PUR0410) are part of the semantic
+# model: config/databases/northwind/semantic/domains.yaml documents each key.
+# The resolver reads them from catalog.semantic, or from the arguments, as
 # plain dicts:
 #
 #   domains           key -> {label, aliases, tables, roles, where, hops,

@@ -2,10 +2,10 @@
 # for each question.
 #
 # Runs after discovery (which tables the agent knows about: the include
-# patterns in config/<database>/semantic/) and security filtering (which
-# of those the role may see: config/<database>/security.yaml). Nothing
-# here can widen access: only tables the role is authorised for are ever
-# scored or routed to.
+# patterns in config/databases/<database>/semantic/) and security filtering
+# (which of those the role may see: config/databases/<database>/security.yaml).
+# Nothing here can widen access: only tables the role is authorised for are
+# ever scored or routed to.
 #
 #   table_match  scores each table against the question
 #                (sqlagent/adaptive/text_match.py, schema_catalog.py).

@@ -108,8 +108,8 @@ def ask_ollama(messages):
 def _format_examples(examples):
     """
     The database's own SQL examples (sql_examples in
-    config/<database>/identity.yaml) in the prompt's "message -> reply"
-    layout:
+    config/databases/<database>/identity.yaml) in the prompt's
+    "message -> reply" layout:
 
       "how many customers are there?"    -> SELECT COUNT(*) FROM customers
       "a question too long for the column"

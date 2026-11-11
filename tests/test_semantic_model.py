@@ -121,7 +121,7 @@ class Loading(unittest.TestCase):
         self.assertEqual(model.include, ("public.*",))
 
     def test_sub_folders_are_not_read(self):
-        # Only the files directly in config/<database>/semantic/ are
+        # Only the files directly in config/databases/<database>/semantic/ are
         # merged; a sub-folder is never read.
         with tempfile.TemporaryDirectory() as folder:
             write_files(folder, {"model.yaml": "tables: {customers: {aliases: [client]}}"})
@@ -131,7 +131,7 @@ class Loading(unittest.TestCase):
         self.assertEqual(set(model.tables), {"public.customers"})
 
     def test_default_paths_are_per_database(self):
-        # Each database's paths follow its name (config/<name>/...).
+        # Each database's paths follow its name (config/databases/<name>/...).
         from sqlagent.databases import load_database_profile
         for name in ("northwind", "adventureworks"):
             profile = load_database_profile(name)

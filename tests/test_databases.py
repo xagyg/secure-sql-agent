@@ -10,8 +10,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sqlagent.config_files import CONFIG_DIR, PROJECT_ROOT
+from sqlagent.config_files import PROJECT_ROOT
 from sqlagent.databases import (
+    DATABASES_DIR,
     DATABASES_FILE,
     DatabaseConfigError,
     load_database_profile,
@@ -50,8 +51,8 @@ class Profiles(unittest.TestCase):
         self.assertEqual(profile.name, "northwind")
         self.assertEqual(profile.connection.host, "localhost")
         self.assertEqual(profile.connection.port, 5432)
-        self.assertEqual(profile.security_file, CONFIG_DIR / "northwind" / "security.yaml")
-        self.assertEqual(profile.semantic_path, CONFIG_DIR / "northwind" / "semantic")
+        self.assertEqual(profile.security_file, DATABASES_DIR / "northwind" / "security.yaml")
+        self.assertEqual(profile.semantic_path, DATABASES_DIR / "northwind" / "semantic")
         self.assertEqual(profile.repl_roles, {"sales"})
 
     def test_environment_selects_case_insensitively(self):
@@ -59,7 +60,7 @@ class Profiles(unittest.TestCase):
         self.assertEqual(profile.name, "adventureworks")
         self.assertEqual(profile.connection.database, "aw")
         self.assertEqual(profile.connection.port, 6543)
-        self.assertEqual(profile.security_file, CONFIG_DIR / "adventureworks" / "security.yaml")
+        self.assertEqual(profile.security_file, DATABASES_DIR / "adventureworks" / "security.yaml")
         self.assertEqual(profile.semantic_path, PROJECT_ROOT / "elsewhere" / "aw")
         self.assertEqual(profile.repl_roles, {"sales", "purchasing"})
 
@@ -94,6 +95,44 @@ class Profiles(unittest.TestCase):
     def test_missing_file_fails(self):
         with self.assertRaisesRegex(DatabaseConfigError, "not found"):
             load_database_profile(path="/no/such/databases.yaml")
+
+
+class OldLayout(unittest.TestCase):
+    """Database folders moved from config/<name>/ to config/databases/<name>/."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.config = Path(self.tmp.name)
+        patches = [
+            mock.patch("sqlagent.databases.CONFIG_DIR", self.config),
+            mock.patch("sqlagent.databases.DATABASES_DIR", self.config / "databases"),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(self.tmp.cleanup)
+
+    def load(self):
+        from sqlagent import databases
+        spec = databases.DatabasesFile.model_validate(
+            {"default": "legacy", "databases": {"legacy": {
+                "connection": {"database": "legacy", "user": "u"},
+                "repl_roles": ["a"], "demo_roles": ["a"]}}}).databases["legacy"]
+        return databases.DatabaseProfile("legacy", spec, self.config / "databases")
+
+    def test_folder_left_in_old_place_is_explained(self):
+        (self.config / "legacy").mkdir()
+        (self.config / "legacy" / "security.yaml").write_text("version: 1\n")
+        with self.assertRaisesRegex(DatabaseConfigError, "have moved from .* to "):
+            self.load()
+
+    def test_new_place_wins(self):
+        for folder in (self.config / "legacy", self.config / "databases" / "legacy"):
+            folder.mkdir(parents=True)
+            (folder / "security.yaml").write_text("version: 1\n")
+        profile = self.load()
+        self.assertEqual(profile.security_file,
+                         self.config / "databases" / "legacy" / "security.yaml")
 
 
 class Shipped(unittest.TestCase):

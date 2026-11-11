@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Shared test fixtures: a static copy of the Northwind (Postgres) schema
-# and a SchemaCatalog built from it, so tests need no database. The
-# customers.phone and employees.home_phone columns are left out, as the
-# demo role's security-filtered catalog does. The semantic model is the
-# real one in config/northwind/semantic/, so the tests cover the shipped vocabulary.
+# Shared test fixtures: a static copy of the Northwind (Postgres) schema and a
+# SchemaCatalog built from it, so tests need no database. The customers.phone
+# and employees.home_phone columns are left out, as the demo role's
+# security-filtered catalog does. The semantic model is the real one in
+# config/databases/northwind/semantic/, so the tests cover the shipped
+# vocabulary.
 
 from sqlagent.adaptive.domains import DomainResolver
 from sqlagent.config_files import CONFIG_DIR
@@ -13,8 +14,8 @@ from sqlagent.adaptive.schema_catalog import SchemaCatalog
 
 
 # The shipped Northwind configuration the tests run against.
-NORTHWIND_SECURITY_FILE = CONFIG_DIR / "northwind" / "security.yaml"
-NORTHWIND_SEMANTIC_PATH = CONFIG_DIR / "northwind" / "semantic"
+NORTHWIND_SECURITY_FILE = CONFIG_DIR / "databases" / "northwind" / "security.yaml"
+NORTHWIND_SEMANTIC_PATH = CONFIG_DIR / "databases" / "northwind" / "semantic"
 
 NORTHWIND = {
     "categories": ["category_id", "category_name", "description", "picture"],

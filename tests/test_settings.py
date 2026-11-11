@@ -229,7 +229,7 @@ class Identity(unittest.TestCase):
 
 
 class IdentityFiles(unittest.TestCase):
-    """config/<name>/identity.yaml, loaded with the database's profile."""
+    """config/databases/<name>/identity.yaml, loaded with the database's profile."""
 
     DATABASES = """
         version: 1
@@ -290,7 +290,7 @@ class IdentityFiles(unittest.TestCase):
             self.load("sql_examples: [{question: q}]\n")
 
     def test_identity_block_in_databases_yaml_is_rejected(self):
-        with self.assertRaisesRegex(DatabaseConfigError, "moved to config/<name>/identity.yaml"):
+        with self.assertRaisesRegex(DatabaseConfigError, "moved to config/databases/<name>/identity.yaml"):
             self.load(extra="identity: {display_name: Old}")
 
 

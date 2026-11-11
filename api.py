@@ -104,7 +104,7 @@ AUDIT_LOG_PATH = str(_API.audit_log)
 
 # ==========================================================================
 # Demo SecurityContext — the active database's demo_roles (config/settings/databases.yaml),
-# e.g. the "demo" role in config/northwind/security.yaml.
+# e.g. the "demo" role in config/databases/northwind/security.yaml.
 #
 # Every anonymous demo visitor gets this same read-only, narrow view,
 # independent of the roles real authenticated users get (see main.py).

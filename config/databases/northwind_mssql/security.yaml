@@ -1,7 +1,7 @@
 # Security policy for Northwind on SQL Server: who may see what.
 #
 # The same roles and rules as the PostgreSQL Northwind
-# (config/northwind/security.yaml, which explains the format), in SQL
+# (config/databases/northwind/security.yaml, which explains the format), in SQL
 # Server's names: schema dbo, PascalCase tables and columns, and
 # "Order Details" with a space. A name without a schema is in dbo.
 #

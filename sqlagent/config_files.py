@@ -3,9 +3,11 @@
 #
 # Shared helpers for the YAML configuration files:
 #
-#   config/settings/*.yaml            runtime settings (sqlagent/settings.py)
-#   config/<database>/security.yaml   who may see what (controls/security_policy.py)
-#   config/<database>/semantic/       what the data means (adaptive/semantic_model.py)
+#   config/settings/*.yaml          runtime settings (sqlagent/settings.py)
+#   config/databases/<database>/
+#       security.yaml               who may see what (controls/security_policy.py)
+#       semantic/                   what the data means (adaptive/semantic_model.py)
+#       identity.yaml               how the agent talks about it (databases.py)
 #
 # One security file and one semantic folder per database; which database
 # is active is chosen in config/settings/databases.yaml.
