@@ -14,6 +14,12 @@
 #     list doesn't cover is an error, so a typo can't leave a column visible.
 #   - With several roles, a table is visible if any role allows it, and a
 #     column on it is hidden only if every role that allows the table hides it.
+#   - extends: <role> starts a role as everything that role has - allowed
+#     and denied tables, hidden columns - and its own allow, deny and
+#     deny_columns add to it. Only undeny (tables) and undeny_columns can
+#     show something the parent restricts; each must name something the
+#     parent really denies or hides, and startup prints it as "WIDENS:".
+#     description and scope aren't inherited.
 #   - Wildcards are expanded once at startup against the tables that exist,
 #     and every role's resolved tables are printed. Prefer explicit names:
 #     with "erp.*", a table added to the database later becomes visible at
@@ -65,6 +71,17 @@ roles:
       public.customers: [phone]
       public.employees: [home_phone]
 
+  # Row-scoped sales manager: everything "sales" has (extends: its tables
+  # and hidden columns), but which ROWS depend on the grant (group_grants
+  # below) - all rows, a region, or the manager's own team. One role, many
+  # scopes: no national / regional / local copies of it. Anything added
+  # here adds to sales; only undeny / undeny_columns could show something
+  # sales hides, and startup prints any that do.
+  sales_manager:
+    extends: sales
+    description: Sales manager - rows limited by the grant's scope
+    scope: required
+
   # Example of wildcards on an ERP schema (not used by the demo):
   #
   # hr_analyst:
@@ -79,3 +96,63 @@ roles:
 group_roles:
   Northwind-Sales: [sales]
   Public-Demo: [demo]
+
+# ---------------------------------------------------------------------------
+# Row scope (see README "Row-level security"). Each dimension says how it
+# restricts every table a scoped role can query:
+#   column    the table carries the dimension:     {column: employee_id}
+#   via       in scope when a related row is:      {via: orders}
+#   unscoped  reference data, the same for everyone
+# A via rule joins on the database's foreign key between the two tables.
+# Where there's no foreign key, or more than one, say which columns:
+#     {via: orders, join: {order_id: order_id}}   (this table: that table)
+# Startup stops rather than guess, and prints each join it takes.
+# A table a scoped role allows with no rule here stops startup.
+# ---------------------------------------------------------------------------
+scopes:
+  # Orders handled by particular employees: a rep's own, or a manager's
+  # team (the employee and everyone below them through reports_to).
+  salesperson:
+    user_attribute: employee_id          # from sign-in
+    hierarchy: {table: public.employees, key: employee_id, parent: reports_to}
+    tables:
+      public.orders:                 {column: employee_id}
+      public.order_details:          {via: public.orders}
+      public.customers:              {via: public.orders}
+      public.customer_customer_demo: {via: public.customers}
+      public.employees:              {column: employee_id}
+      public.employee_territories:   {column: employee_id}
+      public.products:               unscoped
+      public.categories:             unscoped
+      public.suppliers:              unscoped
+      public.shippers:               unscoped
+      public.region:                 unscoped
+      public.territories:            unscoped
+      public.customer_demographics:  unscoped
+
+  # Sales regions: orders handled by employees who cover a territory in
+  # the region, and the customers, lines and staff that follow from them.
+  region:
+    tables:
+      public.region:                 {column: region_id}
+      public.territories:            {column: region_id}
+      public.employee_territories:   {via: public.territories}
+      public.employees:              {via: public.employee_territories}
+      public.orders:                 {via: public.employees}
+      public.order_details:          {via: public.orders}
+      public.customers:              {via: public.orders}
+      public.customer_customer_demo: {via: public.customers}
+      public.products:               unscoped
+      public.categories:             unscoped
+      public.suppliers:              unscoped
+      public.shippers:               unscoped
+      public.customer_demographics:  unscoped
+
+# Identity-provider group -> grants (role + which rows). Who is in each
+# group, and their employee_id, come from sign-in. DEMO ONLY: for
+# local testing, config/idp/northwind.yaml stands in for it.
+group_grants:
+  Sales-National: [{role: sales_manager, scope: unrestricted}]
+  Sales-Eastern:  [{role: sales_manager, scope: {region: [1]}}]
+  Sales-Team:     [{role: sales_manager, scope: {salesperson: team}}]
+  Sales-Rep:      [{role: sales_manager, scope: {salesperson: self}}]

@@ -8,6 +8,8 @@
 
 from contextlib import closing
 
+from sqlglot import exp
+
 from sqlagent.controls.sql_policy import is_safe_sql
 from sqlagent.databases import active_database
 from sqlagent.execution.engines import active_engine
@@ -48,6 +50,44 @@ def list_tables(connection_factory=None):
     """
     with closing((connection_factory or get_connection)()) as conn:
         return active_engine().list_tables(conn)
+
+
+def read_hierarchy(table, key, parent, connection_factory=None):
+    """
+    Every (key, parent) pair in a hierarchy table - e.g. each employee and
+    their manager - for the row-scope values "team" and "reports"
+    (security_policy.build_context). Read once per user, at sign-in.
+    Internal: the identifiers come from the security policy, not a user.
+    """
+    from sqlagent.controls.row_scope import ident, table_expr
+
+    engine = active_engine()
+    query = exp.select(
+        exp.alias_(exp.Column(this=ident(key)), "k", quoted=False),
+        exp.alias_(exp.Column(this=ident(parent)), "p", quoted=False),
+    ).from_(table_expr(table)).sql(dialect=engine.dialect)
+    with closing((connection_factory or get_connection)()) as conn:
+        rows, _ = engine.execute_readonly(conn, query, QUERY_TIMEOUT_SECONDS)
+    return [(row["k"], row["p"]) for row in rows]
+
+
+def read_foreign_keys(connection_factory=None):
+    """
+    Every foreign key in the database, as (table, [columns], referenced
+    table, [columns]) with the columns in key order - for row-scope 'via'
+    rules that leave the join to the foreign key
+    (security_policy.SecurityPolicy._resolve_joins). Read once, at startup.
+    """
+    engine = active_engine()
+    keys = {}
+    with closing((connection_factory or get_connection)()) as conn:
+        for row in engine.foreign_key_rows(conn):
+            key = keys.setdefault(row["constraint_id"], (
+                f"{row['parent_schema']}.{row['parent_table']}", [],
+                f"{row['referenced_schema']}.{row['referenced_table']}", []))
+            key[1].append(row["parent_column"])
+            key[3].append(row["referenced_column"])
+    return list(keys.values())
 
 
 def execute_sql(sql):

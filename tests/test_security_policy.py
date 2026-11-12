@@ -7,6 +7,8 @@
 #
 #     python -m unittest tests.test_security_policy -v
 
+import contextlib
+import io
 import tempfile
 import textwrap
 import unittest
@@ -241,6 +243,135 @@ class EmptyCatalog(unittest.TestCase):
         catalog = self.refresh(security, tables)
         self.assertEqual(set(catalog.tables), {"public.orders"})
 
+
+
+INHERITING = """
+    version: 1
+    default: deny
+    roles:
+      hr_analyst:
+        allow: ["semantic.employees_v", "erp.emp_*"]
+        deny:  ["erp.emp_salary_hist"]
+        deny_columns:
+          "erp.emp_*": [tax_file_no, bank_account]
+      hr_manager:
+        extends: hr_analyst
+        description: HR manager
+        allow: [erp.cust_mst]
+        deny_columns:
+          erp.cust_mst: [phone]
+      payroll_officer:
+        extends: hr_analyst
+        undeny: ["erp.emp_salary_hist"]
+        undeny_columns:
+          "erp.emp_*": [bank_account]
+"""
+
+
+class Inheritance(unittest.TestCase):
+    """extends: a role starts as everything its parent has; only undeny /
+    undeny_columns widen what the parent restricts."""
+
+    def load(self, text=INHERITING, replace=None):
+        for old, new in (replace or {}).items():
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            pol = policy(text)
+        return pol, out.getvalue()
+
+    def test_child_inherits_and_adds(self):
+        pol, _ = self.load()
+        tables, denied = pol.resolve_role("hr_manager", ERP_TABLES)
+        parent_tables, _ = pol.resolve_role("hr_analyst", ERP_TABLES)
+        self.assertEqual(tables, parent_tables | {"erp.cust_mst"})
+        self.assertNotIn("erp.emp_salary_hist", tables)          # parent's deny kept
+        self.assertEqual(denied["erp.emp_mst"], {"tax_file_no", "bank_account"})
+        self.assertEqual(denied["erp.cust_mst"], {"phone"})
+        self.assertEqual(pol.roles["hr_manager"].description, "HR manager")
+
+    def test_undeny_lifts_only_what_it_names_and_is_printed(self):
+        pol, out = self.load()
+        tables, denied = pol.resolve_role("payroll_officer", ERP_TABLES)
+        self.assertIn("erp.emp_salary_hist", tables)
+        self.assertEqual(denied["erp.emp_mst"], {"tax_file_no"})
+        self.assertIn("WIDENS: payroll_officer undenies table erp.emp_salary_hist", out)
+        self.assertIn("WIDENS: payroll_officer undenies column erp.emp_*.bank_account", out)
+        self.assertIn("role hr_manager extends hr_analyst", out)
+
+    def test_chain(self):
+        pol, _ = self.load(INHERITING + """
+      senior_payroll:
+        extends: payroll_officer
+        deny_columns:
+          "erp.emp_*": [bank_account]
+""")
+        _, denied = pol.resolve_role("senior_payroll", ERP_TABLES)
+        self.assertEqual(denied["erp.emp_mst"], {"tax_file_no", "bank_account"})  # hidden again
+
+    def test_flattened_roles_behave_like_written_out_ones(self):
+        pol, _ = self.load()
+        written, _ = self.load(replace={
+            "      hr_manager:\n        extends: hr_analyst\n":
+            "      hr_manager:\n",
+            "        allow: [erp.cust_mst]\n":
+            "        allow: [\"semantic.employees_v\", \"erp.emp_*\", erp.cust_mst]\n"
+            "        deny:  [\"erp.emp_salary_hist\"]\n",
+            "          erp.cust_mst: [phone]\n":
+            "          erp.cust_mst: [phone]\n          \"erp.emp_*\": [tax_file_no, bank_account]\n",
+        })
+        self.assertEqual(pol.resolve_role("hr_manager", ERP_TABLES),
+                         written.resolve_role("hr_manager", ERP_TABLES))
+
+    def check(self, replace, message):
+        with self.assertRaisesRegex(SecurityPolicyError, message):
+            self.load(replace=replace)
+
+    def test_unknown_parent(self):
+        self.check({"extends: hr_analyst\n        description": "extends: hr_anlyst\n        description"},
+                   "undefined role 'hr_anlyst'")
+
+    def test_cycle(self):
+        self.check({"      hr_analyst:\n": "      hr_analyst:\n        extends: payroll_officer\n"},
+                   "cycle")
+
+    def test_undeny_must_name_a_parent_deny(self):
+        self.check({'undeny: ["erp.emp_salary_hist"]': 'undeny: ["erp.emp_leave"]'},
+                   "doesn't deny")
+
+    def test_undeny_column_must_be_hidden_by_parent(self):
+        self.check({"undeny_columns:\n          \"erp.emp_*\": [bank_account]":
+                    "undeny_columns:\n          \"erp.emp_*\": [salary]"},
+                   "doesn't hide")
+
+    def test_undeny_columns_must_name_the_parents_table_key(self):
+        self.check({"undeny_columns:\n          \"erp.emp_*\"": "undeny_columns:\n          erp.emp_mst"},
+                   "hides none")
+
+    def test_undeny_without_extends(self):
+        self.check({"        extends: hr_analyst\n        undeny": "        undeny"}, "need extends")
+
+    def test_scope_required_cannot_be_dropped(self):
+        self.check({"      hr_analyst:\n": "      hr_analyst:\n        scope: required\n"},
+                   "must say scope: required too")
+
+    def test_deny_columns_typo_still_caught(self):
+        self.check({"          erp.cust_mst: [phone]": "          erp.cust_mstt: [phone]"},
+                   "doesn't grant")
+
+    def test_shipped_sales_manager_extends_sales(self):
+        from sqlagent.config_files import CONFIG_DIR
+        for db in ("northwind", "northwind_mssql"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pol = load_security_policy(CONFIG_DIR / "databases" / db / "security.yaml")
+            self.assertEqual(pol.roles["sales_manager"].extends, "sales")
+            self.assertEqual(pol.roles["sales_manager"].scope, "required")
+            self.assertEqual(pol.roles["sales"].scope, None)
+            tables = NORTHWIND_TABLES if db == "northwind" else None
+            if tables:
+                self.assertEqual(pol.resolve_role("sales_manager", tables),
+                                 pol.resolve_role("sales", tables))
 
 if __name__ == "__main__":
     unittest.main()

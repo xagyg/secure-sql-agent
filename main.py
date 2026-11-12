@@ -34,7 +34,14 @@ from sqlagent.controls.security_policy import (
 from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
 from sqlagent.adaptive.semantic_model import SemanticModelError, load_semantic_model
 from sqlagent.execution.engines import active_engine
-from sqlagent.execution.sql_execution import get_connection, execute_sql, list_tables
+from sqlagent.execution.sql_execution import (
+    execute_sql,
+    get_connection,
+    list_tables,
+    read_hierarchy,
+    read_foreign_keys,
+)
+from sqlagent.identities import IdentityError, load_identity
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +57,10 @@ conversation_history = []
 # config/databases/<database>/security.yaml); here the user is
 # config/settings/repl.yaml (SQLAGENT_USER overrides) and the roles are
 # SQLAGENT_ROLES, else the database profile's repl_roles.
+#
+# SQLAGENT_IDENTITY (.\run.ps1 -local -identity steven) signs in as one of the
+# database's local identities instead (config/idp/<idp>.yaml, DEMO ONLY):
+# its groups and attributes, and so its row scope.
 
 
 # Typing one of these on its own ends the REPL. The whole input must be
@@ -60,6 +71,22 @@ EXIT_WORDS = {"quit", "exit", "leave", "bye", ":quit", ":exit", ":q"}
 
 def is_exit(text):
     return text.strip().rstrip(".!?").strip().lower() in EXIT_WORDS
+
+
+def local_identity(profile):
+    """
+    (name, groups, attributes) for SQLAGENT_IDENTITY, or None.
+
+    DEMO ONLY: a real deployment takes the user's groups and attributes
+    (employee_id) from sign-in - the identity provider's token - not from
+    config/idp/. This stands in for that so row scope can be tried
+    from the REPL.
+    """
+    name = os.environ.get("SQLAGENT_IDENTITY", "").strip()
+    if not name:
+        return None
+    _, identity = load_identity(profile, name)
+    return name.lower(), identity.groups, identity.attributes
 
 
 def local_roles(profile):
@@ -101,8 +128,23 @@ def main():
     print_banner()
 
     try:
-        security = policy.build_context(
-            local_user, local_roles(profile), list_tables(get_connection))
+        identity = local_identity(profile)
+    except IdentityError as ex:
+        print(f"Configuration error: {ex}")
+        sys.exit(1)
+
+    try:
+        tables = list_tables(get_connection)
+        if identity:
+            name, groups, attributes = identity
+            print(f"[security] Signed in as local identity '{name}' "
+                  f"(groups: {', '.join(groups) or 'none'})")
+            security = policy.build_context(
+                name, set(), tables, groups=groups, attributes=attributes,
+                read_hierarchy=read_hierarchy, read_foreign_keys=read_foreign_keys)
+        else:
+            security = policy.build_context(
+                local_user, local_roles(profile), tables)
         catalog = SchemaCatalog(get_connection, security, semantic=semantic)
         catalog.refresh()
     except SecurityPolicyError as ex:

@@ -22,6 +22,11 @@
 #                     Optional; without it the defaults below apply.
 #   repl_roles        roles for the local REPL (main.py)
 #   demo_roles        roles for every anonymous visitor (api.py)
+#   idp               DEMO ONLY: whose local identities stand in for
+#                     sign-in - config/idp/<idp>.yaml, the database's own
+#                     name unless set. One file per organisation, so two
+#                     copies of the same company (northwind and
+#                     northwind_mssql) share their people. See identities.py.
 #
 # The active database is SQLAGENT_DATABASE, else the file's "default".
 # Fail closed: a missing or invalid file, or an unknown name, raises
@@ -31,6 +36,7 @@
 # policy to another database.
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -51,6 +57,10 @@ DATABASES_FILE = CONFIG_DIR / "settings" / "databases.yaml"
 
 # Each database's own files: config/databases/<name>/.
 DATABASES_DIR = CONFIG_DIR / "databases"
+
+# DEMO ONLY: local stand-ins for sign-in, one file per organisation:
+# config/idp/<idp>.yaml (identities.py).
+IDP_DIR = CONFIG_DIR / "idp"
 
 
 class DatabaseConfigError(ConfigFileError):
@@ -120,6 +130,8 @@ class DatabaseSpec(_Strict):
     identity_file: Path | None = None
     repl_roles: list[str] = Field(..., min_length=1)
     demo_roles: list[str] = Field(..., min_length=1)
+    # A file name in config/idp/, without .yaml: a plain name, never a path.
+    idp: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]+$")
 
     @model_validator(mode="before")
     @classmethod
@@ -179,6 +191,9 @@ class DatabaseProfile:
         self.demo_roles = {r.strip() for r in spec.demo_roles if r.strip()}
         self.identity_file = _resolve(
             spec.identity_file, config_dir / name / "identity.yaml")
+        self.idp = (spec.idp or name).lower()
+        self.idp_file = IDP_DIR / f"{self.idp}.yaml"
+        _check_no_old_identities(self.security_file)
         ident = _load_identity(self.identity_file)
         self.display_name = (ident.display_name or name).strip()
         names = [n.strip() for n in ident.names if n.strip()]
@@ -213,6 +228,21 @@ def _check_not_in_old_location(name, spec, config_dir):
         raise DatabaseConfigError(
             f"the files for database '{name}' have moved from {old} to {new}; "
             f"move the folder (security.yaml, semantic/, identity.yaml)")
+
+
+def _check_no_old_identities(security_file):
+    """
+    Local identities moved from identities.yaml beside the security policy
+    to config/idp/<idp>.yaml. A copy left in the old place would be
+    silently ignored - and edited by mistake - so startup stops until it's
+    gone.
+    """
+    old = Path(security_file).parent / "identities.yaml"
+    if old.is_file():
+        raise DatabaseConfigError(
+            f"{old}: local identities have moved to {IDP_DIR}/<idp>.yaml, one "
+            "file per organisation (idp: in config/settings/databases.yaml); "
+            "move it there, or delete it if it's already been moved")
 
 
 def _load_identity(path):

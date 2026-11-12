@@ -8,6 +8,10 @@
 # All files in this folder are merged (domains are in domains.yaml). On an
 # ERP, split it further, e.g. one file per domain, so each area's owners
 # review their own vocabulary. See README.md "Semantic model".
+#
+# Another database with the same schema (a dev or test copy) can share this
+# folder: set its semantic_path to config/databases/northwind/semantic in
+# config/settings/databases.yaml.
 
 version: 1
 

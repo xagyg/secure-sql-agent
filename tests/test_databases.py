@@ -135,6 +135,72 @@ class OldLayout(unittest.TestCase):
                          self.config / "databases" / "legacy" / "security.yaml")
 
 
+class LocalIdentities(unittest.TestCase):
+    """DEMO ONLY: config/idp/<idp>.yaml, one file per organisation."""
+
+    def load(self, extra="", security_dir=None):
+        text = TWO.replace("    repl_roles: [sales]\n    demo_roles: [demo]\n  AdventureWorks",
+                           f"    repl_roles: [sales]\n    demo_roles: [demo]\n{extra}  AdventureWorks")
+        if security_dir is not None:
+            text = text.replace("  northwind:\n", f"  northwind:\n    security_file: {security_dir.as_posix()}/security.yaml\n")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder, "databases.yaml")
+            path.write_text(textwrap.dedent(text), encoding="utf-8")
+            return load_database_profile("northwind", path)
+
+    def test_default_is_the_database_name(self):
+        from sqlagent.databases import IDP_DIR
+        from sqlagent.identities import identities_file
+        profile = self.load()
+        self.assertEqual(profile.idp, "northwind")
+        self.assertEqual(identities_file(profile), IDP_DIR / "northwind.yaml")
+
+    def test_idp_names_another_organisation(self):
+        from sqlagent.databases import IDP_DIR
+        profile = self.load("    idp: Contoso\n")
+        self.assertEqual(profile.idp_file, IDP_DIR / "contoso.yaml")
+
+    def test_idp_is_a_name_not_a_path(self):
+        for bad in ("../secrets", "a/b", "x.yaml", "''"):
+            with self.subTest(idp=bad), self.assertRaisesRegex(DatabaseConfigError, "idp"):
+                self.load(f"    idp: {bad}\n")
+
+    def test_old_identities_file_stops_startup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "identities.yaml").write_text("version: 1\n")
+            with self.assertRaisesRegex(DatabaseConfigError, "have moved to .*idp"):
+                self.load(security_dir=Path(folder))
+            (Path(folder) / "identities.yaml").unlink()
+            self.load(security_dir=Path(folder))
+
+    def test_shipped_groups_are_known_to_the_policy(self):
+        # A misspelt group is silently ignored at sign-in (most of a user's
+        # groups have nothing to do with this application), so check the
+        # shipped files here. "contractor" is deliberately in no group.
+        import contextlib, io
+        from sqlagent.controls.security_policy import load_security_policy
+        from sqlagent.identities import identities_file, load_identities
+        for db in ("northwind", "northwind_mssql", "adventureworks"):
+            profile = load_database_profile(db)
+            with contextlib.redirect_stdout(io.StringIO()):
+                policy = load_security_policy(profile.security_file)
+            known = set(policy.group_roles) | set(policy.group_grants)
+            for name, ident in load_identities(identities_file(profile)).items():
+                if name == "contractor":
+                    continue
+                with self.subTest(db=db, identity=name):
+                    groups = {g.lower() for g in ident.groups}
+                    self.assertTrue(groups, "no groups")
+                    self.assertLessEqual(groups, known)
+
+    def test_both_northwinds_share_one_file(self):
+        from sqlagent.identities import identities_file, load_identities
+        files = {identities_file(load_database_profile(n)) for n in ("northwind", "northwind_mssql")}
+        self.assertEqual(len(files), 1)
+        people = load_identities(files.pop())
+        self.assertEqual(people["steven"].attributes, {"employee_id": 5})
+
+
 class Shipped(unittest.TestCase):
 
     def test_every_shipped_database_has_a_security_file(self):

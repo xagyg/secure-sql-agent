@@ -16,7 +16,36 @@
 #     security.yaml     who may see what (required)
 #     semantic/         what the data means (optional)
 #     identity.yaml     how the agent talks about it (optional)
-# Set security_file / semantic_path / identity_file to point elsewhere.
+#
+# Those are defaults. Set security_file, semantic_path or identity_file to
+# use files elsewhere (a relative path is from the project root). Use them
+# when several databases have the same schema - dev, test and production
+# copies of one application - so they share one semantic model and
+# identity, and differ only in connection and security:
+#
+#     northwind_test:
+#       engine: postgresql
+#       connection: {host: test-db, database: northwind, user: sqlagent_ro,
+#                    password_env: PG_TEST_PASSWORD}
+#       semantic_path: config/databases/northwind/semantic        # shared
+#       identity_file: config/databases/northwind/identity.yaml   # shared
+#       # security_file: config/databases/northwind_test/security.yaml (default)
+#       repl_roles: [sales]
+#       demo_roles: [demo]
+#
+# Test should normally run production's security policy - the roles,
+# denied columns and row scopes - or it isn't testing it. What usually
+# differs is which groups hold which roles (group_roles, group_grants),
+# and dev/test may use local identities (idp, below), which production
+# shouldn't have.
+# A semantic model can only be shared by databases with the same table and
+# column names: northwind and northwind_mssql each need their own.
+#
+# DEMO ONLY - idp: whose local identities stand in for sign-in with
+# .\run.ps1 -local -identity <name>: config/idp/<idp>.yaml, the database's
+# own name unless set. One file per organisation, as an identity provider
+# would hold them, so two copies of the same company share their people.
+# In a deployment the identity provider supplies them and this isn't read.
 #
 # SECRETS: the password is never stored here. password_env names the
 # environment variable that holds it, and a literal "password:" key is
@@ -64,13 +93,14 @@ databases:
   # PascalCase names, "Order Details" with a space). Its security policy
   # and semantic model are in config/databases/northwind_mssql/.
   northwind_mssql:
-    description: Northwind on SQL Server (BRAD-Z640)
+    description: Northwind on SQL Server
     engine: sqlserver
     connection:
-      host: BRAD-Z640                     # or BRAD-Z640\INSTANCE for a named instance
+      host: localhost
       database: Northwind
       user: sqlagent_ro                   # db_datareader only; see README "SQL Server"
       password_env: SQLSERVER_PASSWORD    # value from the environment, never here
       trust_server_certificate: true      # local server's self-signed certificate
     repl_roles: [sales]
     demo_roles: [demo]
+    idp: northwind           # DEMO ONLY: the same people as the PostgreSQL copy

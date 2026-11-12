@@ -1,0 +1,41 @@
+# DEMO ONLY: the Northwind company's people, standing in for its identity
+# provider - for the REPL and the row-scope checks only (see
+# sqlagent/identities.py). In a deployment the identity provider supplies
+# each user's groups and attributes; the API never reads this file.
+#
+# Used by both copies of the Northwind database (idp: in
+# config/settings/databases.yaml). Run the REPL as one of them:
+#     .\run.ps1 -local -db northwind -identity steven
+#     .\run.ps1 -local -db northwind_mssql -identity steven
+#
+# The people are Northwind's own employees, so their attributes match the
+# data: Andrew Fuller (2) is VP Sales and everyone else reports to him,
+# Steven Buchanan (5) manages Michael Suyama (6), Robert King (7) and Anne
+# Dodsworth (9), and Nancy Davolio (1) is a sales representative.
+
+version: 1
+
+identities:
+  andrew:
+    description: VP Sales - all regions
+    groups: [Sales-National]
+    attributes: {employee_id: 2}
+  steven:
+    description: Sales manager - his own and his team's orders
+    groups: [Sales-Team]
+    attributes: {employee_id: 5}
+  nancy:
+    description: Sales representative - her own orders
+    groups: [Sales-Rep]
+    attributes: {employee_id: 1}
+  eastern:
+    description: Regional manager - the Eastern region
+    groups: [Sales-Eastern]
+    attributes: {employee_id: 4}
+  steven_and_eastern:
+    description: Two grants - his team, plus the Eastern region
+    groups: [Sales-Team, Sales-Eastern]
+    attributes: {employee_id: 5}
+  no_employee:
+    description: Sales-Team with no employee record - must see no team rows
+    groups: [Sales-Team]
