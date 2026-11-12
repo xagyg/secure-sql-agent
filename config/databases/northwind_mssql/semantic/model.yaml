@@ -7,6 +7,11 @@
 # PascalCase names are split into words for matching (CompanyName ->
 # "company", "name"), so only words the names don't already contain are
 # listed as aliases.
+#
+# Another SQL Server Northwind (a dev or test copy) can share this folder:
+# set its semantic_path to config/databases/northwind_mssql/semantic in
+# config/settings/databases.yaml. The PostgreSQL Northwind can't - its
+# table and column names differ.
 
 version: 1
 

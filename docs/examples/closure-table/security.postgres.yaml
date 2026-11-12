@@ -1,0 +1,194 @@
+# EXAMPLE - a Northwind security policy that takes a manager's team from a
+# closure table. Not loaded unless you point the agent at it (README.md in
+# this folder):
+#     $env:SQLAGENT_SECURITY_FILE = "docs\examples\closure-table\security.postgres.yaml"
+# Create the table first: employee_hierarchy.postgres.sql.
+#
+# It is the shipped config/databases/northwind/security.yaml with every
+# change marked "# CLOSURE:":
+#   - sales_manager extends sales and adds public.employee_hierarchy - it is
+#     part of the team filter, so the role must be allowed it;
+#   - a new dimension, team, starts at employee_hierarchy.manager_id and
+#     follows employees -> orders -> order lines and customers;
+#   - Sales-Team is granted team: self - one value, the manager's own ID -
+#     instead of salesperson: team, a list of every ID in the team;
+#   - salesperson keeps self for reps (only their own orders) and no
+#     longer needs a hierarchy;
+#   - every dimension has a rule for employee_hierarchy.
+# --------------------------------------------------------------------------
+#
+# Security policy: who may see what.
+#
+# Owned by security / IT, reviewed separately from the semantic model
+# (config/databases/northwind/semantic/), which can never widen access. Loaded
+# at startup by sqlagent/controls/security_policy.py. Any problem in this file
+# stops the server from starting (fail closed).
+#
+# Rules:
+#   - Nothing is visible unless a role allows it ("default: deny").
+#   - allow / deny are patterns on "schema.table" (fnmatch: * ? [..]); a
+#     name without a schema is in "public". deny beats allow within a role.
+#   - deny_columns hides columns on tables the role allows. Its table keys
+#     may also be patterns ("erp.*": [tax_file_no]). A key the role's allow
+#     list doesn't cover is an error, so a typo can't leave a column visible.
+#   - With several roles, a table is visible if any role allows it, and a
+#     column on it is hidden only if every role that allows the table hides it.
+#   - Wildcards are expanded once at startup against the tables that exist,
+#     and every role's resolved tables are printed. Prefer explicit names:
+#     with "erp.*", a table added to the database later becomes visible at
+#     the next restart without anyone deciding it should be.
+#
+# This file defines roles. Who holds a role comes from the identity
+# provider at sign-in (group_roles below), not from a list of people here.
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - narrow, read-only view of Northwind
+    allow:
+      - public.customers
+      - public.orders
+      - public.order_details
+      - public.products
+      - public.categories
+      - public.suppliers
+      - public.employees
+      - public.shippers
+    deny_columns:
+      public.customers: [phone, fax, address]
+      public.employees: [home_phone]
+
+  # The local command-line REPL (main.py). The name also gives this role its
+  # affinity to the Sales domain
+  # (config/databases/northwind/semantic/domains.yaml).
+  sales:
+    description: Local development - all of Northwind except personal phone numbers
+    allow:
+      - public.customers
+      - public.orders
+      - public.order_details
+      - public.products
+      - public.categories
+      - public.suppliers
+      - public.employees
+      - public.employee_territories
+      - public.region
+      - public.shippers
+      - public.territories
+      - public.customer_demographics
+      - public.customer_customer_demo
+    deny_columns:
+      public.customers: [phone]
+      public.employees: [home_phone]
+
+  # Row-scoped sales manager: everything "sales" has, plus the closure
+  # table, which its team filter reads. Which ROWS depend on the grant
+  # (group_grants below).
+  sales_manager:
+    extends: sales
+    description: Sales manager - rows limited by the grant's scope
+    scope: required
+    allow:
+      - public.employee_hierarchy   # CLOSURE: read by the team filter
+
+  # Example of wildcards on an ERP schema (not used by the demo):
+  #
+  # hr_analyst:
+  #   allow: ["semantic.employees_v", "erp.emp_*"]
+  #   deny:  ["erp.emp_salary_hist"]          # explicit deny beats the wildcard
+  #   deny_columns:
+  #     "erp.emp_*": [tax_file_no, bank_account]
+
+# Identity-provider group -> roles. The groups a user belongs to come from
+# their sign-in (e.g. token claims); SecurityPolicy.roles_for_groups()
+# turns them into roles.
+group_roles:
+  Northwind-Sales: [sales]
+  Public-Demo: [demo]
+
+# ---------------------------------------------------------------------------
+# Row scope (see README "Row-level security"). Each dimension says how it
+# restricts every table a scoped role can query:
+#   column    the table carries the dimension:     {column: employee_id}
+#   via       in scope when a related row is:      {via: orders}
+#   unscoped  reference data, the same for everyone
+# A via rule joins on the database's foreign key between the two tables.
+# Where there's no foreign key, or more than one, say which columns:
+#     {via: orders, join: {order_id: order_id}}   (this table: that table)
+# Startup stops rather than guess, and prints each join it takes.
+# A table a scoped role allows with no rule here stops startup.
+# ---------------------------------------------------------------------------
+scopes:
+  # A rep's own orders (self), and what follows from them.
+  # CLOSURE: no hierarchy here any more - teams are the team dimension.
+  salesperson:
+    user_attribute: employee_id          # from sign-in
+    tables:
+      public.orders:                 {column: employee_id}
+      public.order_details:          {via: public.orders}
+      public.customers:              {via: public.orders}
+      public.customer_customer_demo: {via: public.customers}
+      public.employees:              {column: employee_id}
+      public.employee_territories:   {column: employee_id}
+      public.employee_hierarchy:     {column: employee_id}     # CLOSURE: a rep's own rows
+      public.products:               unscoped
+      public.categories:             unscoped
+      public.suppliers:              unscoped
+      public.shippers:               unscoped
+      public.region:                 unscoped
+      public.territories:            unscoped
+      public.customer_demographics:  unscoped
+
+  # CLOSURE: a manager's team - themselves and everyone below them at any
+  # depth - from the closure table, so the filter carries one value however
+  # big the team. employee_hierarchy has two foreign keys to employees
+  # (manager_id and employee_id), so the joins that touch it are written
+  # out; startup stops if they aren't.
+  team:
+    user_attribute: employee_id          # from sign-in
+    tables:
+      public.employee_hierarchy:     {column: manager_id}
+      public.employees:              {via: public.employee_hierarchy, join: {employee_id: employee_id}}
+      public.orders:                 {via: public.employees}
+      public.order_details:          {via: public.orders}
+      public.customers:              {via: public.orders}
+      public.customer_customer_demo: {via: public.customers}
+      public.employee_territories:   {via: public.employees}
+      public.products:               unscoped
+      public.categories:             unscoped
+      public.suppliers:              unscoped
+      public.shippers:               unscoped
+      public.region:                 unscoped
+      public.territories:            unscoped
+      public.customer_demographics:  unscoped
+
+  # Sales regions: orders handled by employees who cover a territory in
+  # the region, and the customers, lines and staff that follow from them.
+  region:
+    tables:
+      public.region:                 {column: region_id}
+      public.territories:            {column: region_id}
+      public.employee_territories:   {via: public.territories}
+      public.employees:              {via: public.employee_territories}
+      public.employee_hierarchy:     {via: public.employees, join: {employee_id: employee_id}}   # CLOSURE
+      public.orders:                 {via: public.employees}
+      public.order_details:          {via: public.orders}
+      public.customers:              {via: public.orders}
+      public.customer_customer_demo: {via: public.customers}
+      public.products:               unscoped
+      public.categories:             unscoped
+      public.suppliers:              unscoped
+      public.shippers:               unscoped
+      public.customer_demographics:  unscoped
+
+# Identity-provider group -> grants (role + which rows). Who is in each
+# group, and their employee_id, come from sign-in. DEMO ONLY: for local
+# testing, config/idp/northwind.yaml stands in for it.
+group_grants:
+  Sales-National: [{role: sales_manager, scope: unrestricted}]
+  Sales-Eastern:  [{role: sales_manager, scope: {region: [1]}}]
+  Sales-Team:     [{role: sales_manager, scope: {team: self}}]          # CLOSURE: was {salesperson: team}
+  Sales-Rep:      [{role: sales_manager, scope: {salesperson: self}}]

@@ -7,6 +7,10 @@
 #
 # All files in this folder are merged (domains are in domains.yaml).
 #
+# Another database with the same schema (a dev or test copy) can share this
+# folder: set its semantic_path to config/databases/adventureworks/semantic
+# in config/settings/databases.yaml.
+#
 # Things about this database worth knowing:
 #   - Postgres folded every name to lower case, so names run together
 #     (salesorderheader, orderdate). The schema search splits names on "_"

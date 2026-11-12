@@ -42,6 +42,7 @@ Each layer, and the file that implements it:
 | Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
 | Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
 | Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
+| Row scope            | `controls/row_scope.py`                  | Which rows: each scoped table is replaced by a filtered version of itself just before execution, then verified; the LLM never sees the filters |
 | Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
 | Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
 | Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
@@ -63,11 +64,14 @@ config/
     llm.yaml, api.yaml, query.yaml, retrieval.yaml, repl.yaml
   databases/                 one folder per database, named as in databases.yaml
     northwind/               PostgreSQL Northwind (also northwind_mssql/, adventureworks/)
-      security.yaml          who may see what (roles, allowed tables, denied columns)
+      security.yaml          who may see what (roles, tables, columns, row scopes, grants)
       identity.yaml          how the agent talks about it (name, examples)
       semantic/
         model.yaml           what the data means (sources, labels, aliases, relationships, terms)
         domains.yaml         Domains of Discourse, role aliases, function codes
+  idp/                       demo only: local stand-ins for sign-in, one file per organisation
+    northwind.yaml           Northwind's people, used by northwind and northwind_mssql
+    adventureworks.yaml      AdventureWorks' people (who sees which tables; no row scope yet)
 sqlagent/
   agent.py                   run_agent(): orchestrates the question -> answer pipeline
   settings.py, databases.py  load and validate the configuration
@@ -76,6 +80,7 @@ sqlagent/
   execution/                 Execution layer: controlled, read-only execution
     engines/                 what is specific to PostgreSQL / SQL Server
 tools/                       check a database end to end; probe a SQL Server
+docs/examples/closure-table/ large teams as one value: SQL and example policies
 tests/                       unit tests (no database or model needed)
 ```
 
@@ -91,6 +96,7 @@ tests/                       unit tests (no database or model needed)
 | `config/databases/<database>/security.yaml` | Security policy: roles, allowed tables, denied columns, group-to-role mapping |
 | `config/databases/<database>/semantic/` | Semantic model: discovery, labels, aliases, relationships, terms, domains |
 | `config/databases/<database>/identity.yaml` | How the agent talks about a database: name, example questions, worked SQL examples |
+| `config/idp/<organisation>.yaml` | Demo only: local stand-ins for sign-in (groups, attributes) for the REPL and row-scope checks, one file per organisation; a database picks one with `idp:` |
 | `sqlagent/agent.py` | `run_agent()`: the full question → answer pipeline |
 | `sqlagent/settings.py` | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
 | `sqlagent/databases.py` | Loads `config/settings/databases.yaml` and picks the active database (fails closed) |
@@ -107,11 +113,14 @@ tests/                       unit tests (no database or model needed)
 | `sqlagent/controls/security_context.py` | `SecurityContext`: user, roles, authorised tables, denied columns |
 | `sqlagent/controls/security_policy.py` | Loads the security policy and builds each user's `SecurityContext` (fails closed) |
 | `sqlagent/controls/security_utils.py` | Case-insensitive authorisation and table-naming helpers |
+| `sqlagent/controls/row_scope.py` | Row-level security: compiles each grant's scope into per-table filters; filters every scoped table at the source and verifies it |
+| `sqlagent/identities.py` | Loads the demo's local identities (stand-ins for sign-in) |
 | `sqlagent/execution/sql_execution.py` | Database connection and the final execution gate |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt |
 | `sqlagent/execution/engines/` | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`postgres.py`, `sqlserver.py`) |
 | `tools/check_engine.py` | Checks a configured database end to end without the LLM (PASS/FAIL per check) |
 | `tools/probe_sqlserver.py` | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors |
+| `tools/check_row_scope.py` | Shows each local identity's grants and visible rows; checks every query shape is filtered alike |
 | `tests/` | Unit tests; `tests/fixtures.py` holds a static Northwind schema |
 
 ---
@@ -346,7 +355,7 @@ config/
     databases.yaml       which databases exist and how to reach them
     llm.yaml             Ollama host and model, timeouts, conversation history
     api.yaml             public demo API: CORS, proxy hops, rate limits, concurrency, timeouts
-    query.yaml           limits on every generated query: statement timeout, max rows, max result bytes
+    query.yaml           limits on every generated query: statement timeout, max rows, max result bytes, max row-scope values
     retrieval.yaml       which authorised tables are shown to the LLM per question
     repl.yaml            local REPL user
   databases/           one folder per database, named as in databases.yaml
@@ -356,6 +365,9 @@ config/
       identity.yaml        how the agent talks about it
     northwind_mssql/
     adventureworks/
+  idp/                 demo only: local stand-ins for sign-in, one file per organisation
+    northwind.yaml       Northwind's people (both Northwind databases use it)
+    adventureworks.yaml  AdventureWorks' people
 ```
 
 Each file documents its own keys. The settings files are loaded once at startup by `sqlagent/settings.py` and validated: an unknown key, a value out of range (e.g. `max_rows: 0`), weights that don't add up to 1, or a statement timeout that isn't below the API timeout stops startup. The `[settings]` startup line shows the folder in use and any environment overrides.
@@ -403,6 +415,22 @@ By convention the name also finds the database's own files in `config/databases/
 | `semantic/` (optional) | what the data means |
 | `identity.yaml` (optional) | how the agent talks about the database |
 
+A relative path is from the project root. The usual reason to set one is several databases with the same schema, such as dev, test and production copies of one application: they share one semantic model and identity, and differ only in connection and security.
+
+```yaml
+northwind_test:
+  engine: postgresql
+  connection: {host: test-db, database: northwind, user: sqlagent_ro,
+               password_env: PG_TEST_PASSWORD}
+  semantic_path: config/databases/northwind/semantic        # shared
+  identity_file: config/databases/northwind/identity.yaml   # shared
+  # security_file defaults to config/databases/northwind_test/security.yaml
+  repl_roles: [sales]
+  demo_roles: [demo]
+```
+
+Test should normally run production's security policy (the roles, denied columns and row scopes), or it isn't testing it. What usually differs is which groups hold which roles (`group_roles`, `group_grants`), and dev or test may use local identities (`idp`), which production shouldn't have. A semantic model names physical tables and columns, so only databases with the same names can share one: `northwind` and `northwind_mssql` each need their own.
+
 `identity.yaml` holds the name used in the LLM prompt and in user-facing messages, the names users call the database (recognised in "what does Northwind have?", and never used as a filter value by the LLM), the example questions offered when a question is vague or off topic, and `sql_examples`: a few worked question → SQL examples for the model in that database's own names and dialect. It never affects access. Without the file, the database's key is used as its name and no examples are offered; an invalid file stops startup.
 
 ```yaml
@@ -443,6 +471,7 @@ These override the settings files, or select what the files can't:
 | `PG_STATEMENT_TIMEOUT_SECONDS` | `query.yaml` |
 | `SQLAGENT_USER` | `repl.yaml` |
 | `SQLAGENT_ROLES` | REPL only: comma-separated roles (default: the profile's `repl_roles`) |
+| `SQLAGENT_IDENTITY` | REPL only: sign in as a local identity from `config/idp/<idp>.yaml` (`run.ps1 -identity`); demo stand-in for sign-in |
 | `SQLAGENT_SECURITY_FILE`, `SQLAGENT_SEMANTIC_PATH` | The profile's security file / semantic folder |
 | `SQLAGENT_SETTINGS_DIR` | The settings folder (default `config/settings/`) |
 
@@ -509,8 +538,76 @@ group_roles:                       # identity-provider group -> roles
 * **Patterns** are fnmatch patterns on `schema.table` (`*`, `?`); a name without a schema is in `public`.
 * **Resolved once.** At startup (or sign-in) each role's patterns are expanded against the tables that exist and the result is printed (`[security] user demo (roles: demo): 8 table(s)` followed by each table and its denied columns). Query-time checks only ever see that concrete list. Prefer explicit names: with `erp.*`, a table added later becomes visible at the next restart without anyone deciding it should be.
 * **Several roles.** A table is visible if any role allows it; a column on it is hidden only if every role that allows the table hides it.
+* **Inheritance.** `extends: <role>` starts a role as everything that role has: allowed and denied tables, and hidden columns. Its own `allow`, `deny` and `deny_columns` add to that, so adding a table or hiding more never widens what the parent restricts. The only keys that do are `undeny` (tables the parent denies) and `undeny_columns` (columns the parent hides). Each must name something the parent really denies or hides, exactly as the parent writes it, or startup stops; and startup prints each one (`[security] WIDENS: payroll_officer undenies column erp.emp_*.bank_account, hidden by hr_analyst`). `description` and `scope` are each role's own, and a role extending one with `scope: required` must say it too. Chains are allowed; an unknown parent or a cycle stops startup. Northwind's `sales_manager` is `extends: sales` plus `scope: required`.
+
+  ```yaml
+  payroll_officer:
+    extends: hr_analyst
+    undeny: ["erp.emp_salary_hist"]            # hr_analyst denies it; payroll may see it
+    undeny_columns:
+      "erp.emp_*": [bank_account]              # hr_analyst hides it; payroll may see it
+  ```
 * **Fails closed.** A missing file, invalid YAML, a duplicate or unknown key, `default` other than `deny`, a `deny_columns` table the role isn't granted (usually a typo), or an undefined role stops startup, and so does a role that ends up with no tables at all (usually missing database grants, e.g. after loading a new database). A denied column that doesn't exist on its table is logged as a warning.
-* **Users come from identity, not the file.** `group_roles` maps identity-provider groups to roles (`SecurityPolicy.roles_for_groups`). The demo API always uses the `demo` role; the REPL uses `SQLAGENT_ROLES`.
+* **Users come from identity, not the file.** `group_roles` maps identity-provider groups to roles (`SecurityPolicy.roles_for_groups`). The demo API always uses the `demo` role; the REPL uses `SQLAGENT_ROLES`, or a local identity (below).
+
+### Row-level security (`scopes` and `group_grants`)
+
+Roles decide which tables and columns; **scopes** decide which rows. A **grant** pairs a role with a scope, and identity-provider groups hand out grants, so one `sales_manager` role serves a VP (all rows), a regional manager (a region) and a team lead (their team) without copies of the role. The design is written up in *Metadata-driven row-level authorisation for the Secure SQL Agent*.
+
+```yaml
+roles:
+  sales_manager:
+    extends: sales               # the same tables and hidden columns as sales
+    scope: required              # every grant must say which rows
+
+scopes:
+  salesperson:
+    user_attribute: employee_id  # from sign-in
+    hierarchy: {table: employees, key: employee_id, parent: reports_to}
+    tables:
+      orders:        {column: employee_id}
+      order_details: {via: orders}         # join from the foreign key
+      customers:     {via: orders}
+      products:      unscoped
+
+group_grants:
+  Sales-National: [{role: sales_manager, scope: unrestricted}]
+  Sales-Eastern:  [{role: sales_manager, scope: {region: [1]}}]
+  Sales-Team:     [{role: sales_manager, scope: {salesperson: team}}]
+```
+
+* **How a scope applies to each table:** `column` (the table carries it), `via` (in scope when a related row is: an order line follows its order, a customer is in scope when they have an order in scope; chains are followed) or `unscoped` (reference data). Every table a scoped role allows needs a rule; a missing one stops startup.
+* **Via joins:** by default a `via` rule joins on the database's foreign key between the two tables, in either direction, and startup prints each join it takes (`[security] scope region: public.orders via public.employees on employee_id = employee_id (foreign key)`). Where there's no foreign key, or more than one (an order with both `customer_id` and `billing_customer_id`), startup stops and asks for an explicit `join: {this_column: that_column}`; it never guesses. An explicit `join` always wins. The key is `join`, not `on`: YAML reads an unquoted `on` as `true`.
+* **Values:** a fixed list, `unrestricted`, or relative to the user: `self`, `team` (the user and everyone below them in the `hierarchy`) or `reports` (only those below). Relative values resolve at sign-in from the user's attribute, so a team follows the org chart.
+* **Several grants:** each is evaluated on its own and a row is visible under any of them; `unrestricted` must be said explicitly; a scope that resolves to nothing gives no rows. If grants see different rows of a table, a column on it is shown only if every one of them shows it.
+* **Enforcement:** just before execution every reference to a scoped table becomes `(SELECT * FROM <table> AS _t WHERE <filter>) AS <alias>`, so joins, outer joins, subqueries, CTEs and each branch of a `UNION` read only permitted rows. The final SQL is re-parsed and every scoped table must sit inside its exact filter, or the query is blocked. The correction and explanation steps, and the conversation history, keep the SQL as the model wrote it, so entitlements never reach a prompt.
+* **Startup log:** each user's grants and each table's row filter are printed, like the resolved tables.
+* **Local identities (demo only).** In a deployment the identity provider supplies each user's groups and attributes. The demo has no sign-in, so `config/idp/` holds one file per organisation, as an identity provider would, naming a few people to test as, and `.\run.ps1 -local -identity steven` signs in as one. A database picks its organisation's file with `idp:` in `databases.yaml` (default: its own name), so `northwind` and `northwind_mssql` share `config/idp/northwind.yaml`. A leftover `identities.yaml` beside a security policy stops startup, so a stale copy can't be edited by mistake. The API never reads any of it. Northwind's identities are its own employees: `andrew` (VP Sales, all rows), `steven` (his team), `nancy` (her own orders), `eastern` (a region), `steven_and_eastern` (two grants) and `no_employee` (sees no team rows).
+* **Checking it:** `tools\check_row_scope.py --db <name>` shows, per identity, the grants and how many rows of each table are visible, and checks that every query shape (subquery, CTE, `UNION`, scalar subquery, self-join) gives the same count. The rewrite was also proved against hand-written ground-truth views on PostgreSQL: 6 identities × 23 query shapes, identical results, and deliberately removing one filter was caught.
+
+#### Large scopes
+
+Scope values are written into the query: `team` for a manager of four becomes `employee_id IN (5, 6, 7, 9)`, once per scoped table the query reads. That's fine for a team, but not for a senior manager whose team is thousands of people: long lists are slow to plan, fill SQL Server's plan cache with one-off plans, and very long ones fail outright (error 8623). So `max_scope_values` in `config/settings/query.yaml` (default 1000) caps how many values one dimension may resolve to for one user. Over it, that user's access isn't built and the error names the user, role and scope. It never falls back to the long list, or to no filter.
+
+For a large hierarchy, have the database resolve the list instead of the query text: a **closure table** with one row per manager and each person below them, at any depth (including each person as their own manager, so `self` covers the team). It's maintained by the HR feed or a nightly job, and the grant uses `self`, so the query carries one value however big the team:
+
+```yaml
+salesperson:
+  user_attribute: employee_id
+  tables:
+    hr.employee_hierarchy: {column: manager_id}                            # self -> one value
+    hr.employees:          {via: hr.employee_hierarchy, join: {employee_id: employee_id}}
+    sales.orders:          {via: hr.employees}
+```
+
+```sql
+-- the filter on sales.orders for employee 5
+EXISTS (SELECT 1 FROM hr.employees AS _s1 WHERE _s1.employee_id = _t.employee_id
+        AND EXISTS (SELECT 1 FROM hr.employee_hierarchy AS _s2
+                    WHERE _s2.employee_id = _s1.employee_id AND _s2.manager_id IN (5)))
+```
+
+The closure table has two foreign keys to the employees table (`manager_id` and `employee_id`), so the `join` must be given; without it startup stops rather than guess. A complete, runnable Northwind example - the SQL to create and refresh the table on PostgreSQL and SQL Server, and a full policy for each - is in [`docs/examples/closure-table/`](docs/examples/closure-table/README.md). On a copy of Northwind, this version gave the same rows as the `team` version for every identity and all 23 query shapes. The same pattern works for anything that isn't a hierarchy: an **entitlements table** (`user_regions(user_id, region_id)`, maintained by the access-management process), granted as `self` via that table, turns access changes into data changes rather than YAML edits.
 
 ### Semantic model (`config/databases/<database>/semantic/`)
 

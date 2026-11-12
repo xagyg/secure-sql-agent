@@ -45,7 +45,8 @@ from sqlagent.adaptive.llm import (
     generate_sql,
 )
 from sqlagent.adaptive.domains import parse_context_tags
-from sqlagent.execution.engines import active_engine
+from sqlagent.controls.row_scope import RowScopeError, apply_row_scope
+from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.execution.sql_diagnostics import diagnose_sql_error
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 
@@ -328,9 +329,22 @@ def run_agent(question, catalog, history, security):
 
 
 def _execute(sql, security):
-    """Run the query and apply the result policy. Returns (rows,
-    removed), where removed lists result columns taken out by policy."""
-    results, sources = execute_sql_with_sources(sql)
+    """
+    Apply the user's row scope, run the query and apply the result
+    policy. Returns (rows, removed), where removed lists result columns
+    taken out by policy.
+
+    Row scope is applied here, just before execution, so every query -
+    first try or corrected - gets it, and the rest of the pipeline (the
+    correction and explanation steps, the conversation history) keeps
+    the SQL as the model wrote it: the user's entitlements never reach a
+    prompt. RowScopeError propagates; the caller blocks the query.
+    """
+    scoped_sql = apply_row_scope(sql, security.row_filters, active_dialect())
+    if scoped_sql != sql:
+        print("\n[security] Row scope applied:")
+        print(scoped_sql)
+    results, sources = execute_sql_with_sources(scoped_sql)
     results, removed = apply_result_policy(results, security, sources)
 
     if removed:
@@ -429,6 +443,9 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
     try:
         results, removed = _execute(sql, security)
         withheld = withheld + removed
+    except RowScopeError as ex:
+        print(f"\n[security] Row scope could not be applied: {ex}")
+        return _policy_block("policy", sql)
     except Exception as ex:
         print(f"\n[SQL ERROR] {ex}")
 
@@ -502,6 +519,9 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
             withheld = withheld + removed
             sql = corrected_sql
 
+        except RowScopeError as ex:
+            print(f"\n[security] Row scope could not be applied: {ex}")
+            return _policy_block("policy", sql)
         except Exception as correction_error:
             print(f"\n[CORRECTION ERROR] {correction_error}")
             return _error("I couldn't correct that query.", sql)

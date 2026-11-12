@@ -171,6 +171,9 @@ class QuerySettings(_Strict):
     statement_timeout_seconds: int = Field(10, ge=1, le=300)
     max_rows: int = Field(1000, ge=1, le=100_000)
     max_result_bytes: int = Field(5_000_000, ge=1_000, le=100_000_000)
+    # Most values one row-scope dimension may resolve to for one user
+    # (security_policy.py). Above it the user's context isn't built.
+    max_scope_values: int = Field(1000, ge=1, le=10_000)
 
 
 # ---------------------------------------------------------------------------

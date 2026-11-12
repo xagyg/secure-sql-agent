@@ -1,0 +1,177 @@
+# EXAMPLE - a Northwind security policy that takes a manager's team from a
+# closure table. Not loaded unless you point the agent at it (README.md in
+# this folder):
+#     $env:SQLAGENT_SECURITY_FILE = "docs\examples\closure-table\security.sqlserver.yaml"
+# Create the table first: employee_hierarchy.sqlserver.sql.
+#
+# It is the shipped config/databases/northwind_mssql/security.yaml with every
+# change marked "# CLOSURE:":
+#   - sales_manager extends sales and adds dbo.EmployeeHierarchy - it is
+#     part of the team filter, so the role must be allowed it;
+#   - a new dimension, team, starts at EmployeeHierarchy.ManagerID and
+#     follows employees -> orders -> order lines and customers;
+#   - Sales-Team is granted team: self - one value, the manager's own ID -
+#     instead of salesperson: team, a list of every ID in the team;
+#   - salesperson keeps self for reps (only their own orders) and no
+#     longer needs a hierarchy;
+#   - every dimension has a rule for EmployeeHierarchy.
+# --------------------------------------------------------------------------
+#
+# Security policy for Northwind on SQL Server: who may see what.
+#
+# The same roles and rules as the PostgreSQL Northwind
+# (config/databases/northwind/security.yaml, which explains the format), in SQL
+# Server's names: schema dbo, PascalCase tables and columns, and
+# "Order Details" with a space. A name without a schema is in dbo.
+#
+# Differences from the PostgreSQL version:
+#   - Employees.Photo is denied for both roles: a binary image the model
+#     can't use, which would only bloat results.
+#   - The 16 Northwind views (Invoices, Sales by Category, ...) are not
+#     allowed; they repeat the tables' data. Add one to a role's allow
+#     list (and to sources.include in semantic/model.yaml) to use it.
+#
+# The login (sqlagent_ro) must itself be read-only - db_datareader only:
+# SQL Server has no read-only session, so its permissions are the
+# database's own boundary. See README.md "SQL Server".
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - narrow, read-only view of Northwind
+    allow:
+      - dbo.Customers
+      - dbo.Orders
+      - dbo.Order Details
+      - dbo.Products
+      - dbo.Categories
+      - dbo.Suppliers
+      - dbo.Employees
+      - dbo.Shippers
+    deny_columns:
+      dbo.Customers: [Phone, Fax, Address]
+      dbo.Employees: [HomePhone, Photo]
+
+  # The local command-line REPL (main.py). The name also gives this role
+  # its affinity to the Sales domain (semantic/domains.yaml).
+  sales:
+    description: Local development - all of Northwind except personal phone numbers
+    allow:
+      - dbo.Customers
+      - dbo.Orders
+      - dbo.Order Details
+      - dbo.Products
+      - dbo.Categories
+      - dbo.Suppliers
+      - dbo.Employees
+      - dbo.EmployeeTerritories
+      - dbo.Region
+      - dbo.Shippers
+      - dbo.Territories
+      - dbo.CustomerDemographics
+      - dbo.CustomerCustomerDemo
+    deny_columns:
+      dbo.Customers: [Phone]
+      dbo.Employees: [HomePhone, Photo]
+
+  # Row-scoped sales manager: everything "sales" has, plus the closure
+  # table, which its team filter reads. Which ROWS depend on the grant
+  # (group_grants below).
+  sales_manager:
+    extends: sales
+    description: Sales manager - rows limited by the grant's scope
+    scope: required
+    allow:
+      - dbo.EmployeeHierarchy   # CLOSURE: read by the team filter
+
+# Identity-provider group -> roles.
+group_roles:
+  Northwind-Sales: [sales]
+  Public-Demo: [demo]
+
+# ---------------------------------------------------------------------------
+# Row scope (see README "Row-level security"). Each dimension says how it
+# restricts every table a scoped role can query:
+#   column    the table carries the dimension:     {column: EmployeeID}
+#   via       in scope when a related row is:      {via: dbo.Orders}
+#   unscoped  reference data, the same for everyone
+# A via rule joins on the database's foreign key between the two tables.
+# Where there's no foreign key, or more than one, say which columns:
+#     {via: dbo.Orders, join: {OrderID: OrderID}}   (this table: that table)
+# Startup stops rather than guess, and prints each join it takes.
+# A table a scoped role allows with no rule here stops startup.
+# ---------------------------------------------------------------------------
+scopes:
+  # A rep's own orders (self), and what follows from them.
+  # CLOSURE: no hierarchy here any more - teams are the team dimension.
+  salesperson:
+    user_attribute: employee_id          # from sign-in
+    tables:
+      dbo.Orders:               {column: EmployeeID}
+      dbo.Order Details:        {via: dbo.Orders}
+      dbo.Customers:            {via: dbo.Orders}
+      dbo.CustomerCustomerDemo: {via: dbo.Customers}
+      dbo.Employees:            {column: EmployeeID}
+      dbo.EmployeeTerritories:  {column: EmployeeID}
+      dbo.EmployeeHierarchy:    {column: EmployeeID}     # CLOSURE: a rep's own rows
+      dbo.Products:             unscoped
+      dbo.Categories:           unscoped
+      dbo.Suppliers:            unscoped
+      dbo.Shippers:             unscoped
+      dbo.Region:               unscoped
+      dbo.Territories:          unscoped
+      dbo.CustomerDemographics: unscoped
+
+  # CLOSURE: a manager's team - themselves and everyone below them at any
+  # depth - from the closure table, so the filter carries one value however
+  # big the team. EmployeeHierarchy has two foreign keys to Employees
+  # (ManagerID and EmployeeID), so the joins that touch it are written
+  # out; startup stops if they aren't.
+  team:
+    user_attribute: employee_id          # from sign-in
+    tables:
+      dbo.EmployeeHierarchy:    {column: ManagerID}
+      dbo.Employees:            {via: dbo.EmployeeHierarchy, join: {EmployeeID: EmployeeID}}
+      dbo.Orders:               {via: dbo.Employees}
+      dbo.Order Details:        {via: dbo.Orders}
+      dbo.Customers:            {via: dbo.Orders}
+      dbo.CustomerCustomerDemo: {via: dbo.Customers}
+      dbo.EmployeeTerritories:  {via: dbo.Employees}
+      dbo.Products:             unscoped
+      dbo.Categories:           unscoped
+      dbo.Suppliers:            unscoped
+      dbo.Shippers:             unscoped
+      dbo.Region:               unscoped
+      dbo.Territories:          unscoped
+      dbo.CustomerDemographics: unscoped
+
+  # Sales regions: orders handled by employees who cover a territory in
+  # the region, and the customers, lines and staff that follow from them.
+  region:
+    tables:
+      dbo.Region:               {column: RegionID}
+      dbo.Territories:          {column: RegionID}
+      dbo.EmployeeTerritories:  {via: dbo.Territories}
+      dbo.Employees:            {via: dbo.EmployeeTerritories}
+      dbo.EmployeeHierarchy:    {via: dbo.Employees, join: {EmployeeID: EmployeeID}}   # CLOSURE
+      dbo.Orders:               {via: dbo.Employees}
+      dbo.Order Details:        {via: dbo.Orders}
+      dbo.Customers:            {via: dbo.Orders}
+      dbo.CustomerCustomerDemo: {via: dbo.Customers}
+      dbo.Products:             unscoped
+      dbo.Categories:           unscoped
+      dbo.Suppliers:            unscoped
+      dbo.Shippers:             unscoped
+      dbo.CustomerDemographics: unscoped
+
+# Identity-provider group -> grants (role + which rows). Who is in each
+# group, and their employee_id, come from sign-in. DEMO ONLY: for local
+# testing, config/idp/northwind.yaml stands in for it.
+group_grants:
+  Sales-National: [{role: sales_manager, scope: unrestricted}]
+  Sales-Eastern:  [{role: sales_manager, scope: {region: [1]}}]
+  Sales-Team:     [{role: sales_manager, scope: {team: self}}]          # CLOSURE: was {salesperson: team}
+  Sales-Rep:      [{role: sales_manager, scope: {salesperson: self}}]

@@ -229,7 +229,9 @@ roles:
       sales.salesorderheader: [creditcardid, creditcardapprovalcode]
       person.person: [additionalcontactinfo, demographics]
 
-# Identity-provider group -> roles.
+# Identity-provider group -> roles. Who is in each group comes from
+# sign-in. DEMO ONLY: for local testing, config/idp/adventureworks.yaml
+# stands in for it.
 group_roles:
   AW-Sales: [sales]
   AW-Purchasing: [purchasing]

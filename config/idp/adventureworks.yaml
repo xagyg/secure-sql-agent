@@ -1,0 +1,68 @@
+# DEMO ONLY: the AdventureWorks company's people, standing in for its
+# identity provider - for the REPL and the row-scope checks only (see
+# sqlagent/identities.py). In a deployment the identity provider supplies
+# each user's groups and attributes; the API never reads this file.
+#
+# Used by the adventureworks database (its default idp). Run the REPL as
+# one of them:
+#     .\run.ps1 -local -db adventureworks -identity stephen
+#
+# AdventureWorks has no row scope yet, so these people differ in WHICH
+# TABLES AND COLUMNS they see, through group_roles in
+# config/databases/adventureworks/security.yaml (AW-Sales -> sales,
+# AW-HR -> hr, ...). Holding several groups gives the union of their roles.
+#
+# The people and IDs are from the standard AdventureWorks sample
+# (humanresources.employee.businessentityid). employee_id isn't used for
+# access yet; it's there for when AdventureWorks gets a row scope (its
+# reporting lines are a path, organizationnode - see the closure-table
+# example in docs/examples/closure-table/). If your copy differs, check:
+#     SELECT e.businessentityid, p.firstname, p.lastname, e.jobtitle
+#     FROM humanresources.employee e JOIN person.person p USING (businessentityid)
+#     WHERE e.businessentityid IN (1, 25, 234, 250, 273, 274, 275);
+
+version: 1
+
+identities:
+  ken:
+    description: Ken Sanchez, Chief Executive Officer - every department's role
+    groups: [AW-Sales, AW-Purchasing, AW-Production, AW-HR, AW-Finance]
+    attributes: {employee_id: 1}
+
+  brian:
+    description: Brian Welcker, Vice President of Sales
+    groups: [AW-Sales]
+    attributes: {employee_id: 273}
+
+  stephen:
+    description: Stephen Jiang, North American Sales Manager
+    groups: [AW-Sales]
+    attributes: {employee_id: 274}
+
+  michael:
+    description: Michael Blythe, Sales Representative
+    groups: [AW-Sales]
+    attributes: {employee_id: 275}
+
+  laura:
+    description: Laura Norman, Chief Financial Officer - finance and purchasing spend
+    groups: [AW-Finance, AW-Purchasing]
+    attributes: {employee_id: 234}
+
+  sheela:
+    description: Sheela Word, Purchasing Manager
+    groups: [AW-Purchasing]
+    attributes: {employee_id: 250}
+
+  james:
+    description: James Hamilton, Vice President of Production
+    groups: [AW-Production]
+    attributes: {employee_id: 25}
+
+  hr_analyst:
+    description: An HR analyst (not a particular employee) - employees, pay and leave
+    groups: [AW-HR]
+
+  contractor:
+    description: Signed in, but in no AdventureWorks group - sees nothing (fails closed)
+    groups: [Contoso-Staff]

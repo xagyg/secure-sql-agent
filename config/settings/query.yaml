@@ -16,3 +16,13 @@ max_rows: 100
 
 # Most result bytes returned (result_policy.py).
 max_result_bytes: 1000000
+
+# Most values one row-scope dimension may resolve to for one user - e.g. a
+# senior manager's "team" (security_policy.py). Each value is written into
+# the query (employee_id IN (...)) once per scoped table it reads, and very
+# long lists slow planning and fail on SQL Server (error 8623). Over the
+# limit, that user's access isn't built and startup / sign-in stops with a
+# message: model a large hierarchy as a closure table instead, so the query
+# carries one value (README "Large scopes"). It never falls back to running
+# the long list, or to no filter.
+max_scope_values: 1000

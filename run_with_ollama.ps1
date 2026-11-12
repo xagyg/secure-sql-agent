@@ -61,7 +61,8 @@ param(
     [string] $KeepAlive       = "-1",
     [int]    $StartupTimeoutSeconds = 30,
     [switch] $local,
-    [string] $db
+    [string] $db,
+    [string] $identity
 )
 
 $ErrorActionPreference = "Stop"
@@ -124,4 +125,4 @@ $runScript = Join-Path $PSScriptRoot "run.ps1"
 if (-not (Test-Path $runScript)) {
     Write-Error "Could not find $runScript."
 }
-& $runScript -local:$local -db $db
+& $runScript -local:$local -db $db -identity $identity

@@ -5,6 +5,7 @@
 #     .\run.ps1 -local
 #     .\run.ps1 -local -db adventureworks
 #     .\run.ps1 -local -db northwind_mssql
+#     .\run.ps1 -local -identity steven    (sign in as a local identity)
 #
 # Without -local, starts the FastAPI API on 127.0.0.1:8000.
 # With -local, starts the interactive command-line REPL.
@@ -38,7 +39,8 @@
 
 param(
     [switch]$local,
-    [string]$db
+    [string]$db,
+    [string]$identity
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +109,16 @@ if (-not $env:DEMO_ALLOWED_ORIGIN) {
 $env:PYTHONUTF8 = "1"
 
 # --- Start ---------------------------------------------------------------
+
+# -identity: sign in as one of the database's local identities
+# (config/idp/<idp>.yaml; idp: in databases.yaml) - its groups, attributes and row
+# scope. DEMO ONLY: in a real deployment this comes from sign-in.
+# Set every time, so a value left from an earlier run can't apply.
+if ($identity) {
+    $env:SQLAGENT_IDENTITY = $identity
+} else {
+    Remove-Item Env:SQLAGENT_IDENTITY -ErrorAction SilentlyContinue
+}
 
 if ($local) {
     Write-Host "Starting Secure SQL Agent REPL..."
