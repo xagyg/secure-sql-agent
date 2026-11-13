@@ -47,7 +47,10 @@ from sqlagent.adaptive.llm import (
 from sqlagent.adaptive.domains import parse_context_tags
 from sqlagent.controls.row_scope import RowScopeError, apply_row_scope
 from sqlagent.execution.engines import active_dialect, active_engine
-from sqlagent.execution.sql_diagnostics import diagnose_sql_error
+from sqlagent.execution.sql_diagnostics import (
+    diagnose_sql_error,
+    json_correction_hint,
+)
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 
 
@@ -481,6 +484,15 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
                     f"{match['table']}.{match['column']}\n"
                     "Use the physical column in the corrected SQL.\n"
                 )
+
+        # A json/jsonb column used as text or a number: name the columns
+        # and how to read them, so the retry fixes the right one instead
+        # of stripping a correct ->> (see sql_diagnostics.py).
+        if not correction_hint:
+            correction_hint = json_correction_hint(sql, ex, catalog)
+            if correction_hint:
+                print("\n[sql] JSON column hint for the correction:")
+                print(correction_hint.rstrip())
 
         print("\n[agent] Asking Ollama to correct SQL...")
 

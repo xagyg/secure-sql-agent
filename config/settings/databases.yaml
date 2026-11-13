@@ -104,3 +104,18 @@ databases:
     repl_roles: [sales]
     demo_roles: [demo]
     idp: northwind           # DEMO ONLY: the same people as the PostgreSQL copy
+
+  # The Odoo database is a relational PostgreSQL database powering
+  # the open-source Odoo ERP platform, typically spanning 300 to 800+ 
+  # interconnected tables depending on installed modules.
+  odoo:
+    description: Odoo ERP on Postgres    
+    engine: postgresql
+    connection:
+      host: localhost
+      port: 5432
+      database: odoo
+      user: sqlagent_ro
+      password_env: PG_PASSWORD     # value from the environment, never here
+    repl_roles: [sales]
+    demo_roles: [demo]

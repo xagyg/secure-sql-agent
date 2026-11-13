@@ -277,6 +277,8 @@ IMPORTANT:
 * Use only columns that exist in the schema.
 * Do not use WITH clauses (CTEs); use joins or subqueries instead.
 * If a KNOWN COLUMN MAPPING is supplied, use its physical column.
+* If JSON COLUMNS are listed, read each one the way its note says and
+  keep any ->> already applied to it.
 * Do not use a mapped column if it is not authorised.
 * Do not modify data.
 * Return ONLY SQL.

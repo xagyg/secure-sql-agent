@@ -1,0 +1,56 @@
+# DEMO ONLY: people standing in for the Odoo company's identity provider -
+# for the REPL only (see sqlagent/identities.py). In a deployment the
+# identity provider supplies each user's groups and attributes; the API
+# never reads this file.
+#
+# Used by the odoo database (its default idp). Run the REPL as one of them:
+#     .\run.ps1 -local -db odoo -identity sam
+#
+# Odoo has no row scope yet, so these people differ in WHICH TABLES AND
+# COLUMNS they see, through group_roles in config/databases/odoo/security.yaml
+# (Odoo-Sales -> sales, Odoo-Finance -> finance, ...). Holding several
+# groups gives the union of their roles.
+#
+# The people are illustrative, not rows in your database. user_id is
+# Odoo's res_users.id, ready for when a row scope is added (e.g. a
+# salesperson seeing only their own orders, sale_order.user_id); check
+# yours with:
+#     SELECT u.id, p.name, u.login FROM res_users u
+#     JOIN res_partner p ON p.id = u.partner_id WHERE NOT u.share;
+
+version: 1
+
+identities:
+  admin:
+    description: Managing director - every department's role
+    groups: [Odoo-Sales, Odoo-Purchasing, Odoo-Inventory, Odoo-Manufacturing,
+             Odoo-Finance, Odoo-HR, Odoo-Projects]
+    attributes: {user_id: 2}
+
+  sam:
+    description: Sales representative
+    groups: [Odoo-Sales]
+
+  paula:
+    description: Purchasing officer
+    groups: [Odoo-Purchasing]
+
+  will:
+    description: Warehouse manager
+    groups: [Odoo-Inventory]
+
+  fiona:
+    description: Finance manager - accounting plus purchasing spend
+    groups: [Odoo-Finance, Odoo-Purchasing]
+
+  helen:
+    description: HR officer
+    groups: [Odoo-HR]
+
+  explorer:
+    description: Explorer - nearly every Odoo table, for finding out what's there
+    groups: [Odoo-Explorer]
+
+  contractor:
+    description: Signed in, but in no Odoo group - sees nothing (fails closed)
+    groups: [Contoso-Staff]

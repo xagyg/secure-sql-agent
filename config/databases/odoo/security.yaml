@@ -1,0 +1,371 @@
+# Security policy for Odoo 19 (Australian localisation), checked against
+# the schema dump odoo_schema.sql.
+#
+# Owned by security / IT, reviewed separately from the semantic model
+# (config/databases/odoo/semantic/), which can never widen access. Loaded
+# at startup by sqlagent/controls/security_policy.py. Any problem in this
+# file stops the server from starting (fail closed). The rules are the
+# same as config/databases/northwind/security.yaml; see that file's header.
+#
+# A role's allow list is EVERYTHING it can see. Foreign keys and the
+# domains' hops never reach a table the role isn't granted, so every
+# lookup a question joins through (res_users and res_partner for a
+# salesperson's name, product_template for a product's name) is listed.
+#
+# Every grant below is an explicit table name, never "sale_*" or "public.*".
+# Odoo has hundreds of tables and every installed module adds more; a
+# wildcard would quietly grant tables nobody reviewed.
+#
+# Granted to NO role, ever:
+#   ir_*                   Odoo's technical tables: ir_config_parameter
+#                          holds the database secret and API keys,
+#                          ir_attachment holds every uploaded file
+#   res_users_apikeys, auth_totp_device   API keys, 2FA devices
+#   res_partner_bank       bank account numbers
+#   payment_*              payment providers (secrets) and card tokens
+#   mail_*                 every message, e-mail and chatter post
+#   hr_contract*, hr_payslip*, hr_payroll_*   pay
+#
+# Column denials used throughout:
+#   res_users:   password (hash), totp_secret, signature
+#   access_token on sale_order, purchase_order, account_move,
+#                account_journal, project_project, project_task: a portal
+#                link that opens the document without signing in
+#   hr_employee / hr_version: granted to hr only, and even then without
+#                national ids, passport, visa, bank split, badge / PIN or
+#                wage
+#
+# Defence in depth: the database login (sqlagent_ro) can also be refused
+# the worst of these directly, e.g.
+#   REVOKE SELECT ON ir_config_parameter, res_users_apikeys,
+#                    res_partner_bank, ir_attachment FROM sqlagent_ro;
+
+version: 1
+default: deny
+
+roles:
+  # Every anonymous visitor to the public demo (api.py).
+  demo:
+    description: Public demo - sales orders, customers and products
+    allow:
+      - sale_order
+      - sale_order_line
+      - res_partner
+      - res_users
+      - product_template
+      - product_product
+      - product_category
+      - crm_team
+      - stock_warehouse
+      - res_company
+      - res_currency
+      - res_country
+      - res_country_state
+      - uom_uom
+    deny_columns:
+      # Kept even with the line below commented out: the portal link
+      # would let a demo visitor open the order in Odoo itself.
+      sale_order: [access_token]
+#      sale_order: [access_token, client_order_ref, note]
+#      res_partner: [email, phone, street, street2, vat, comment]
+      res_users: [login, password, totp_secret, signature]
+
+  # Sales reps and managers; also the local command-line REPL (main.py).
+  # The name gives this role its affinity to the Sales domain
+  # (config/databases/odoo/semantic/domains.yaml).
+  # Margin and cost (sale_order.margin, sale_order_line.margin /
+  # purchase_price, product_product.standard_price) are visible: add them
+  # to deny_columns if reps shouldn't see cost.
+  sales:
+    description: Sales - quotations, orders, CRM pipeline, customers, products and stock availability
+    allow:
+      - sale_order
+      - sale_order_line
+      - crm_lead
+      - crm_stage
+      - crm_lost_reason
+      - crm_team
+      - crm_team_member
+      - res_partner
+      - res_partner_category
+      - res_partner_res_partner_category_rel
+      - res_partner_industry
+      - res_users
+      - product_template
+      - product_product
+      - product_category
+      - product_pricelist
+      - product_pricelist_item
+      - stock_quant
+      - stock_location
+      - stock_warehouse
+      - stock_picking
+      - stock_picking_type
+      - report_stock_quantity
+      - res_company
+      - res_currency
+      - res_currency_rate
+      - res_country
+      - res_country_state
+      - uom_uom
+    deny_columns:
+      sale_order: [access_token]
+      res_users: [password, totp_secret, signature]
+
+  purchasing:
+    description: Purchasing - RFQs, purchase orders, vendors, vendor prices, on-time delivery and stock
+    allow:
+      - purchase_order
+      - purchase_order_line
+      - vendor_delay_report
+      - product_supplierinfo
+      - res_partner
+      - res_partner_category
+      - res_partner_res_partner_category_rel
+      - res_users
+      - product_template
+      - product_product
+      - product_category
+      - stock_quant
+      - stock_location
+      - stock_warehouse
+      - stock_picking
+      - stock_picking_type
+      - stock_move
+      - stock_warehouse_orderpoint
+      - report_stock_quantity
+      - res_company
+      - res_currency
+      - res_currency_rate
+      - res_country
+      - res_country_state
+      - uom_uom
+    deny_columns:
+      purchase_order: [access_token]
+      res_users: [password, totp_secret, signature]
+
+  inventory:
+    description: Inventory - stock on hand, forecast, locations, warehouses, receipts, deliveries and reordering
+    allow:
+      - stock_quant
+      - stock_location
+      - stock_warehouse
+      - stock_picking
+      - stock_picking_type
+      - stock_move
+      - stock_move_line
+      - stock_lot
+      - stock_warehouse_orderpoint
+      - report_stock_quantity
+      - product_template
+      - product_product
+      - product_category
+      - res_partner
+      - res_users
+      - res_company
+      - res_country
+      - res_country_state
+      - uom_uom
+    deny_columns:
+      res_users: [password, totp_secret, signature]
+
+  manufacturing:
+    description: Manufacturing - manufacturing orders, work orders, bills of materials, work centres and maintenance
+    allow:
+      - mrp_production
+      - mrp_workorder
+      - mrp_bom
+      - mrp_bom_line
+      - mrp_routing_workcenter
+      - mrp_workcenter
+      - maintenance_equipment
+      - maintenance_equipment_category
+      - maintenance_request
+      - maintenance_stage
+      - maintenance_team
+      - product_template
+      - product_product
+      - product_category
+      - stock_quant
+      - stock_location
+      - stock_warehouse
+      - stock_move
+      - res_users
+      - res_partner
+      - res_company
+      - uom_uom
+    deny_columns:
+      res_users: [password, totp_secret, signature]
+
+  # Finance sees invoices, bills, the general ledger and both sides of
+  # trading (sales and purchase orders) for margin and accruals.
+  finance:
+    description: Finance - invoices, bills, payments, general ledger, tax, analytic, sales and purchase totals
+    allow:
+      - account_move
+      - account_move_line
+      - account_account
+      - account_journal
+      - account_payment
+      - account_tax
+      - account_payment_term
+      - account_analytic_account
+      - account_analytic_line
+      - sale_order
+      - sale_order_line
+      - purchase_order
+      - purchase_order_line
+      - res_partner
+      - res_partner_category
+      - res_partner_res_partner_category_rel
+      - res_users
+      - product_template
+      - product_product
+      - product_category
+      - res_company
+      - res_currency
+      - res_currency_rate
+      - res_country
+      - res_country_state
+      - uom_uom
+    deny_columns:
+      account_move: [access_token]
+      account_journal: [access_token]
+      sale_order: [access_token]
+      purchase_order: [access_token]
+      res_users: [password, totp_secret, signature]
+
+  # HR sees employees, their job / department history, and time off, but
+  # still not national ids, passports, visas, bank split, badge PINs or
+  # wage: nothing the agent does needs them. Payroll and contract
+  # templates are granted to no role.
+  hr:
+    description: Human Resources - employees, jobs, departments, work locations and time off
+    allow:
+      - hr_employee
+      - hr_version
+      - hr_department
+      - hr_job
+      - hr_employee_type
+      - hr_work_location
+      - hr_leave
+      - hr_leave_allocation
+      - hr_work_entry_type
+      - res_users
+      - res_partner
+      - res_company
+      - res_country
+      - res_country_state
+    deny_columns:
+      hr_employee: [permit_no, visa_no, visa_expire, work_permit_expiration_date,
+                    barcode, pin, salary_distribution, hourly_cost,
+                    id_card_name, driving_license_name]
+      hr_version: [identification_id, passport_id, passport_expiration_date,
+                   wage]
+      hr_leave: [private_name]
+      res_users: [password, totp_secret, signature]
+
+  projects:
+    description: Projects - projects, tasks, stages, assignees, milestones and deadlines
+    allow:
+      - project_project
+      - project_task
+      - project_task_type
+      - project_task_user_rel
+      - project_milestone
+      - project_tags
+      - report_project_task_user
+      - res_partner
+      - res_users
+      - res_company
+    deny_columns:
+      project_project: [access_token]
+      project_task: [access_token]
+      res_users: [password, totp_secret, signature]
+
+  # Broad, read-only exploration: every table and view except whole
+  # families that hold secrets, credentials, messages, pay, private
+  # calendars, or temporary screen data. Unlike the roles above it uses
+  # wildcards on purpose, so a module installed later adds its tables
+  # here at the next restart - check the startup log after installing.
+  #
+  # Its hidden columns are listed again in full: a column is hidden only
+  # if EVERY role that allows the table hides it, so anyone holding
+  # explorer and another role sees only what both hide.
+  explorer:
+    description: Exploration - nearly every Odoo table, without secrets, messages, pay or personal details
+    allow: ["public.*"]
+    deny:
+      # Odoo internals: system parameters (database secret, API keys),
+      # attachments, scheduled jobs, access rules.
+      - "public.ir_*"
+      # Credentials, 2FA, sessions, devices.
+      - "public.res_users_apikeys*"
+      - "public.auth_*"
+      - "public.res_device*"
+      - "public.res_session*"
+      - "public.change_password*"
+      # Bank accounts, card tokens, bank feeds.
+      - "public.res_partner_bank"
+      - "public.employee_bank_account_rel"
+#      - "public.payment_*"
+      - "public.account_online_*"
+      # Messages, email, chat, SMS.
+#      - "public.mail_*"
+#      - "public.discuss_*"
+      - "public.bus_*"
+      - "public.sms_*"
+      - "public.fetchmail_*"
+      # Pay.
+#      - "public.hr_contract*"
+#      - "public.hr_payslip*"
+#      - "public.hr_payroll*"
+      - "public.hr_salary*"
+      # Private calendars (events carry portal tokens too).
+      - "public.calendar_*"
+      # Log of who looked up whose personal data.
+      - "public.privacy_*"
+      # Temporary screen data and plumbing: noise, not secrets.
+      - "public.*_wizard*"
+      - "public.*_config_settings"
+      - "public.web_*"
+      - "public.base_import*"
+      - "public.iap_*"
+      - "public.spreadsheet_*"
+      - "public.html_editor*"
+    deny_columns:
+      res_users: [password, totp_secret, totp_last_counter, signature]
+      sale_order: [access_token]
+      purchase_order: [access_token]
+      account_move: [access_token]
+      account_journal: [access_token, bank_account_id]
+      project_project: [access_token]
+      project_task: [access_token]
+      rating_rating: [access_token]
+      survey_survey: [access_token]
+      survey_user_input: [access_token, invite_token]
+      hr_employee: [private_phone, private_email, birthday, place_of_birth,
+                    country_of_birth, emergency_contact, emergency_phone,
+                    permit_no, visa_no, visa_expire, work_permit_expiration_date,
+                    barcode, pin, salary_distribution, hourly_cost,
+                    id_card_name, driving_license_name]
+      hr_version: [identification_id, passport_id, passport_expiration_date,
+                   wage, private_street, private_street2, private_city,
+                   private_zip, private_state_id, private_country_id, sex,
+                   marital, spouse_complete_name, spouse_birthdate, children,
+                   km_home_work, distance_home_work]
+      hr_leave: [private_name]
+
+# Identity-provider group -> roles. Who is in each group comes from
+# sign-in. DEMO ONLY: for local testing, config/idp/odoo.yaml stands in
+# for it.
+group_roles:
+  Odoo-Sales: [sales]
+  Odoo-Purchasing: [purchasing]
+  Odoo-Inventory: [inventory]
+  Odoo-Manufacturing: [manufacturing]
+  Odoo-Finance: [finance]
+  Odoo-HR: [hr]
+  Odoo-Projects: [projects]
+  Odoo-Explorer: [explorer]
+  Public-Demo: [demo]
