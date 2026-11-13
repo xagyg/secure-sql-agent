@@ -84,7 +84,11 @@ group_roles:
 # Where there's no foreign key, or more than one, say which columns:
 #     {via: dbo.Orders, join: {OrderID: OrderID}}   (this table: that table)
 # Startup stops rather than guess, and prints each join it takes.
-# A table a scoped role allows with no rule here stops startup.
+# A table a scoped role allows with no rule here stops sign-in for
+# anyone granted that scope, unless the scope says default: unscoped:
+# then every table it doesn't list is reference data (all rows), and
+# sign-in prints which tables that covers. List a table that needs
+# filtering before adding it to a role.
 # ---------------------------------------------------------------------------
 scopes:
   # Orders handled by particular employees: a rep's own, or a manager's
@@ -92,6 +96,7 @@ scopes:
   salesperson:
     user_attribute: employee_id          # from sign-in
     hierarchy: {table: dbo.Employees, key: EmployeeID, parent: ReportsTo}
+    default: unscoped                    # everything not listed: all rows
     tables:
       dbo.Orders:               {column: EmployeeID}
       dbo.Order Details:        {via: dbo.Orders}
@@ -99,17 +104,11 @@ scopes:
       dbo.CustomerCustomerDemo: {via: dbo.Customers}
       dbo.Employees:            {column: EmployeeID}
       dbo.EmployeeTerritories:  {column: EmployeeID}
-      dbo.Products:             unscoped
-      dbo.Categories:           unscoped
-      dbo.Suppliers:            unscoped
-      dbo.Shippers:             unscoped
-      dbo.Region:               unscoped
-      dbo.Territories:          unscoped
-      dbo.CustomerDemographics: unscoped
 
   # Sales regions: orders handled by employees who cover a territory in
   # the region, and the customers, lines and staff that follow from them.
   region:
+    default: unscoped
     tables:
       dbo.Region:               {column: RegionID}
       dbo.Territories:          {column: RegionID}
@@ -119,11 +118,6 @@ scopes:
       dbo.Order Details:        {via: dbo.Orders}
       dbo.Customers:            {via: dbo.Orders}
       dbo.CustomerCustomerDemo: {via: dbo.Customers}
-      dbo.Products:             unscoped
-      dbo.Categories:           unscoped
-      dbo.Suppliers:            unscoped
-      dbo.Shippers:             unscoped
-      dbo.CustomerDemographics: unscoped
 
 # Identity-provider group -> grants (role + which rows). Who is in each
 # group, and their employee_id, come from sign-in. DEMO ONLY: for

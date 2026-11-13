@@ -263,6 +263,12 @@ class ScopeSpec(_Strict):
     # (an employee ID), for the relative values self / team / reports.
     user_attribute: str | None = None
     hierarchy: HierarchySpec | None = None
+    # What a table a scoped role allows, but this scope doesn't list, gets.
+    # None (the default) refuses the user, so a table added to a role later
+    # can't come back unfiltered unless someone decides it should; "unscoped"
+    # says unlisted tables are reference data (all rows), and sign-in prints
+    # which tables that covers.
+    default: Literal["unscoped"] | None = None
     tables: dict[str, Literal["unscoped"] | ColumnRule | ViaRule] = Field(..., min_length=1)
 
 
@@ -415,6 +421,7 @@ class SecurityPolicy:
                                            full_table_name(rule.via.strip()))
             self.scopes[dim.lower()] = (spec, rules)
         self._joins_resolved = False
+        self._defaults_shown = set()   # (dimension, role) already printed
 
     @classmethod
     def from_dict(cls, data, source="(in memory)"):
@@ -537,14 +544,8 @@ class SecurityPolicy:
                     values[dim] = self._resolve_values(
                         dim, value, attributes, read_hierarchy, hierarchies)
                     self._check_scope_size(user_id, role, dim, value, values[dim])
-                    rules = self.scopes[dim][1]
-                    missing = sorted(t for t in role_tables if t.lower() not in rules)
-                    if missing:
-                        raise SecurityPolicyError(
-                            f"{self.source}: scope '{dim}' has no rule for "
-                            f"{', '.join(missing)} (allowed by role '{role}'); "
-                            "add a rule, or mark it unscoped")
-                dimensions = {dim: self.scopes[dim][1] for dim in values}
+                dimensions = {dim: self._rules_for(dim, role, role_tables, log)
+                              for dim in values}
                 try:
                     filters = compile_grant(role_tables, values, dimensions)
                 except RowScopeError as ex:
@@ -634,6 +635,28 @@ class SecurityPolicy:
                 print(f"[security] scope {dim}: {self._spelled[table]} via {rule[3]} "
                       f"on {shown} (foreign key)")
         self._joins_resolved = True
+
+    def _rules_for(self, dim, role, role_tables, log):
+        """
+        The rules of scope `dim` for a grant of `role`: every table the role
+        allows needs one. A table the scope doesn't list stops the user,
+        unless the scope says default: unscoped - then it gets all its rows,
+        and the tables that covers are printed once per scope and role.
+        """
+        spec, rules = self.scopes[dim]
+        missing = sorted(t for t in role_tables if t.lower() not in rules)
+        if not missing:
+            return rules
+        if spec.default != "unscoped":
+            raise SecurityPolicyError(
+                f"{self.source}: scope '{dim}' has no rule for "
+                f"{', '.join(missing)} (allowed by role '{role}'); "
+                "add a rule, mark it unscoped, or give the scope default: unscoped")
+        if log and (dim, role) not in self._defaults_shown:
+            self._defaults_shown.add((dim, role))
+            print(f"[security] scope {dim}: unscoped by default for role {role}: "
+                  + ", ".join(missing))
+        return {**rules, **{t.lower(): ("unscoped",) for t in missing}}
 
     def _check_scope_size(self, user_id, role, dim, value, resolved):
         """

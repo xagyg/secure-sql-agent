@@ -230,6 +230,59 @@ class FailClosed(unittest.TestCase):
         self.check(POLICY.replace("[Germany]", "[true]"), "true/false")
 
 
+
+# The salesperson scope without its products rule, saying instead that
+# anything it doesn't list is unscoped.
+DEFAULTED = POLICY.replace("      products:      unscoped\n  country:", "  country:").replace(
+    "    hierarchy: {table: employees, key: employee_id, parent: reports_to}\n",
+    "    hierarchy: {table: employees, key: employee_id, parent: reports_to}\n"
+    "    default: unscoped\n", 1)
+
+
+class DefaultUnscoped(unittest.TestCase):
+
+    def test_unlisted_table_gets_all_rows(self):
+        f = context(["Team"], {"employee_id": 5}, text=DEFAULTED).row_filters
+        self.assertNotIn("public.products", f)
+        self.assertEqual(sql(f["public.orders"]), "_t.employee_id IN (5, 6, 7, 9)")
+        self.assertIn("public.customers", f)
+
+    def test_same_filters_as_listing_it(self):
+        listed = context(["Team"], {"employee_id": 5}).row_filters
+        defaulted = context(["Team"], {"employee_id": 5}, text=DEFAULTED).row_filters
+        self.assertEqual({t: sql(e) for t, e in listed.items()},
+                         {t: sql(e) for t, e in defaulted.items()})
+
+    def test_only_the_scope_that_says_so(self):
+        text = DEFAULTED.replace("      products:      unscoped\ngroup_grants:", "group_grants:")
+        with self.assertRaisesRegex(SecurityPolicyError,
+                                    "country.*no rule for public.products.*default: unscoped"):
+            context(["Germany"], text=text)
+
+    def test_printed_once_per_scope_and_role(self):
+        p = policy(DEFAULTED)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            for _ in range(2):
+                p.build_context("u", set(), TABLES, groups=["Team"],
+                                attributes={"employee_id": 5},
+                                read_hierarchy=lambda *_: HIERARCHY)
+        lines = [l for l in out.getvalue().splitlines() if "unscoped by default" in l]
+        self.assertEqual(lines, ["[security] scope salesperson: unscoped by default "
+                                 "for role sales_manager: public.products"])
+
+    def test_via_still_needs_a_listed_table(self):
+        text = DEFAULTED.replace("{via: orders, join: {customer_id: customer_id}}",
+                                 "{via: products, join: {customer_id: customer_id}}", 1)
+        with self.assertRaisesRegex(SecurityPolicyError, "public.products, which has no rule"):
+            context(["Team"], {"employee_id": 5}, text=text)
+
+    def test_only_unscoped_is_a_default(self):
+        with self.assertRaisesRegex(SecurityPolicyError, "invalid configuration"):
+            context(["Team"], {"employee_id": 5},
+                    text=DEFAULTED.replace("default: unscoped", "default: all"))
+
+
 ROW_FILTERS = {
     "public.orders": sqlglot.parse_one("_t.employee_id IN (1, 3)"),
     "public.customers": sqlglot.parse_one(
