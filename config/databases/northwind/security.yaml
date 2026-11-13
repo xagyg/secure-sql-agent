@@ -107,7 +107,11 @@ group_roles:
 # Where there's no foreign key, or more than one, say which columns:
 #     {via: orders, join: {order_id: order_id}}   (this table: that table)
 # Startup stops rather than guess, and prints each join it takes.
-# A table a scoped role allows with no rule here stops startup.
+# A table a scoped role allows with no rule here stops sign-in for
+# anyone granted that scope, unless the scope says default: unscoped:
+# then every table it doesn't list is reference data (all rows), and
+# sign-in prints which tables that covers. List a table that needs
+# filtering before adding it to a role.
 # ---------------------------------------------------------------------------
 scopes:
   # Orders handled by particular employees: a rep's own, or a manager's
@@ -115,6 +119,7 @@ scopes:
   salesperson:
     user_attribute: employee_id          # from sign-in
     hierarchy: {table: public.employees, key: employee_id, parent: reports_to}
+    default: unscoped                    # everything not listed: all rows
     tables:
       public.orders:                 {column: employee_id}
       public.order_details:          {via: public.orders}
@@ -122,17 +127,11 @@ scopes:
       public.customer_customer_demo: {via: public.customers}
       public.employees:              {column: employee_id}
       public.employee_territories:   {column: employee_id}
-      public.products:               unscoped
-      public.categories:             unscoped
-      public.suppliers:              unscoped
-      public.shippers:               unscoped
-      public.region:                 unscoped
-      public.territories:            unscoped
-      public.customer_demographics:  unscoped
 
   # Sales regions: orders handled by employees who cover a territory in
   # the region, and the customers, lines and staff that follow from them.
   region:
+    default: unscoped
     tables:
       public.region:                 {column: region_id}
       public.territories:            {column: region_id}
@@ -142,11 +141,6 @@ scopes:
       public.order_details:          {via: public.orders}
       public.customers:              {via: public.orders}
       public.customer_customer_demo: {via: public.customers}
-      public.products:               unscoped
-      public.categories:             unscoped
-      public.suppliers:              unscoped
-      public.shippers:               unscoped
-      public.customer_demographics:  unscoped
 
 # Identity-provider group -> grants (role + which rows). Who is in each
 # group, and their employee_id, come from sign-in. DEMO ONLY: for
