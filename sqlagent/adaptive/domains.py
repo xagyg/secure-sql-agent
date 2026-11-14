@@ -304,7 +304,12 @@ class DomainResolver:
 
     def resolve(self, question, roles=(), where=None, who=None,
                 previous_domain=None):
-        q_terms = self._tok(question) - GENERIC_TERMS
+        # The catalog's question words include typo corrections
+        # ("purchsing" -> "purchasing"), so routing and schema search see
+        # the same words.
+        question_terms = getattr(self.catalog, "question_terms", None)
+        q_terms = (question_terms(question) if question_terms
+                   else self._tok(question) - GENERIC_TERMS)
         # Location names keep words like "records" or "details" that are
         # generic in a question, so GENERIC_TERMS isn't removed here.
         where_terms = self._where_terms(where) if where else set()

@@ -23,9 +23,15 @@ password_env: OLLAMA_PASSWORD   # value from the environment, never here
 connect_timeout: 10
 read_timeout: 120
 
-# Earlier questions/answers sent with each new question (follow-ups such
-# as "now show me only those in Germany").
-history_turns: 5
+# Earlier questions sent with each new question (follow-ups such as
+# "now show me only those in Germany"). Each turn carries a short summary
+# of its result (row count, columns, a few sample rows), not the full
+# answer; only the most recent turn carries its SQL (history_sql_turns).
+history_turns: 3
+history_sample_rows: 3        # sample rows per result summary
+history_value_chars: 40       # longest single value shown
+history_summary_chars: 400    # longest summary per turn
+history_sql_turns: 1          # most recent turns that also carry their SQL (0 = none)
 
 # Sent with every request. Skips ngrok's browser warning page; harmless
 # without ngrok.

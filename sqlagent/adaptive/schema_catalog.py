@@ -39,10 +39,25 @@ from sqlagent.adaptive.text_match import (
     GENERIC_TERMS,
     PARTIAL_NAME_MATCH,
     TERM_MATCH,
+    correct_words,
+    fuzzy_available,
     phrase_matches,
     phrase_parts,
     tokenize,
+    words,
 )
+from sqlagent.settings import get_settings
+
+
+_warned_no_fuzzy = False
+
+
+def _warn_no_fuzzy():
+    """Say once that typo correction is on but can't run."""
+    global _warned_no_fuzzy
+    _warned_no_fuzzy = True
+    print("[schema] Typo correction is enabled but rapidfuzz is not "
+          "installed - matching stays exact (pip install -r requirements.txt)")
 
 
 class EmptyCatalogError(RuntimeError):
@@ -82,6 +97,10 @@ class SchemaCatalog:
         self.fallback_table_names = set()
         self.last_schema = ""
         self.domain_resolver = None
+        # Typo-correction vocabulary, built on first use from the loaded
+        # tables and domains (see question_terms). Reset by refresh().
+        self._vocabulary = None
+        self._last_terms = (None, frozenset())
 
     # ------------------------------------------------------------------
     # Lookup
@@ -134,6 +153,8 @@ class SchemaCatalog:
         # Domains of Discourse are mapped onto THIS catalog, i.e. only
         # onto tables the role is authorised for.
         self.domain_resolver = DomainResolver(self)
+        self._vocabulary = None
+        self._last_terms = (None, frozenset())
 
     def _empty_reason(self):
         """Why no tables loaded, as a hint for whoever reads the startup log."""
@@ -489,7 +510,7 @@ class SchemaCatalog:
         Rank tables against the question. restrict_to (a set of full
         table names) limits the search to a Domain of Discourse.
         """
-        terms = tokenize(question) - GENERIC_TERMS
+        terms = self.question_terms(question)
         scores = []
 
         for full_name, table in self.tables.items():
@@ -507,6 +528,93 @@ class SchemaCatalog:
             (score, self.tables[name])
             for score, name in scores[:limit]
         ]
+
+    # ------------------------------------------------------------------
+    # Question words (with typo correction)
+    # ------------------------------------------------------------------
+
+    def vocabulary(self):
+        """
+        (known, candidates) for typo correction. candidates are the words
+        of every loaded table and column name, alias, label and business
+        term, plus the aliases of the domains that have loaded tables -
+        exactly the words a question word can match. known adds their
+        tokenize() forms.
+
+        Built from this (security-filtered) catalog only, so a correction
+        can never name something the role can't see.
+        """
+        if self._vocabulary is not None:
+            return self._vocabulary
+
+        names = []
+        for table in self.tables.values():
+            names.append(table["name"])
+            names.extend(table.get("aliases", ()))
+            if table.get("label"):
+                names.append(table["label"])
+            for term in table.get("terms", ()):
+                names.extend(term["phrases"])
+            for column in table["columns"]:
+                names.append(column["name"])
+                names.extend(column.get("aliases", ()))
+                if column.get("label"):
+                    names.append(column["label"])
+
+        resolver = self.domain_resolver
+        if resolver is not None:
+            for key, domain in resolver.domains.items():
+                if not resolver.domain_tables.get(key):
+                    continue
+                # Only aliases: they are what a question word is matched
+                # against (DomainResolver.resolve). Location phrases are
+                # matched against the [where=...] tag, not the question.
+                names.extend(domain.get("aliases", ()))
+
+        candidates = sorted({
+            w for name in names for w in words(name.replace("_", " "))
+            if len(w) >= 3 and not any(ch.isdigit() for ch in w)
+        })
+        known = set()
+        for w in candidates:
+            known |= tokenize(w)
+        self._vocabulary = (frozenset(known), candidates)
+        return self._vocabulary
+
+    def question_terms(self, question):
+        """
+        The words of a question used for matching tables and domains:
+        tokenize(question) minus GENERIC_TERMS, plus the correction of
+        any word that matches nothing ("custmers" -> "customers"). The
+        question itself is not changed.
+
+        Settings: typo_correction in config/settings/retrieval.yaml.
+        """
+        last_question, last_terms = self._last_terms
+        if question == last_question:
+            return set(last_terms)
+
+        terms = tokenize(question) - GENERIC_TERMS
+        config = get_settings().retrieval.typo_correction
+
+        if config.enabled and not fuzzy_available() and not _warned_no_fuzzy:
+            _warn_no_fuzzy()
+
+        if config.enabled and fuzzy_available() and self.tables:
+            known, candidates = self.vocabulary()
+            corrections, ambiguous = correct_words(
+                question, known, candidates,
+                min_score=config.min_score, min_length=config.min_length,
+                margin=config.margin, skip=GENERIC_TERMS)
+            for word, (fixed, score) in corrections.items():
+                print(f"[schema] Typo correction: {word} -> {fixed} ({score})")
+                terms |= tokenize(fixed)
+            for word, tied in ambiguous.items():
+                print(f"[schema] Typo correction: {word} is ambiguous "
+                      f"({', '.join(tied)}) - not corrected")
+
+        self._last_terms = (question, frozenset(terms))
+        return terms
 
     # ------------------------------------------------------------------
     # Context

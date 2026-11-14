@@ -8,6 +8,7 @@ import base64
 import httpx
 from ollama import Client
 
+from sqlagent.adaptive.history import format_history
 from sqlagent.databases import active_database
 from sqlagent.execution.engines import active_engine
 from sqlagent.settings import get_settings
@@ -26,6 +27,10 @@ OLLAMA_MODEL = _LLM.model
 OLLAMA_USERNAME = _LLM.username()
 OLLAMA_PASSWORD = _LLM.password()
 MAX_HISTORY_TURNS = _LLM.history_turns
+HISTORY_SAMPLE_ROWS = _LLM.history_sample_rows
+HISTORY_VALUE_CHARS = _LLM.history_value_chars
+HISTORY_SQL_TURNS = _LLM.history_sql_turns
+HISTORY_SUMMARY_CHARS = _LLM.history_summary_chars
 
 # Timeouts for calls to Ollama, in seconds. The ollama client's default is
 # no timeout at all, so a call sent on a connection that was silently
@@ -132,22 +137,7 @@ def _format_examples(examples):
 
 
 def generate_sql(question, schema, history):
-    history_text = ""
-
-    if history:
-        history_text = "\n\n".join(
-            f"""
-Previous user question:
-{turn["question"]}
-
-Previous SQL:
-{turn["sql"]}
-
-Previous answer:
-{turn["answer"]}
-"""
-            for turn in history[-MAX_HISTORY_TURNS:]
-        )
+    history_text = format_history(history, MAX_HISTORY_TURNS, HISTORY_SQL_TURNS)
 
     db = active_database()
     db_names = " (or ".join(f'"{n}"' for n in db.names[:2]) + (")" if len(db.names) > 1 else "")
@@ -172,8 +162,12 @@ IMPORTANT:
 * Conversation context is background information only.
 * Do not copy JSON, previous query results, or previous answers into SQL.
 * Generate SQL for the CURRENT user question.
-* Use previous questions and answers to resolve references such as:
+* Use previous questions and results to resolve references such as:
   "them", "those customers", "the previous result", "now show me..."
+* A follow-up usually refers to the MOST RECENT turn. Use earlier turns
+  only when the current question clearly points back to them.
+* If the current question does not refer to the conversation at all,
+  ignore the conversation context and answer it on its own.
 * {engine} syntax.
 * Only SELECT queries.
 * Do not modify data.
