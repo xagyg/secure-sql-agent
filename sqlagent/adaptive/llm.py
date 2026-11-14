@@ -279,11 +279,15 @@ always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
 * Do not return markdown.
 * Do not return JSON.
 * Do not explain the SQL.
-* When the user asks for a person, customer, employee, product, etc.,
-  return identifying information such as the person's name, not just
-  an internal ID, where the relevant table is available.
-* Join to the relevant entity table when necessary to provide the
-  requested identifying information.
+* Show names, not internal IDs. For every column you SELECT that holds
+  another record's id (partner_id, user_id, product_id, employee_id,
+  company_id, ...), join that record's table and select its name
+  instead, where the table is in the schema. Identify a row by its own
+  name or number (an order's S00023 or P00015), not by its id.
+  e.g. purchase orders awaiting approval:
+       SELECT po.name, p.name AS vendor, po.date_order, po.amount_total
+       not SELECT po.id, po.partner_id, ...
+* Only return id columns when the user asks for ids.
 """
 
     return clean_sql(ask_ollama([
