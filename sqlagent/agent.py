@@ -17,6 +17,8 @@
 #     is safe to show in the UI. Detailed reasons stay in the console.
 
 
+import re
+
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
     WITHHELD_NOTE,
@@ -61,6 +63,7 @@ from sqlagent.execution.sql_diagnostics import (
 )
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 from sqlagent.settings import get_settings
+from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +129,7 @@ def _validation_failure(reason, sql):
     return _error(message, sql)
 
 
-def _prepare_sql(sql, security, catalog):
+def _prepare_sql(sql, security, catalog, table_retry=False):
     """
     Make generated SQL safe to run (see sql_policy.prepare_sql) and log
     each change. Used for the first query and for a corrected one, so
@@ -134,7 +137,10 @@ def _prepare_sql(sql, security, catalog):
 
     Returns (sql, withheld, failure): failure is a result dict when
     validation stopped the query, else None. Errors from the rewrite
-    step are raised for the caller to report.
+    step are raised for the caller to report. With table_retry, a query
+    stopped ONLY because it reads a table outside the role's schema gives
+    failure = {"retry_table": name, "reason": ...} instead, for
+    _retry_unavailable_table().
     """
     prepared = prepare_sql(sql, security, catalog)
 
@@ -150,9 +156,106 @@ def _prepare_sql(sql, security, catalog):
 
     failure = None
     if prepared.failure_reason:
-        failure = _validation_failure(prepared.failure_reason, prepared.sql)
+        table = _unauthorised_table(prepared.failure_reason) if table_retry else None
+        if table:
+            print(f"\n[security] {prepared.failure_reason}")
+            failure = {"retry_table": table, "reason": prepared.failure_reason}
+        else:
+            failure = _validation_failure(prepared.failure_reason, prepared.sql)
 
     return prepared.sql, prepared.withheld, failure
+
+
+# ---------------------------------------------------------------------------
+# A table outside the role's schema: one retry
+# ---------------------------------------------------------------------------
+# The model sometimes writes a table it remembers rather than one it was
+# shown (timesheet_line, account_payment_rel). That used to end the request
+# as "restricted". Now it gets one rewrite using only the schema it was
+# given, or DATA_NOT_AVAILABLE. Nothing leaks: the hint names only the
+# table the model wrote itself, and says the same whether that table is
+# hidden from the role or doesn't exist. If the question itself names the
+# data ("show me the payslips"), it stays a block, so a restricted table
+# isn't quietly answered from a different one.
+
+_UNAUTHORISED_TABLE = re.compile(r"^Table '([^']+)' is not authorised\.$")
+
+# Words that say nothing about what a table holds.
+_TABLE_NAME_NOISE = frozenset({
+    "public", "dbo", "res", "hr", "account", "stock", "product", "sale",
+    "purchase", "project", "mrp", "line", "lines", "rel", "id", "report",
+    "x", "tbl", "table",
+})
+
+
+def _unauthorised_table(reason):
+    """The table a "Table 'x' is not authorised." reason names, or None
+    (any other validation failure is never retried)."""
+    match = _UNAUTHORISED_TABLE.match(reason.strip())
+    return match.group(1) if match else None
+
+
+def _question_names_table(question, table):
+    """True if the question uses every meaningful word of the table's name
+    ("payslips" for hr_payslip, "employees" for employees): the user asked
+    for that data. One shared common word isn't enough ("orders" doesn't
+    name order_shipping_log)."""
+    bare = table.split(".")[-1]
+    table_words = tokenize(bare.replace("_", " ")) - _TABLE_NAME_NOISE - GENERIC_TERMS
+    return bool(table_words) and table_words <= tokenize(question)
+
+
+def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
+    """
+    One rewrite of a query stopped for reading a table outside the role's
+    schema. Returns (sql, withheld, failure) from _prepare_sql() on the
+    rewrite, or a finished result dict (blocked / not available / error).
+    """
+    table = failure["retry_table"]
+    reason = failure["reason"]
+    bare = table.split(".")[-1]
+
+    if _question_names_table(question, table):
+        print("\n[security] The question asks for that data - not retrying.")
+        return _policy_block(block_rule(reason), sql)
+
+    hint = (
+        "TABLE NOT AVAILABLE\n"
+        f"- {bare} is not in the schema you were given.\n"
+        "Use only the tables listed in DATABASE SCHEMA. If the question needs\n"
+        "data that isn't in them, return exactly DATA_NOT_AVAILABLE - do not\n"
+        "answer it from a table that means something else.\n"
+    )
+    print(f"\n[agent] Asking Ollama to rewrite it without {bare}...")
+    try:
+        corrected = correct_sql(question, schema, sql,
+                                f"Table {bare} is not available.", hint)
+    except Exception as ex:
+        print(f"\n[CORRECTION ERROR] {ex}")
+        return _error("I couldn't correct that query.", sql)
+
+    print("\n[corrected sql]")
+    print(corrected)
+
+    if classify_model_output(corrected) == "not_available":
+        if mentions_denied_column(question, security):
+            print("\n[security] Question refers to a restricted column.")
+            return _policy_block("restricted_data", sql)
+        print("\n[agent] Correction: the requested data isn't in the "
+              "authorised schema.")
+        return _policy_block("not_available", sql)
+
+    if _normalise_sql(corrected) == _normalise_sql(sql):
+        print("\n[agent] Correction produced the same SQL. Stopping.")
+        return _policy_block(block_rule(reason), sql)
+
+    try:
+        return _prepare_sql(corrected, security, catalog)
+    except Exception as ex:
+        print(f"\n[error] {ex}")
+        message = "I couldn't safely prepare the query for execution."
+        print(f"\n[answer] {message}")
+        return _error(message, corrected)
 
 
 def _check_columns(sql, catalog):
@@ -472,12 +575,20 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
     # Strip, validate, rewrite, re-validate (see _prepare_sql)
     # ---------------------------------------------------------
     try:
-        sql, withheld, failure = _prepare_sql(sql, security, catalog)
+        sql, withheld, failure = _prepare_sql(sql, security, catalog,
+                                              table_retry=True)
     except Exception as ex:
         print(f"\n[error] {ex}")
         message = "I couldn't safely prepare the query for execution."
         print(f"\n[answer] {message}")
         return _error(message, sql)
+
+    if failure and "retry_table" in failure:
+        retried = _retry_unavailable_table(
+            question, schema, generated_sql, failure, security, catalog)
+        if isinstance(retried, dict):
+            return retried
+        sql, withheld, failure = retried
 
     if failure:
         return failure
