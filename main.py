@@ -14,7 +14,7 @@
 # Batch mode runs a file of questions instead of reading the keyboard, and
 # can copy everything printed to a file to check later:
 #     python main.py --questions questions.txt --out results.txt
-#     .\run.ps1 -questions questions.txt          (results file is named for you)
+#     .\run.ps1 -questions questions.txt          (results go to .\outputs\)
 # See read_questions() for the file format.
 
 import argparse
@@ -145,10 +145,11 @@ def read_questions(path):
 
 
 def default_results_path(questions_path, now=None):
-    """questions.txt -> questions-results-20261114-1502.txt, alongside it."""
+    """questions.txt -> outputs/questions-results-20261114-1502.txt, in an
+    outputs folder next to the questions file (created when needed)."""
     path = Path(questions_path)
     stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M")
-    return path.with_name(f"{path.stem}-results-{stamp}.txt")
+    return path.parent / "outputs" / f"{path.stem}-results-{stamp}.txt"
 
 
 class Tee:
@@ -207,8 +208,9 @@ def parse_args(argv=None):
                         help="run these questions (one per line) and exit")
     parser.add_argument("--out", metavar="FILE",
                         help="with --questions: also write everything printed "
-                             "to this file (default: <questions>-results-"
-                             "<date>-<time>.txt next to the questions file)")
+                             "to this file (default: outputs/<questions>-"
+                             "results-<date>-<time>.txt, in an outputs folder "
+                             "next to the questions file)")
     parser.add_argument("--no-out", action="store_true",
                         help="with --questions: print to the console only")
     return parser.parse_args(argv)
@@ -253,6 +255,7 @@ def main():
         if args.no_out:
             return start(items)
         out_path = Path(args.out) if args.out else default_results_path(args.questions)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as out:
             console = sys.stdout
             sys.stdout = Tee(console, out)

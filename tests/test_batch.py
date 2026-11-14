@@ -82,7 +82,22 @@ class ResultsPath(unittest.TestCase):
     def test_named_after_the_questions_file(self):
         path = main.default_results_path(Path("tests") / "odoo.txt",
                                          now=datetime(2026, 11, 14, 15, 2))
-        self.assertEqual(path, Path("tests") / "odoo-results-20261114-1502.txt")
+        self.assertEqual(path, Path("tests") / "outputs" / "odoo-results-20261114-1502.txt")
+
+
+class OutputsFolder(unittest.TestCase):
+
+    def test_results_go_to_a_new_outputs_folder(self):
+        folder = Path(tempfile.mkdtemp())
+        questions = folder / "odoo.txt"
+        questions.write_text("q1\n", encoding="utf-8")
+        with mock.patch.object(main, "start", lambda items: print("ran", items)), \
+             mock.patch("sys.argv", ["main.py", "--questions", str(questions)]), \
+             redirect_stdout(io.StringIO()):
+            main.main()
+        results = list((folder / "outputs").glob("odoo-results-*.txt"))
+        self.assertEqual(len(results), 1)
+        self.assertIn("ran ['q1']", results[0].read_text(encoding="utf-8"))
 
 
 class RunBatch(unittest.TestCase):
