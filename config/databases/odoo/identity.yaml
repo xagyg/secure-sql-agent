@@ -1,0 +1,172 @@
+# How the agent talks about the Odoo database. It never affects access -
+# that is security.yaml, next to this file. See
+# config/databases/adventureworks/identity.yaml for what each key means.
+#
+# The names below are generic: change display_name, names and about to
+# the company this Odoo database runs (res_company.name), e.g.
+#     SELECT name FROM res_company;
+# The SQL examples use Odoo 19's own tables and PostgreSQL.
+
+version: 1
+display_name: Odoo
+names: [Odoo, Odoo ERP, the ERP, our company]
+about: an Odoo 19 ERP database (Australia, AUD and GST) - sales, CRM, purchasing, inventory, manufacturing, accounting, HR and projects
+example_questions:
+  - Who are our top 10 customers by revenue this year?
+  - Which invoices are overdue, and by how much?
+  - What products are running low in the warehouse?
+  - How much did we spend with each vendor last quarter?
+  - What is in the sales pipeline by stage?
+sql_examples:
+  - question: what products do we sell?
+    note: product names are JSONB, keyed by language
+    sql: >-
+      SELECT pt.name->>'en_US' AS product, pt.list_price
+      FROM product_template pt
+      WHERE pt.sale_ok AND pt.active
+      ORDER BY 1
+  - question: who are our top 5 customers by revenue?
+    note: orders can be addressed to a contact person, so group on the company
+    sql: >-
+      SELECT c.name AS customer, SUM(so.amount_untaxed) AS revenue
+      FROM sale_order so
+      JOIN res_partner p ON p.id = so.partner_id
+      JOIN res_partner c ON c.id = p.commercial_partner_id
+      WHERE so.state = 'sale'
+      GROUP BY c.name ORDER BY revenue DESC LIMIT 5
+  - question: what is the value of orders placed by Gemini Furniture?
+    note: >-
+      match the name with ILIKE and include orders addressed to the
+      company's contact people; never filter on customer_rank
+    sql: >-
+      SELECT c.name AS customer, COUNT(*) AS orders,
+             SUM(so.amount_untaxed) AS untaxed, SUM(so.amount_total) AS total
+      FROM sale_order so
+      JOIN res_partner p ON p.id = so.partner_id
+      JOIN res_partner c ON c.id = p.commercial_partner_id
+      WHERE so.state = 'sale' AND c.name ILIKE '%gemini furniture%'
+      GROUP BY c.name
+  - question: who is the contact person at Gemini Furniture?
+    note: contact people point up to their company through parent_id
+    sql: >-
+      SELECT child.name AS contact, child.function AS job_position,
+             child.email, child.phone
+      FROM res_partner company
+      JOIN res_partner child ON child.parent_id = company.id
+      WHERE company.name ILIKE '%gemini furniture%'
+        AND company.is_company AND child.active
+  - question: sales by salesperson this year
+    note: a user's name is on its partner
+    sql: >-
+      SELECT up.name AS salesperson, SUM(so.amount_untaxed) AS revenue
+      FROM sale_order so
+      JOIN res_users u ON u.id = so.user_id
+      JOIN res_partner up ON up.id = u.partner_id
+      WHERE so.state = 'sale'
+        AND so.date_order >= date_trunc('year', CURRENT_DATE)
+      GROUP BY up.name ORDER BY revenue DESC
+  - question: which customer invoices are overdue?
+    sql: >-
+      SELECT m.name, p.name AS customer, m.invoice_date_due, m.amount_residual
+      FROM account_move m JOIN res_partner p ON p.id = m.partner_id
+      WHERE m.move_type = 'out_invoice' AND m.state = 'posted'
+        AND m.payment_state IN ('not_paid', 'partial')
+        AND m.invoice_date_due < CURRENT_DATE
+      ORDER BY m.invoice_date_due
+  - question: how much stock do we have of each product?
+    note: only internal locations hold our own stock
+    sql: >-
+      SELECT pt.name->>'en_US' AS product, SUM(q.quantity) AS on_hand
+      FROM stock_quant q
+      JOIN stock_location l ON l.id = q.location_id
+      JOIN product_product pp ON pp.id = q.product_id
+      JOIN product_template pt ON pt.id = pp.product_tmpl_id
+      WHERE l.usage = 'internal'
+      GROUP BY 1 ORDER BY 1
+  - question: what is our gross margin by product category this year?
+    note: margin is stored on the order line; category names are JSONB
+    sql: >-
+      SELECT pc.name->>'en_US' AS category, SUM(l.price_subtotal) AS revenue,
+             SUM(l.margin) AS margin
+      FROM sale_order_line l
+      JOIN sale_order so ON so.id = l.order_id
+      JOIN product_product pp ON pp.id = l.product_id
+      JOIN product_template pt ON pt.id = pp.product_tmpl_id
+      JOIN product_category pc ON pc.id = pt.categ_id
+      WHERE so.state = 'sale' AND l.display_type IS NULL
+        AND so.date_order >= date_trunc('year', CURRENT_DATE)
+      GROUP BY 1 ORDER BY margin DESC
+  - question: how many employees are in each department?
+    note: in Odoo 19 the department is on the employee's current hr_version
+    sql: >-
+      SELECT d.name->>'en_US' AS department, COUNT(*) AS employees
+      FROM hr_employee e
+      JOIN hr_version v ON v.id = e.current_version_id
+      JOIN hr_department d ON d.id = v.department_id
+      WHERE e.active
+      GROUP BY 1 ORDER BY employees DESC
+  - question: show the balance of each income account this year
+    note: the account code is company-dependent JSONB
+    sql: >-
+      SELECT a.code_store->>'1' AS code, a.name->>'en_US' AS account,
+             -SUM(l.balance) AS amount
+      FROM account_move_line l JOIN account_account a ON a.id = l.account_id
+      WHERE l.parent_state = 'posted' AND a.account_type IN ('income', 'income_other')
+        AND l.date >= date_trunc('year', CURRENT_DATE)
+      GROUP BY 1, 2 ORDER BY 1
+  - question: list our customers in Australia
+    note: >-
+      res_country.name is JSONB, so filter countries on the ISO code;
+      a customer is a company with a confirmed sales order
+    sql: >-
+      SELECT c.name AS customer, c.city, s.name AS state
+      FROM res_partner c
+      JOIN res_country co ON co.id = c.country_id
+      LEFT JOIN res_country_state s ON s.id = c.state_id
+      WHERE co.code = 'AU' AND c.is_company AND c.active
+        AND EXISTS (SELECT 1 FROM sale_order so
+                    JOIN res_partner p ON p.id = so.partner_id
+                    WHERE p.commercial_partner_id = c.id AND so.state = 'sale')
+      ORDER BY c.name
+  - question: which products are currently out of stock?
+    note: >-
+      stock on hand is stock_quant in internal locations; never use
+      product_product.qty_available (JSONB, not kept up to date)
+    sql: >-
+      SELECT pt.name->>'en_US' AS product, pp.default_code AS sku
+      FROM product_product pp
+      JOIN product_template pt ON pt.id = pp.product_tmpl_id
+      WHERE pt.is_storable AND pt.active AND pp.active
+        AND NOT EXISTS (SELECT 1 FROM stock_quant q
+                        JOIN stock_location l ON l.id = q.location_id
+                        WHERE q.product_id = pp.id
+                          AND l.usage = 'internal' AND q.quantity > 0)
+      ORDER BY 1
+  - question: what is the total inventory value by product category?
+    note: >-
+      cost (product_product.standard_price) is JSONB by company - read it
+      as (standard_price->>'1')::numeric; stock is stock_quant in internal
+      locations
+    sql: >-
+      SELECT pc.name->>'en_US' AS category,
+             SUM(q.quantity * (pp.standard_price->>'1')::numeric) AS inventory_value
+      FROM stock_quant q
+      JOIN stock_location l ON l.id = q.location_id
+      JOIN product_product pp ON pp.id = q.product_id
+      JOIN product_template pt ON pt.id = pp.product_tmpl_id
+      JOIN product_category pc ON pc.id = pt.categ_id
+      WHERE l.usage = 'internal'
+      GROUP BY 1 ORDER BY 2 DESC
+  - question: show me employees who joined in the last 12 months
+    note: >-
+      the joining date is hr_employee.first_contract_date; "last 12 months"
+      is a rolling window back from today, not calendar years
+    sql: >-
+      SELECT e.name AS employee, e.first_contract_date AS joined,
+             v.job_title, d.name->>'en_US' AS department
+      FROM hr_employee e
+      LEFT JOIN hr_version v ON v.id = e.current_version_id
+      LEFT JOIN hr_department d ON d.id = v.department_id
+      WHERE e.active
+        AND e.first_contract_date >= CURRENT_DATE - INTERVAL '12 months'
+      ORDER BY e.first_contract_date DESC

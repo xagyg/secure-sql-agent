@@ -155,6 +155,16 @@ class DomainSpec(_Strict):
     fallback_tables: list[str] = []
 
 
+class RetrievalSpec(_Strict):
+    """Per-database overrides of config/settings/retrieval.yaml. A key
+    left out uses the global value."""
+    blend: bool | None = None
+    hub_threshold: int | None = Field(default=None, ge=0)
+    named_outside_domain: Literal["walk", "add", "note"] | None = None
+    hub_tables: list[str] = []        # always hubs, whatever their count
+    not_hub_tables: list[str] = []    # never hubs, whatever their count
+
+
 class SourcesSpec(_Strict):
     include: list[str] = list(INCLUDE_EVERYTHING)
     exclude: list[str] = []
@@ -164,6 +174,7 @@ class SourcesSpec(_Strict):
 class SemanticFile(_Strict):
     version: Literal[1] = 1
     sources: SourcesSpec | None = None
+    retrieval: RetrievalSpec | None = None
     fallback_tables: list[str] | None = None
     tables: dict[str, TableSpec] = {}
     relationships: list[RelationshipSpec] = []
@@ -219,6 +230,9 @@ class SemanticModel:
     domains: dict = field(default_factory=dict)         # key -> dict (see domains.py)
     role_aliases: dict = field(default_factory=dict)    # role -> set of names
     function_aliases: dict = field(default_factory=dict)  # code -> set of names
+    # Per-database retrieval overrides (RetrievalSpec); only keys that
+    # were set, so .get(key, global_value) falls back to retrieval.yaml.
+    retrieval: dict = field(default_factory=dict)
     sources: tuple = ()                                 # files it was loaded from
 
     @classmethod
@@ -318,7 +332,7 @@ def load_semantic_model(path=None):
 
     files = _files(path)
     model = SemanticModel(sources=tuple(str(f) for f in files))
-    seen_sources = seen_fallback = None
+    seen_sources = seen_fallback = seen_retrieval = None
     tables, terms, domains, role_aliases, function_aliases = {}, {}, {}, {}, {}
 
     for file in files:
@@ -339,6 +353,13 @@ def load_semantic_model(path=None):
             model.include = tuple(parsed.sources.include)
             model.exclude = tuple(parsed.sources.exclude)
             model.use_database_foreign_keys = parsed.sources.use_database_foreign_keys
+
+        if parsed.retrieval is not None:
+            if seen_retrieval:
+                raise SemanticModelError(
+                    f"{file}: 'retrieval' is already defined in {seen_retrieval}")
+            seen_retrieval = file
+            model.retrieval = parsed.retrieval.model_dump(exclude_none=True)
 
         if parsed.fallback_tables is not None:
             if seen_fallback:

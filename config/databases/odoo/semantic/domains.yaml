@@ -1,0 +1,258 @@
+# Domains of Discourse for Odoo 19 (see sqlagent/adaptive/domains.py for how
+# they are scored, and config/databases/northwind/semantic/domains.yaml for
+# what each key means). A domain only changes WHERE the schema search
+# starts; it never changes what a user may see.
+#
+# Odoo's domains follow its apps: Sales, CRM, Purchase, Inventory,
+# Invoicing / Accounting, Employees, Manufacturing, Project. A table from
+# an app that isn't installed is skipped at startup.
+#
+# Role keys match the roles in config/databases/odoo/security.yaml
+# (sales, purchasing, inventory, finance, hr, manufacturing) plus job
+# titles that may arrive in the [who=...] tag.
+#
+# Odoo's tables are in public, so bare names are used throughout.
+
+version: 1
+
+# Overrides of config/settings/retrieval.yaml for Odoo. Its domains share
+# many tables (res_partner is in Sales, CRM, Purchase and Accounting), so
+# the top two often score within blend_margin, and searching both doubled
+# an already large schema. Use the top domain only: the relationship walk
+# still crosses into neighbouring domains.
+retrieval:
+  blend: false
+
+domains:
+  sales:
+    label: Sales
+    aliases: [sales, selling, revenue, quotation, order_entry,
+              customer_service, sales_order]
+    tables:
+      - sale_order
+      - sale_order_line
+      - res_partner
+      - product_product
+      - product_template
+      - product_pricelist
+      - product_pricelist_item
+      - crm_team
+      - crm_team_member
+      - res_users
+    roles: {sales: 1.0, sales_rep: 1.0, sales_manager: 1.0, finance: 0.4}
+    where: [sales_order_entry, quotation_entry, sales_workbench,
+            customer_enquiry, customer_maintenance, sales_analysis]
+    hops: 1
+    fallback_tables: [sale_order, sale_order_line, res_partner,
+                      product_product, product_template]
+
+  crm:
+    label: CRM & Pipeline
+    aliases: [crm, pipeline, lead, opportunity, prospecting, forecast,
+              business_development]
+    tables:
+      - crm_lead
+      - crm_stage
+      - crm_lost_reason
+      - crm_team
+      - crm_team_member
+      - res_partner
+      - res_users
+    roles: {sales: 0.8, sales_rep: 1.0, sales_manager: 1.0, marketing: 0.6}
+    where: [pipeline, crm_workbench, lead_entry, opportunity_review]
+    hops: 1
+    fallback_tables: [crm_lead, crm_stage, res_partner]
+
+  products:
+    label: Products & Catalogue
+    aliases: [product, products, catalogue, catalog, pricing, price_list,
+              merchandising]
+    tables:
+      - product_template
+      - product_product
+      - product_category
+      - product_pricelist
+      - product_pricelist_item
+      - product_supplierinfo
+      - uom_uom
+    roles: {product_manager: 1.0, sales: 0.5, purchasing: 0.4, inventory: 0.4}
+    where: [product_maintenance, catalogue_maintenance, price_list, product_enquiry]
+    hops: 1
+    fallback_tables: [product_template, product_product, product_category]
+
+  purchasing:
+    label: Purchasing
+    aliases: [purchasing, procurement, buying, sourcing, rfq, supply_chain]
+    tables:
+      - purchase_order
+      - purchase_order_line
+      - vendor_delay_report
+      - product_supplierinfo
+      - res_partner
+      - product_product
+      - product_template
+    roles: {purchasing: 1.0, buyer: 1.0, finance: 0.3, inventory: 0.4}
+    where: [purchase_order_entry, rfq_entry, vendor_maintenance,
+            supplier_maintenance, purchase_enquiry]
+    hops: 1
+    fallback_tables: [purchase_order, purchase_order_line, res_partner,
+                      product_supplierinfo]
+
+  inventory:
+    label: Inventory & Logistics
+    aliases: [inventory, stock, stock_control, warehouse, logistics,
+              shipping, delivery, dispatch, receiving, fulfilment]
+    tables:
+      - stock_quant
+      - stock_location
+      - stock_warehouse
+      - stock_picking
+      - stock_picking_type
+      - stock_move
+      - stock_move_line
+      - stock_lot
+      - stock_warehouse_orderpoint
+      - report_stock_quantity
+      - product_product
+      - product_template
+    roles: {inventory: 1.0, warehouse: 1.0, dispatcher: 1.0,
+            purchasing: 0.4, sales: 0.2}
+    where: [stock_control, inventory_enquiry, dispatch, shipping_desk,
+            receiving, warehouse_management]
+    hops: 1
+    fallback_tables: [stock_quant, stock_location, stock_picking, product_product]
+
+  finance:
+    label: Accounting & Invoicing
+    aliases: [finance, financials, accounting, accounts, invoicing, billing,
+              accounts_receivable, accounts_payable, general_ledger, gl,
+              cash, payment, tax, margin]
+    tables:
+      - account_move
+      - account_move_line
+      - account_account
+      - account_journal
+      - account_payment
+      - account_tax
+      - account_payment_term
+      - account_analytic_account
+      - account_analytic_line
+      - res_partner
+      - res_currency
+      - res_currency_rate
+    roles: {finance: 1.0, accountant: 1.0, ar_clerk: 1.0, ap_clerk: 1.0}
+    where: [invoice_entry, bill_entry, ar_enquiry, ap_enquiry, credit_control,
+            month_end, general_ledger, payment_entry]
+    hops: 1
+    fallback_tables: [account_move, account_move_line, res_partner, account_account]
+
+  hr:
+    label: Employees
+    aliases: [hr, human_resources, people, personnel, headcount, staff,
+              time_off, leave]
+    tables:
+      - hr_employee
+      - hr_version
+      - hr_department
+      - hr_job
+      - hr_work_location
+      - hr_leave
+      - hr_leave_allocation
+      - hr_work_entry_type
+    roles: {hr: 1.0, hr_officer: 1.0, sales_manager: 0.2}
+    where: [hr_enquiry, staff_records, employee_maintenance, time_off]
+    hops: 1
+    fallback_tables: [hr_employee, hr_version, hr_department, hr_job]
+
+  manufacturing:
+    label: Manufacturing
+    aliases: [manufacturing, production, factory, shop_floor, mrp, bom,
+              maintenance, equipment]
+    tables:
+      - mrp_production
+      - mrp_workorder
+      - mrp_bom
+      - mrp_bom_line
+      - mrp_routing_workcenter
+      - mrp_workcenter
+      - maintenance_equipment
+      - maintenance_request
+      - product_product
+      - product_template
+      - stock_move
+    roles: {manufacturing: 1.0, production_planner: 1.0, inventory: 0.4}
+    where: [manufacturing_order_entry, shop_floor_control, bom_maintenance,
+            production_scheduling]
+    hops: 1
+    fallback_tables: [mrp_production, mrp_bom, product_product]
+
+  projects:
+    label: Projects
+    aliases: [project, projects, task, tasks, delivery_team]
+    tables:
+      - project_project
+      - project_task
+      - project_task_type
+      - project_task_user_rel
+      - project_milestone
+      - report_project_task_user
+      - res_users
+      - res_partner
+    roles: {projects: 1.0, project_manager: 1.0}
+    where: [project_board, task_list]
+    hops: 1
+    fallback_tables: [project_project, project_task]
+
+  contacts:
+    label: Contacts
+    aliases: [contacts, address_book, directory, partners]
+    tables:
+      - res_partner
+      - res_partner_category
+      - res_partner_res_partner_category_rel
+      - res_partner_industry
+      - res_country
+      - res_country_state
+      - res_company
+    roles: {}
+    where: [contact_maintenance, address_book]
+    hops: 0
+    fallback_tables: [res_partner, res_country, res_country_state]
+
+# Friendly names for role codes, so the [who=...] tag can use business words.
+role_aliases:
+  sales_rep:          [sales_representative, account_manager, salesperson,
+                       account_executive]
+  sales_manager:      [head_of_sales, sales_team_leader, sales_director]
+  buyer:              [purchasing_officer, procurement_officer, purchaser]
+  purchasing:         [purchasing_manager, procurement_manager]
+  inventory:          [inventory_manager, stock_controller]
+  warehouse:          [warehouse_manager, storeman, picker, packer]
+  dispatcher:         [shipping_clerk, logistics_coordinator]
+  finance:            [finance_manager, chief_financial_officer, controller]
+  accountant:         [bookkeeper]
+  ar_clerk:           [accounts_receivable_clerk, credit_controller]
+  ap_clerk:           [accounts_payable_clerk]
+  hr_officer:         [hr_administrator, recruiter, people_officer]
+  hr:                 [hr_manager, human_resources_manager]
+  manufacturing:      [production_manager, plant_manager]
+  production_planner: [production_scheduler, mrp_planner]
+  product_manager:    [marketing_manager, category_manager]
+  project_manager:    [project_lead, delivery_manager]
+
+# Function / screen codes mapped to location names used in domains.*.where.
+# Odoo's own menu names, so "[where=Sales / Orders]"-style tags can be
+# normalised to these.
+function_aliases:
+  SAL0100: [sales_order_entry]
+  SAL0200: [customer_maintenance]
+  CRM0100: [pipeline]
+  PRD0100: [product_maintenance]
+  PUR0100: [purchase_order_entry]
+  INV0100: [stock_control]
+  SHP0050: [dispatch]
+  FIN0100: [invoice_entry]
+  FIN0200: [bill_entry]
+  HR0200:  [staff_records]
+  MRP0100: [manufacturing_order_entry]
+  PRJ0100: [project_board]

@@ -41,6 +41,7 @@ from sqlagent.adaptive.text_match import (
     TERM_MATCH,
     correct_words,
     fuzzy_available,
+    word_frequency_available,
     phrase_matches,
     phrase_parts,
     tokenize,
@@ -49,7 +50,13 @@ from sqlagent.adaptive.text_match import (
 from sqlagent.settings import get_settings
 
 
+# json/jsonb columns get JSON_NOTE in the schema shown to the model, unless
+# their description already explains how to read them (_json_note).
+JSON_TYPES = ("json", "jsonb")
+JSON_NOTE = "JSON: not plain text or a number"
+
 _warned_no_fuzzy = False
+_warned_no_wordfreq = False
 
 
 def _warn_no_fuzzy():
@@ -58,6 +65,14 @@ def _warn_no_fuzzy():
     _warned_no_fuzzy = True
     print("[schema] Typo correction is enabled but rapidfuzz is not "
           "installed - matching stays exact (pip install -r requirements.txt)")
+
+
+def _warn_no_wordfreq():
+    """Say once that the common-word check is on but can't run."""
+    global _warned_no_wordfreq
+    _warned_no_wordfreq = True
+    print("[schema] Typo correction: wordfreq is not installed, so real "
+          "English words may be 'corrected' (pip install -r requirements.txt)")
 
 
 class EmptyCatalogError(RuntimeError):
@@ -101,6 +116,9 @@ class SchemaCatalog:
         # tables and domains (see question_terms). Reset by refresh().
         self._vocabulary = None
         self._last_terms = (None, frozenset())
+        # Hub tables (see hub_tables()), worked out on first use from the
+        # relationship graph and cached until it changes.
+        self._hubs = (None, frozenset())
 
     # ------------------------------------------------------------------
     # Lookup
@@ -155,6 +173,13 @@ class SchemaCatalog:
         self.domain_resolver = DomainResolver(self)
         self._vocabulary = None
         self._last_terms = (None, frozenset())
+        self._hubs = (None, frozenset())
+        hubs = sorted(self.hub_tables())
+        if hubs:
+            shown = ", ".join(hubs[:10])
+            more = f" and {len(hubs) - 10} more" if len(hubs) > 10 else ""
+            print(f"[schema] {len(hubs)} hub table(s), not walked back from: "
+                  f"{shown}{more}")
 
     def _empty_reason(self):
         """Why no tables loaded, as a hint for whoever reads the startup log."""
@@ -228,9 +253,15 @@ class SchemaCatalog:
     def _attach_terms(self):
         """
         Attach each term to its table, if the table and every column the
-        term uses are loaded. A predicate must be a plain condition on the
-        table's own columns (no subqueries, no other tables), so a term
-        can't be used to reach data the catalog doesn't show.
+        term uses are loaded. A predicate is a condition on the table's own
+        columns, optionally with EXISTS / NOT EXISTS subqueries ("a
+        customer is a partner with a confirmed order"). Every table and
+        column a predicate uses must be in the loaded (authorised) catalog,
+        so a term can't be used to reach data the catalog doesn't show.
+        An EXISTS only says whether matching rows exist; other subqueries
+        (scalar, IN (SELECT ...)) and SELECT * are rejected. The term is
+        text for the model: the SQL it ends up in is validated like any
+        other.
         """
         import sqlglot
         from sqlglot import exp
@@ -257,14 +288,11 @@ class SchemaCatalog:
                     print(f"[schema] Term '{term.name}': predicate can't be "
                           "parsed - skipped")
                     continue
-                if any(condition.find_all(exp.Select, exp.Table, exp.Star)):
-                    print(f"[schema] Term '{term.name}': predicate may only use "
-                          "the table's own columns - skipped")
+                problem = self._predicate_problem(condition, table, exp)
+                if problem:
+                    print(f"[schema] Term '{term.name}': {problem} - skipped")
                     continue
-                missing = [
-                    c.name for c in condition.find_all(exp.Column)
-                    if self._find_column(table, c.name) is None
-                ]
+                missing = self._predicate_missing_columns(condition, table, exp)
                 if missing:
                     print(f"[schema] Term '{term.name}': column(s) "
                           f"{', '.join(sorted(set(missing)))} not available - skipped")
@@ -279,6 +307,52 @@ class SchemaCatalog:
             })
             attached += 1
         return attached
+
+    def _predicate_problem(self, condition, table, exp):
+        """Why a term predicate isn't allowed, or None. Subqueries must be
+        the direct argument of EXISTS (NOT EXISTS is NOT over EXISTS),
+        and every table they read must be loaded."""
+        if any(condition.find_all(exp.Star)):
+            return "predicate may not use SELECT *"
+        for select in condition.find_all(exp.Select):
+            parent = select.parent
+            if isinstance(parent, exp.Subquery):
+                parent = parent.parent
+            if not isinstance(parent, exp.Exists):
+                return ("predicate may only use the table's own columns and "
+                        "EXISTS / NOT EXISTS subqueries")
+        for ref in condition.find_all(exp.Table):
+            name = f"{ref.db}.{ref.name}" if ref.db else ref.name
+            if self.resolve_table_name(name) is None:
+                return f"table '{name}' not available"
+        return None
+
+    def _predicate_missing_columns(self, condition, table, exp):
+        """Columns a predicate uses that aren't loaded. A qualified column
+        (so.partner_id, res_partner.id) is checked against the table its
+        qualifier names; an unqualified one must be in the term's table or
+        one of the tables the predicate reads."""
+        own = f"{table['schema']}.{table['name']}"
+        by_qualifier = {table["name"].lower(): own}
+        for ref in condition.find_all(exp.Table):
+            full = self.resolve_table_name(
+                f"{ref.db}.{ref.name}" if ref.db else ref.name)
+            by_qualifier[ref.name.lower()] = full
+            if ref.alias:
+                by_qualifier[ref.alias.lower()] = full
+        readable = set(by_qualifier.values())
+
+        missing = []
+        for column in condition.find_all(exp.Column):
+            if column.table:
+                target = by_qualifier.get(column.table.lower())
+                if target is None or self._find_column(
+                        self.tables[target], column.name) is None:
+                    missing.append(f"{column.table}.{column.name}")
+            elif not any(self._find_column(self.tables[t], column.name)
+                         for t in readable):
+                missing.append(column.name)
+        return missing
 
     def _build_fallback_schema(self):
         """
@@ -599,13 +673,18 @@ class SchemaCatalog:
 
         if config.enabled and not fuzzy_available() and not _warned_no_fuzzy:
             _warn_no_fuzzy()
+        if (config.enabled and config.common_word_zipf
+                and not word_frequency_available() and not _warned_no_wordfreq):
+            _warn_no_wordfreq()
 
         if config.enabled and fuzzy_available() and self.tables:
             known, candidates = self.vocabulary()
             corrections, ambiguous = correct_words(
                 question, known, candidates,
                 min_score=config.min_score, min_length=config.min_length,
-                margin=config.margin, skip=GENERIC_TERMS)
+                margin=config.margin, skip=GENERIC_TERMS,
+                same_first_letter=config.same_first_letter,
+                common_word_zipf=config.common_word_zipf)
             for word, (fixed, score) in corrections.items():
                 print(f"[schema] Typo correction: {word} -> {fixed} ({score})")
                 terms |= tokenize(fixed)
@@ -673,6 +752,7 @@ class SchemaCatalog:
             of the global list.
         """
         fallback_names = self.fallback_table_names
+        unwalked = set()   # added to the schema, but not walked from
 
         if anchors:
             selected = {name for name in anchors if name in self.tables}
@@ -699,9 +779,17 @@ class SchemaCatalog:
             ]
             if outside:
                 names = ", ".join(t["name"] for _, t in outside)
-                print(f"[schema] Named outside the domain, added: {names}")
-                matches = sorted(matches + outside, key=lambda m: m[0],
-                                 reverse=True)
+                outside_mode = self._retrieval_setting("named_outside_domain")
+                if outside_mode == "note":
+                    print(f"[schema] Named outside the domain, not added: {names}")
+                elif outside_mode == "add":
+                    print(f"[schema] Named outside the domain, added "
+                          f"(no relationship walk): {names}")
+                    unwalked = {f"{t['schema']}.{t['name']}" for _, t in outside}
+                else:
+                    print(f"[schema] Named outside the domain, added: {names}")
+                    matches = sorted(matches + outside, key=lambda m: m[0],
+                                     reverse=True)
 
         selected = {
             f"{table['schema']}.{table['name']}"
@@ -714,7 +802,9 @@ class SchemaCatalog:
                 # Nancy's details"), but we do know the area: use the
                 # domain's fallback tables rather than the global list.
                 print("[schema] No table match in domain - using fallback tables")
-                return self._format_context(set(fallback_names))
+                return self._format_context(set(fallback_names) | unwalked)
+            if unwalked:
+                return self._format_context(unwalked)
             return ""
 
         selected = self.get_related_tables(selected, depth=relationship_depth)
@@ -729,7 +819,7 @@ class SchemaCatalog:
             print("[schema] Weak table match - adding fallback tables")
             selected |= set(fallback_names)
 
-        return self._format_context(selected)
+        return self._format_context(selected | unwalked)
 
     def discover_schema(self, question, scope=None, anchors=None):
         """
@@ -768,19 +858,76 @@ class SchemaCatalog:
 
         return self.get_fallback_schema()
 
+    # ------------------------------------------------------------------
+    # Relationship walk
+    # ------------------------------------------------------------------
+
+    def _retrieval_setting(self, key):
+        """A retrieval.relationships setting, with the database's own
+        override (semantic retrieval: section) taking precedence."""
+        overrides = getattr(self.semantic, "retrieval", None) or {}
+        if key in overrides:
+            return overrides[key]
+        return getattr(get_settings().retrieval.relationships, key)
+
+    def hub_tables(self):
+        """
+        Tables that many others point at, such as Odoo's res_company and
+        res_users (nearly every table has company_id, create_uid and
+        write_uid). Walking INTO such a table is fine; walking back OUT
+        to every table that points at it pulls most of the schema into
+        the prompt. A hub is one with more than hub_threshold distinct
+        tables pointing at it (self-references don't count), plus the
+        database's hub_tables, minus its not_hub_tables.
+        """
+        cache_key = (id(self.foreign_keys), len(self.foreign_keys))
+        if self._hubs[0] == cache_key:
+            return self._hubs[1]
+
+        threshold = self._retrieval_setting("hub_threshold")
+        overrides = getattr(self.semantic, "retrieval", None) or {}
+
+        pointing_at = {}
+        for relationship in self.foreign_keys:
+            source, target = relationship["from_table"], relationship["to_table"]
+            if source != target:
+                pointing_at.setdefault(target, set()).add(source)
+
+        hubs = set()
+        if threshold:
+            hubs = {t for t, sources in pointing_at.items() if len(sources) > threshold}
+        for name in overrides.get("hub_tables", ()):
+            match = self.resolve_table_name(name)
+            if match:
+                hubs.add(match)
+        for name in overrides.get("not_hub_tables", ()):
+            hubs.discard(self.resolve_table_name(name))
+
+        self._hubs = (cache_key, frozenset(hubs))
+        return self._hubs[1]
+
     def get_related_tables(self, selected, depth=1):
+        """
+        selected plus the tables within `depth` relationship hops.
+
+        A foreign key is followed outward (from the table that holds it to
+        the table it points at) from any table. It is followed inward
+        (from the table pointed at back to the table holding the key)
+        only from a table that isn't a hub (hub_tables()). A hub itself is
+        always included when selected or reached.
+        """
+        hubs = self.hub_tables()
         related = set(selected)
 
         for _ in range(depth):
             expanded = set(related)
 
             for relationship in self.foreign_keys:
-                if (
-                    relationship["from_table"] in related
-                    or relationship["to_table"] in related
-                ):
-                    expanded.add(relationship["from_table"])
-                    expanded.add(relationship["to_table"])
+                source, target = relationship["from_table"], relationship["to_table"]
+                if source in related:
+                    expanded.add(target)
+                if target in related and target not in hubs:
+                    expanded.add(source)
 
             related = expanded
 
@@ -789,6 +936,29 @@ class SchemaCatalog:
     # ------------------------------------------------------------------
     # Formatting
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def context_summary(schema, largest=5):
+        """
+        A one-line summary of a partial schema for the log: how many
+        tables, and the largest by line count, e.g.
+        "23 table(s); largest: res_partner (181), account_move (140)".
+        """
+        sizes, current = [], None
+        for line in schema.splitlines():
+            if line.startswith("TABLE "):
+                name = line[len("TABLE "):].split("  --")[0].strip()
+                current = [name, 1]
+                sizes.append(current)
+            elif current and line.startswith(" "):
+                current[1] += 1
+            elif line.strip():
+                current = None     # RELATIONSHIPS, TERMS, ...
+        if not sizes:
+            return "0 tables"
+        top = sorted(sizes, key=lambda s: -s[1])[:largest]
+        return (f"{len(sizes)} table(s); largest: "
+                + ", ".join(f"{name} ({count})" for name, count in top))
 
     def _format_context(self, selected):
         lines = []
@@ -813,6 +983,9 @@ class SchemaCatalog:
                         f"{column['type']} {nullable}")
 
                 notes = self._notes(column)
+                json_note = self._json_note(column, notes)
+                if json_note:
+                    notes = f"{notes}; {json_note}" if notes else json_note
                 if notes:
                     line += f"  -- {notes}"
 
@@ -856,6 +1029,20 @@ class SchemaCatalog:
                 lines.append(line)
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _json_note(column, notes):
+        """
+        A short warning for a json/jsonb column, from its discovered type,
+        so models don't compare it with text or use it in arithmetic. None
+        for other columns, or when the column's own description already
+        explains its JSON (e.g. "JSONB by language: use name->>'en_US'").
+        """
+        if str(column.get("type", "")).lower() not in JSON_TYPES:
+            return None
+        if "json" in (notes or "").lower():
+            return None
+        return JSON_NOTE
 
     @staticmethod
     def _notes(item):

@@ -1,0 +1,1032 @@
+# Semantic model for Odoo 19 (Australian localisation), checked against
+# the schema dump odoo_schema.sql (772 tables, 15 views).
+#
+# What the data MEANS: labels, aliases, relationships and terms. This file
+# grants no access - that is config/databases/odoo/security.yaml. Anything
+# here that names a table or column the role can't see is skipped at
+# startup and never shown to the model.
+#
+# All files in this folder are merged (domains are in domains.yaml).
+#
+# Things about this database worth knowing:
+#   - Odoo models become tables by swapping "." for "_": sale.order is
+#     sale_order, res.partner is res_partner. Everything is in public.
+#   - Translatable names are JSONB keyed by language: read them with
+#     name->>'en_US'. JSONB names: product_template, product_category,
+#     product_pricelist, uom_uom, res_country, res_partner_category,
+#     res_partner_industry, crm_team, crm_stage, crm_lost_reason,
+#     account_account, account_journal, account_tax, account_payment_term,
+#     account_analytic_account, hr_department, hr_job, hr_work_entry_type,
+#     project_project, project_task_type, stock_picking_type,
+#     maintenance_equipment. Plain text names: res_partner, res_company,
+#     res_country_state, res_currency, sale_order, purchase_order,
+#     account_move, stock_picking, stock_location, stock_warehouse,
+#     crm_lead, hr_employee, project_task, mrp_production.
+#   - Company-dependent values are JSONB keyed by company id as text:
+#     account_account.code_store->>'1' is the account code in company 1,
+#     (product_product.standard_price->>'1')::numeric is the cost.
+#   - A product has a template (product_template: name, price, category)
+#     and one or more variants (product_product: default_code, barcode,
+#     cost). Order, invoice and stock lines point at product_product; join
+#     through product_tmpl_id for the name.
+#   - Customers, vendors, companies and contacts are all res_partner.
+#     A contact person's parent_id is its company; commercial_partner_id
+#     is the top-level company. customer_rank / supplier_rank only rise
+#     when invoices / bills are posted, so they are often 0 - a customer is
+#     a partner with a confirmed sales order (see the customer term). A user (res_users) has its
+#     name on its partner (partner_id).
+#   - Invoices, bills, credit notes and journal entries are all
+#     account_move, told apart by move_type.
+#   - Odoo 19 keeps an employee's job, department and contract details in
+#     hr_version (one row per change); the current one is
+#     hr_employee.current_version_id.
+#   - Every table has create_uid / write_uid (-> res_users), create_date
+#     and write_date. Use the business dates (date_order, invoice_date,
+#     date_done) for "when", not create_date.
+#   - Archived records have active = false and are hidden in Odoo's UI;
+#     filter on active = true unless the question asks for archived ones.
+#   - Currency is AUD and the sales tax is GST.
+#   - Odoo declares real foreign keys for every many2one, so joins come
+#     from the database. Views have none; their joins are below.
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Discovery. Odoo has hundreds of tables: technical (ir_*), messaging
+# (mail_*), web assets, wizards. Only the business modules are read.
+# ---------------------------------------------------------------------------
+sources:
+  # Every table and view in public; the exclude list below drops the
+  # families no role should see (the same ones the explorer role denies
+  # in security.yaml) and temporary screen data. Discovery never grants
+  # access: each role still sees only what security.yaml allows.
+  include: ["public.*"]
+  exclude:
+    # Wizards (transient models) and settings.
+    - "public.*_wizard*"
+    - "public.*_config_settings"
+    # Bank details, card / payment tokens and online-payment secrets.
+#    - "public.res_partner_bank"
+#    - "public.payment_*"
+#    - "public.account_online_*"
+    # Images and binary payloads.
+    - "public.product_image"
+    # Employee personal and pay details beyond what any question needs.
+#    - "public.hr_employee_public"
+#    - "public.hr_contract*"
+#    - "public.hr_payslip*"
+#    - "public.hr_salary*"
+#    - "public.hr_applicant*"
+#    - "public.hr_candidate*"
+    # Accounting technicalities with no business vocabulary.
+    - "public.account_*_template"
+    - "public.account_edi_*"
+    - "public.account_reconcile_model*"
+    - "public.account_account_tag*"
+    - "public.account_root"
+    # Secrets, credentials, messages, pay, private calendars and plumbing
+    # (matches the explorer role's deny list in security.yaml).
+    - "public.ir_*"
+    - "public.res_users_apikeys*"
+    - "public.auth_*"
+    - "public.res_device*"
+    - "public.res_session*"
+    - "public.change_password*"
+    - "public.employee_bank_account_rel"
+    - "public.mail_*"
+    - "public.discuss_*"
+    - "public.bus_*"
+    - "public.sms_*"
+    - "public.fetchmail_*"
+#    - "public.hr_payroll*"
+    - "public.calendar_*"
+    - "public.privacy_*"
+    - "public.web_*"
+    - "public.base_import*"
+    - "public.iap_*"
+    - "public.spreadsheet_*"
+    - "public.html_editor*"
+  use_database_foreign_keys: true
+
+# Used when a question names no table.
+fallback_tables:
+  - sale_order
+  - sale_order_line
+  - res_partner
+  - product_template
+  - product_product
+  - account_move
+
+# ---------------------------------------------------------------------------
+# Tables and columns
+# ---------------------------------------------------------------------------
+tables:
+
+  # -- partners, companies, users -----------------------------------------
+
+  res_partner:
+    label: partner
+    aliases: [customer, client, vendor, supplier, contact, company,
+              account, buyer, address_book]
+    description: >-
+      Every customer, vendor, company and contact person. is_company
+      separates companies from people. A contact person points UP to its
+      company: the contacts at a company are the partners whose parent_id
+      is the company's id (child.parent_id = company.id), never the
+      company's own parent_id. commercial_partner_id is the top-level
+      company of any partner (itself, for a company). Orders and invoices
+      may be addressed to a contact person rather than the company, so to
+      total a company's orders or invoices join on commercial_partner_id,
+      not partner_id = the company's id. Find a partner by name with
+      ILIKE (name ILIKE '%gemini furniture%'). Do NOT filter on
+      customer_rank or supplier_rank to find a customer or vendor by name:
+      they are often 0. user_id is the salesperson responsible for the
+      partner, buyer_id the purchasing representative.
+    columns:
+      name:          {aliases: [customer_name, vendor_name, company_name]}
+      complete_name: {label: full name, description: "Company, Contact name"}
+      is_company:    {label: is company}
+      parent_id:     {label: parent company, aliases: [employer, organisation], description: "on a contact person, the company they work for"}
+      commercial_partner_id: {label: commercial entity, aliases: [top_level_company], description: "the company a partner belongs to (itself for a company); group company totals on this"}
+      customer_rank: {label: customer rank, description: "only increased when customer invoices are posted - often 0 for real customers; don't filter on it"}
+      supplier_rank: {label: supplier rank, description: "only increased when vendor bills are posted - often 0 for real vendors; don't filter on it"}
+      user_id:       {label: salesperson, aliases: [account_manager, sales_rep]}
+      buyer_id:      {label: purchasing representative, aliases: [buyer, purchaser]}
+      function:      {label: job position, aliases: [job_title, position]}
+      vat:           {label: tax id, aliases: [abn, vat_number, tax_number]}
+      zip:           {aliases: [postcode, postal_code, zip_code]}
+      state_id:      {label: state}
+      country_id:    {label: country}
+      industry_id:   {label: industry, aliases: [sector]}
+      ref:           {label: reference, aliases: [customer_code, account_number]}
+      type:          {label: address type, description: "contact, invoice, delivery, other"}
+
+  res_partner_category:
+    label: partner tag
+    aliases: [customer_tag, contact_tag, segment]
+    description: Tags on partners. name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  res_partner_res_partner_category_rel:
+    label: partner tag link
+    description: Which tags (category_id) each partner (partner_id) has.
+
+  res_partner_industry:
+    label: industry
+    aliases: [sector]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  res_company:
+    label: company
+    aliases: [our_company, legal_entity, business_unit]
+    description: >-
+      The companies this Odoo database runs (multi-company). Almost every
+      business table has company_id. partner_id holds the company's address.
+
+  res_users:
+    label: user
+    aliases: [salesperson, sales_rep, buyer, responsible, owner]
+    description: >-
+      People who sign in to Odoo. The user's name is on its partner:
+      join res_partner ON res_partner.id = res_users.partner_id.
+      share = true are portal / public users, not staff.
+    columns:
+      login:        {aliases: [username, user_name]}
+      share:        {description: "true = portal or public user, not an internal user"}
+      sale_team_id: {label: sales team}
+
+  res_currency:
+    label: currency
+    description: name is the ISO code (AUD, USD, EUR).
+
+  res_currency_rate:
+    label: currency rate
+    aliases: [exchange_rate, fx_rate]
+    description: >-
+      rate = units of this currency per one unit of the company currency,
+      from the date in name onwards.
+
+  res_country:
+    label: country
+    aliases: [nation]
+    description: name is JSONB (name->>'en_US'); code is the ISO code.
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' = 'Australia'), never name = 'text'; for a country, code = 'AU' is simpler"}
+      code: {label: country code, aliases: [iso_code, country_code], description: "two-letter ISO code, e.g. 'AU' for Australia, 'NZ', 'US' - plain text"}
+      vat_label: {description: "JSONB by language: use vat_label->>'en_US', never vat_label = 'text'"}
+
+  res_country_state:
+    label: state
+    aliases: [province, region, territory]
+
+  uom_uom:
+    label: unit of measure
+    aliases: [uom, unit]
+    description: >-
+      name is JSONB (name->>'en_US'). Odoo 19 has no unit categories: a
+      unit is relative_factor times its reference unit (relative_uom_id).
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  # -- products ------------------------------------------------------------
+
+  product_template:
+    label: product
+    aliases: [item, goods, sku, service, catalogue, catalog, merchandise]
+    description: >-
+      The product as sold: name, category, sale price and type. name is
+      JSONB - use name->>'en_US'. Variants (sizes, colours) are
+      product_product rows pointing here through product_tmpl_id. The cost
+      is on the variant (product_product.standard_price).
+    columns:
+      name: {label: product name, description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      list_price:  {label: sales price, aliases: [price, sell_price, retail_price]}
+      categ_id:    {label: product category, aliases: [category]}
+      type:
+        label: product type
+        description: "consu = goods, service = service, combo = combo / bundle"
+      is_storable: {label: track inventory, aliases: [stocked, storable], description: "true = stock is tracked"}
+      sale_ok:     {label: can be sold}
+      purchase_ok: {label: can be purchased}
+      default_code: {label: internal reference, aliases: [sku, part_number, item_code]}
+      invoice_policy: {label: invoicing policy, description: "order = invoice what is ordered, delivery = invoice what is delivered"}
+      description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
+      description_purchase: {description: "JSONB by language: use description_purchase->>'en_US', never description_purchase = 'text'"}
+      description_sale: {description: "JSONB by language: use description_sale->>'en_US', never description_sale = 'text'"}
+      description_picking: {description: "JSONB by language: use description_picking->>'en_US', never description_picking = 'text'"}
+
+  product_product:
+    label: product variant
+    aliases: [variant, sku, item]
+    description: >-
+      A sellable variant of a product_template. Order, invoice and stock
+      lines point here. For the name join product_template on
+      product_tmpl_id and use product_template.name->>'en_US'.
+      standard_price (the cost) is JSONB by company:
+      (standard_price->>'1')::numeric. For stock on hand use stock_quant,
+      not qty_available.
+    columns:
+      default_code:   {label: internal reference, aliases: [sku, part_number, item_code, product_code]}
+      barcode:        {aliases: [ean, upc, gtin]}
+      standard_price: {label: cost, aliases: [unit_cost, cost_price], description: "JSONB by company: use (standard_price->>'1')::numeric (company 1's cost), never standard_price = value"}
+      qty_available: {description: "NOT stock on hand - a JSONB column Odoo doesn't keep up to date; never use it. For stock use SUM(stock_quant.quantity) in internal locations (stock_location.usage = 'internal')"}
+
+  product_category:
+    label: product category
+    aliases: [category, product_group, product_family]
+    description: >-
+      name is JSONB (name->>'en_US'). parent_id is the parent category;
+      parent_path holds the ids from the root ("1/4/9/").
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  product_pricelist:
+    label: pricelist
+    aliases: [price_list, price_book]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  product_pricelist_item:
+    label: pricelist rule
+    aliases: [special_price, discount_rule]
+
+  product_supplierinfo:
+    label: vendor price
+    aliases: [supplier_price, vendor_pricelist, purchase_price]
+    description: >-
+      What a vendor (partner_id) charges for a product (product_tmpl_id,
+      or one variant in product_id), from min_qty, with lead time delay
+      (days), valid date_start to date_end.
+    columns:
+      partner_id: {label: vendor, aliases: [supplier]}
+      delay:      {label: lead time, aliases: [lead_time_days]}
+
+  # -- sales -----------------------------------------------------------------
+
+  sale_order:
+    label: sales order
+    aliases: [order, quotation, quote, sale, booking]
+    description: >-
+      Quotations and sales orders. state: draft = quotation, sent =
+      quotation sent, sale = confirmed sales order, cancel = cancelled.
+      Revenue questions count state = 'sale' only. amount_untaxed is
+      before GST, amount_total includes it. margin is revenue less cost.
+      This version has no sales analysis view: sum sale_order_line.
+    columns:
+      name:            {label: order number, aliases: [order_no, so_number, reference]}
+      date_order:      {label: order date, aliases: [ordered, sold]}
+      partner_id:      {label: customer, aliases: [client]}
+      user_id:         {label: salesperson, aliases: [sales_rep, account_manager]}
+      team_id:         {label: sales team}
+      amount_untaxed:  {label: untaxed amount, aliases: [net, subtotal, revenue]}
+      amount_total:    {label: total, aliases: [order_value, gross]}
+      amount_unpaid:   {label: amount unpaid, aliases: [balance_owing]}
+      margin:          {aliases: [gross_profit, profit]}
+      invoice_status:
+        label: invoice status
+        description: "upselling, invoiced, to invoice, no = nothing to invoice"
+      delivery_status:
+        label: delivery status
+        description: "pending, started, partial, full; null for services"
+      commitment_date: {label: delivery date, aliases: [promised_date, due_date]}
+      client_order_ref: {label: customer reference, aliases: [customer_po, po_number]}
+      opportunity_id:  {label: opportunity}
+
+  sale_order_line:
+    label: sales order line
+    aliases: [order_line, line_item, sale_line]
+    description: >-
+      Lines of a sales order (order_id). price_subtotal is the line before
+      GST, price_total after. display_type is not null for section and
+      note lines, which carry no product - exclude them when summing.
+      salesman_id is the order's salesperson, order_partner_id its
+      customer. margin = price_subtotal - purchase_price * quantity.
+    columns:
+      product_uom_qty: {label: quantity, aliases: [qty, units, ordered_qty]}
+      qty_delivered:   {label: delivered quantity, aliases: [shipped_qty]}
+      qty_invoiced:    {label: invoiced quantity, aliases: [billed_qty]}
+      price_unit:      {label: unit price}
+      discount:        {description: percent}
+      price_subtotal:  {label: subtotal, aliases: [line_total, revenue, net]}
+      price_total:     {label: total including tax}
+      purchase_price:  {label: cost, aliases: [unit_cost]}
+      margin:          {aliases: [gross_profit, profit]}
+      salesman_id:     {label: salesperson}
+      order_partner_id: {label: customer}
+
+  crm_team:
+    label: sales team
+    aliases: [team, sales_channel]
+    description: name is JSONB (name->>'en_US'). user_id is the team leader.
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  crm_team_member:
+    label: sales team member
+    description: Which users (user_id) are in which sales team (crm_team_id).
+
+  # -- CRM -------------------------------------------------------------------
+
+  crm_lead:
+    label: lead
+    aliases: [opportunity, deal, prospect, pipeline, enquiry]
+    description: >-
+      Leads and opportunities. type: lead or opportunity. stage_id is the
+      pipeline stage. won_status: won, lost or pending. Lost ones are
+      usually archived (active = false), so don't filter on active when
+      counting lost deals. expected_revenue is the deal value;
+      prorated_revenue = expected_revenue x probability.
+    columns:
+      expected_revenue: {label: expected revenue, aliases: [deal_value, deal_size, pipeline_value]}
+      prorated_revenue: {label: weighted revenue, aliases: [weighted_pipeline]}
+      probability:      {aliases: [win_probability, likelihood]}
+      won_status:       {label: won status, description: "won, lost, pending"}
+      date_deadline:    {label: expected closing, aliases: [close_date]}
+      date_closed:      {label: closed date, aliases: [won_date]}
+      user_id:          {label: salesperson, aliases: [owner, sales_rep]}
+      partner_id:       {label: customer}
+      partner_name:     {label: company name}
+      lost_reason_id:   {label: lost reason}
+
+  crm_stage:
+    label: pipeline stage
+    aliases: [stage, deal_stage]
+    description: name is JSONB (name->>'en_US'). is_won marks the won stage.
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  crm_lost_reason:
+    label: lost reason
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  # -- purchasing ------------------------------------------------------------
+
+  purchase_order:
+    label: purchase order
+    aliases: [po, rfq, request_for_quotation, procurement_order]
+    description: >-
+      RFQs and purchase orders. state: draft = RFQ, sent = RFQ sent,
+      to approve, purchase = confirmed PO, cancel. locked = true once
+      closed. Spend questions count state = 'purchase'. receipt_status:
+      pending, partial, full.
+    columns:
+      name:           {label: po number, aliases: [po_no, reference]}
+      partner_id:     {label: vendor, aliases: [supplier]}
+      partner_ref:    {label: vendor reference, aliases: [supplier_quote]}
+      date_order:     {label: order deadline}
+      date_approve:   {label: confirmation date, aliases: [approved_date]}
+      date_planned:   {label: expected arrival, aliases: [eta, receipt_date]}
+      date_promised:  {label: promised date}
+      user_id:        {label: buyer, aliases: [purchaser, purchasing_officer]}
+      amount_untaxed: {label: untaxed amount, aliases: [spend, net]}
+      amount_total:   {label: total}
+      receipt_status: {label: receipt status}
+      invoice_status: {label: billing status, description: "no, to invoice, invoiced"}
+
+  purchase_order_line:
+    label: purchase order line
+    aliases: [po_line, purchase_line]
+    description: display_type is not null for section and note lines.
+    columns:
+      product_qty:    {label: quantity, aliases: [qty, ordered_qty]}
+      qty_received:   {label: received quantity}
+      qty_invoiced:   {label: billed quantity}
+      price_unit:     {label: unit price, aliases: [cost]}
+      price_subtotal: {label: subtotal, aliases: [line_total, spend]}
+
+  vendor_delay_report:
+    label: vendor on-time delivery
+    aliases: [vendor_performance, supplier_performance, on_time_delivery, otd]
+    description: >-
+      One row per received purchase line: qty_on_time of qty_total arrived
+      by the promised date. On-time rate = SUM(qty_on_time) /
+      SUM(qty_total) per vendor (partner_id).
+
+  # -- inventory -------------------------------------------------------------
+
+  stock_quant:
+    label: stock on hand
+    aliases: [inventory, stock, on_hand, stock_level, quant]
+    description: >-
+      Quantity of a product (product_id) in a location (location_id).
+      Count only internal locations (stock_location.usage = 'internal')
+      for stock on hand. Available = quantity - reserved_quantity.
+    columns:
+      quantity:          {aliases: [on_hand, qty_on_hand]}
+      reserved_quantity: {label: reserved quantity, aliases: [allocated, committed]}
+
+  stock_location:
+    label: stock location
+    aliases: [location, bin, shelf]
+    description: >-
+      usage: internal = our stock, customer, supplier, inventory
+      (adjustments), production, transit, view (folders only).
+      complete_name is the full path ("WH/Stock/Shelf 1"); warehouse_id
+      is its warehouse.
+
+  stock_warehouse:
+    label: warehouse
+    aliases: [depot, distribution_centre, store]
+    columns:
+      code: {label: short name}
+
+  stock_picking:
+    label: transfer
+    aliases: [delivery, delivery_order, receipt, shipment, picking, dispatch]
+    description: >-
+      Receipts, deliveries and internal transfers; the kind is
+      stock_picking_type.code (incoming, outgoing, internal). state:
+      draft, waiting, confirmed, assigned = ready, done, cancel. sale_id is
+      the sales order a delivery is for; origin is the source document.
+    columns:
+      scheduled_date: {label: scheduled date, aliases: [planned_date]}
+      date_deadline:  {label: deadline}
+      date_done:      {label: date done, aliases: [shipped_date, received_date, effective_date]}
+      origin:         {label: source document, aliases: [so_number, po_number]}
+      sale_id:        {label: sales order}
+
+  stock_picking_type:
+    label: operation type
+    aliases: [picking_type]
+    description: >-
+      code: incoming = receipt, outgoing = delivery, internal = transfer,
+      mrp_operation = manufacturing. name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  stock_move:
+    label: stock move
+    aliases: [movement, inventory_movement]
+    description: >-
+      A product movement from location_id to location_dest_id, usually
+      part of a transfer (picking_id). Done moves (state = 'done') are
+      the stock history. sale_line_id / purchase_line_id / production_id
+      link it to its order. value is its stock valuation.
+    columns:
+      product_uom_qty: {label: demand, aliases: [planned_qty]}
+      quantity:        {aliases: [done_qty, moved_qty]}
+      value:           {label: stock value, aliases: [valuation]}
+
+  stock_move_line:
+    label: detailed operation
+    aliases: [move_line, lot_movement]
+
+  stock_lot:
+    label: lot
+    aliases: [serial_number, batch, lot_number]
+    columns:
+      standard_price: {description: "JSONB by company: use (standard_price->>'1')::numeric (company 1's cost), never standard_price = value"}
+
+  stock_warehouse_orderpoint:
+    label: reordering rule
+    aliases: [reorder_rule, min_max, reorder_point]
+    columns:
+      product_min_qty: {label: minimum quantity, aliases: [reorder_level]}
+      product_max_qty: {label: maximum quantity}
+      supplier_id:     {label: preferred vendor price}
+
+  report_stock_quantity:
+    label: stock forecast
+    aliases: [forecast, forecasted_stock, projected_stock, stock_projection]
+    description: >-
+      Odoo's forecast view: per product, warehouse and date, state = in
+      (incoming), out (outgoing) or forecast (projected on hand), with
+      product_qty.
+
+  # -- accounting ------------------------------------------------------------
+
+  account_move:
+    label: journal entry
+    aliases: [invoice, bill, credit_note, refund, entry]
+    description: >-
+      Invoices, vendor bills, credit notes and journal entries. move_type:
+      out_invoice = customer invoice, out_refund = customer credit note,
+      in_invoice = vendor bill, in_refund = vendor credit note, entry =
+      journal entry, out_receipt / in_receipt = receipts. state: draft,
+      posted, cancel - only posted counts. amount_total is in the
+      document currency; amount_total_signed is in AUD and negative for
+      refunds. amount_residual is what is still owed. This version has no
+      invoice analysis view: sum account_move or account_move_line.
+    columns:
+      name:                {label: number, aliases: [invoice_number, bill_number]}
+      ref:                 {label: reference, aliases: [vendor_reference]}
+      move_type:           {label: type}
+      date:                {label: accounting date}
+      invoice_date:        {label: invoice date, aliases: [bill_date]}
+      invoice_date_due:    {label: due date, aliases: [payment_due]}
+      partner_id:          {label: partner, aliases: [customer, vendor]}
+      invoice_user_id:     {label: salesperson}
+      amount_untaxed:      {label: untaxed amount, aliases: [net]}
+      amount_tax:          {label: tax, aliases: [gst]}
+      amount_total:        {label: total}
+      amount_residual:     {label: amount due, aliases: [outstanding, balance_due, owing, unpaid_amount]}
+      payment_state:
+        label: payment status
+        description: "not_paid, partial, in_payment, paid, reversed"
+      invoice_origin:      {label: source document, aliases: [so_number, po_number]}
+
+  account_move_line:
+    label: journal item
+    aliases: [journal_line, ledger_line, gl_line, invoice_line, transaction]
+    description: >-
+      Lines of a journal entry (move_id). balance = debit - credit in AUD.
+      display_type: product = invoice line, tax, payment_term (the
+      receivable / payable line), cogs, rounding; line_section and
+      line_note carry no amount. For the general ledger use lines whose
+      entry is posted (parent_state = 'posted').
+    columns:
+      account_id:     {label: account, aliases: [gl_account]}
+      price_subtotal: {label: subtotal, aliases: [line_total]}
+      quantity:       {aliases: [qty]}
+      date_maturity:  {label: due date}
+      parent_state:   {label: entry status}
+
+  account_account:
+    label: account
+    aliases: [gl_account, ledger_account, chart_of_accounts, coa]
+    description: >-
+      Chart of accounts. name is JSONB (name->>'en_US'). The account code
+      is company-dependent JSONB: code_store->>'1' for company 1.
+      account_type: asset_receivable, liability_payable, income,
+      income_other, expense, expense_direct_cost (cost of sales),
+      expense_depreciation, asset_cash, asset_current, asset_fixed,
+      liability_current, equity, equity_unaffected and others.
+    columns:
+      code_store: {label: account code, aliases: [code, account_number], description: "JSONB by company: use code_store->>'1' (company 1's account code), never code_store = value"}
+      account_type: {label: account type}
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
+
+  account_journal:
+    label: journal
+    aliases: [sales_journal, purchase_journal, bank_journal]
+    description: >-
+      type: sale, purchase, cash, bank, credit, general. name is JSONB
+      (name->>'en_US'); code is the short code (INV, BILL).
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  account_payment:
+    label: payment
+    aliases: [receipt, remittance]
+    description: >-
+      Customer payments (payment_type = inbound) and vendor payments
+      (outbound). amount, date and state are on the payment. state:
+      draft, in_process, paid, canceled, rejected.
+
+  account_tax:
+    label: tax
+    aliases: [gst, vat, sales_tax]
+    description: >-
+      amount is the rate (10 = 10%) when amount_type = percent.
+      type_tax_use: sale, purchase or none. name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
+      invoice_label: {description: "JSONB by language: use invoice_label->>'en_US', never invoice_label = 'text'"}
+
+  account_payment_term:
+    label: payment terms
+    aliases: [terms, credit_terms]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      note: {description: "JSONB by language: use note->>'en_US', never note = 'text'"}
+
+  account_analytic_account:
+    label: analytic account
+    aliases: [cost_centre, cost_center, project_code, department_code]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  account_analytic_line:
+    label: analytic line
+    aliases: [cost_allocation, timesheet_cost]
+
+  # -- HR --------------------------------------------------------------------
+
+  hr_employee:
+    label: employee
+    aliases: [staff, worker, personnel, team_member, headcount]
+    description: >-
+      One row per employee. parent_id is the manager, coach_id the coach,
+      user_id the Odoo user (if any). active = false is archived
+      (departed). Job title, job position and department are NOT here in
+      Odoo 19: join hr_version v ON v.id = hr_employee.current_version_id.
+    columns:
+      parent_id:  {label: manager, aliases: [supervisor, reports_to, boss]}
+      coach_id:   {label: coach, aliases: [mentor]}
+      work_email: {label: work email, aliases: [email]}
+      work_phone: {label: work phone, aliases: [phone, extension]}
+      mobile_phone: {label: work mobile}
+      first_contract_date: {label: start date, aliases: [hire_date, joined, join_date, date_joined, joining_date, start_date, date_start, employment_start, commencement_date, date_contract_start, first_contract], description: "the date the employee joined - the ONLY joining / start date on hr_employee (there is no date_joined, hire_date or date_start column)"}
+      current_version_id: {label: current employment details}
+
+  hr_version:
+    label: employment record
+    aliases: [job, position, assignment, employment]
+    description: >-
+      An employee's job, department and contract details from a date
+      (date_version); one row per change. The current one is
+      hr_employee.current_version_id. contract_date_end is null for an
+      open-ended contract.
+    columns:
+      job_title:     {label: job title, aliases: [title, position, role]}
+      job_id:        {label: job position}
+      department_id: {label: department}
+      employee_type_id: {label: employee type}
+      work_location_id: {label: work location, aliases: [office, site]}
+      contract_date_start: {label: contract start, aliases: [date_contract_start, contract_start_date], description: "start of this contract / version; for when someone joined use hr_employee.first_contract_date"}
+      contract_date_end:   {label: contract end, aliases: [end_date, finish_date]}
+
+  hr_department:
+    label: department
+    aliases: [dept, team, division]
+    description: >-
+      name is JSONB (name->>'en_US'). parent_id is the parent department,
+      manager_id the department manager.
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  hr_job:
+    label: job position
+    aliases: [position, role]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  hr_work_location:
+    label: work location
+    aliases: [office, site, home_office]
+    description: "location_type: home, office, other"
+
+  hr_leave:
+    label: time off
+    aliases: [leave, holiday, vacation, absence, annual_leave, sick_leave]
+    description: >-
+      Time-off requests. work_entry_type_id is the kind (annual, sick...).
+      state: confirm = to approve, validate1 = second approval,
+      validate = approved, refuse, cancel. number_of_days is the length.
+    columns:
+      request_date_from: {label: from, aliases: [start_date]}
+      request_date_to:   {label: to, aliases: [end_date, return_date]}
+
+  hr_work_entry_type:
+    label: time off type
+    aliases: [leave_type, absence_type]
+    description: >-
+      Kinds of time off (Odoo 19 calls them work entry types). name is
+      JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      display_code: {description: "JSONB by language: use display_code->>'en_US', never display_code = 'text'"}
+      description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
+
+  hr_leave_allocation:
+    label: time off allocation
+    aliases: [leave_entitlement, leave_allocation, accrual]
+    description: >-
+      Days of each time off type granted to an employee. state: confirm,
+      validate (approved), refuse. Balance = approved allocations minus
+      approved time off of the same type.
+
+  # -- manufacturing -----------------------------------------------------------
+
+  mrp_production:
+    label: manufacturing order
+    aliases: [mo, production_order, build]
+    description: >-
+      state: draft, confirmed, progress, to_close, done, cancel.
+      product_qty is planned, qty_producing in progress.
+    columns:
+      date_start:    {label: start date, aliases: [planned_start]}
+      date_finished: {label: end date, aliases: [finished_date]}
+      date_deadline: {label: deadline, aliases: [due_date]}
+
+  mrp_workorder:
+    label: work order
+    aliases: [operation, job_card]
+    description: >-
+      One operation of a manufacturing order (production_id) at a work
+      centre. state: blocked, ready, progress, done, cancel. duration is
+      actual minutes, duration_expected planned.
+
+  mrp_bom:
+    label: bill of materials
+    aliases: [bom, recipe, formula]
+
+  mrp_bom_line:
+    label: component
+    aliases: [bom_line, ingredient, part]
+
+  mrp_routing_workcenter:
+    label: routing operation
+    aliases: [routing, operation_step]
+
+  mrp_workcenter:
+    label: work centre
+    aliases: [work_center, machine, workstation]
+
+  maintenance_equipment:
+    label: equipment
+    aliases: [asset, machine, tool]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  maintenance_request:
+    label: maintenance request
+    aliases: [repair, breakdown, service_request, maintenance_job]
+    description: "maintenance_type: corrective (repair) or preventive"
+
+  # -- projects ----------------------------------------------------------------
+
+  project_project:
+    label: project
+    aliases: [job, engagement]
+    description: name is JSONB (name->>'en_US'). user_id is the project manager.
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+      label_tasks: {description: "JSONB by language: use label_tasks->>'en_US', never label_tasks = 'text'"}
+
+  project_task:
+    label: task
+    aliases: [ticket, to_do, job_task]
+    description: >-
+      stage_id is the column on the project's board (project_task_type).
+      Assignees are in project_task_user_rel (task_id, user_id). state:
+      01_in_progress, 02_changes_requested, 03_approved, 04_waiting_normal,
+      1_done, 1_canceled.
+    columns:
+      date_deadline: {label: deadline, aliases: [due_date]}
+      allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours]}
+
+  project_task_type:
+    label: task stage
+    aliases: [stage, column]
+    description: name is JSONB (name->>'en_US').
+    columns:
+      name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
+
+  project_task_user_rel:
+    label: task assignee
+    aliases: [assignee, assigned_to]
+
+  project_milestone:
+    label: milestone
+    columns:
+      is_reached: {label: reached}
+
+  report_project_task_user:
+    label: task analysis
+    aliases: [task_report, task_statistics]
+    description: >-
+      Odoo's task analysis view: one row per task with project, stage,
+      state, deadlines, hours and delay_endings_days.
+
+# ---------------------------------------------------------------------------
+# Relationships the database doesn't declare: Odoo's analysis views have
+# no foreign keys.
+# ---------------------------------------------------------------------------
+relationships:
+  - from: report_stock_quantity(product_id)
+    to:   product_product(id)
+  - from: report_stock_quantity(warehouse_id)
+    to:   stock_warehouse(id)
+  - from: vendor_delay_report(partner_id)
+    to:   res_partner(id)
+  - from: vendor_delay_report(product_id)
+    to:   product_product(id)
+  - from: vendor_delay_report(purchase_line_id)
+    to:   purchase_order_line(id)
+  - from: report_project_task_user(task_id)
+    to:   project_task(id)
+    cardinality: one_to_one
+  - from: report_project_task_user(project_id)
+    to:   project_project(id)
+
+# ---------------------------------------------------------------------------
+# Terms: words that pick ROWS.
+# ---------------------------------------------------------------------------
+terms:
+  confirmed_sale:
+    table: sale_order
+    predicate: state = 'sale'
+    aliases: [confirmed_order, booked, won_order]
+    description: a confirmed sales order (not a quotation, not cancelled)
+
+  quotation:
+    table: sale_order
+    predicate: state IN ('draft', 'sent')
+    aliases: [open_quote, pending_quote, unconfirmed_order]
+    description: a quotation not yet confirmed
+
+  to_invoice:
+    table: sale_order
+    predicate: invoice_status = 'to invoice'
+    aliases: [uninvoiced, not_invoiced, awaiting_invoice]
+    description: delivered or ordered but not yet invoiced
+
+  not_delivered:
+    table: sale_order
+    predicate: state = 'sale' AND delivery_status IN ('pending', 'started', 'partial')
+    aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
+    description: confirmed but not fully delivered
+
+  # Orders may be addressed to a contact person, so a partner is a
+  # customer when any partner under it (commercial_partner_id) has a
+  # confirmed order. Our own companies (res_company.partner_id, e.g. "AU
+  # Company") are never customers or vendors.
+  customer:
+    table: res_partner
+    predicate: >-
+      EXISTS (SELECT 1 FROM sale_order so
+              JOIN res_partner op ON op.id = so.partner_id
+              WHERE op.commercial_partner_id = res_partner.id
+                AND so.state = 'sale')
+      AND NOT EXISTS (SELECT 1 FROM res_company rc
+                      WHERE rc.partner_id = res_partner.id)
+    aliases: [client]
+    description: >-
+      a partner with a confirmed sales order, not one of our own companies
+      (customer_rank is often 0, so don't use it). Only needed to LIST
+      customers - to look one up by name, filter on the name alone
+
+  vendor:
+    table: res_partner
+    predicate: >-
+      EXISTS (SELECT 1 FROM purchase_order po
+              JOIN res_partner op ON op.id = po.partner_id
+              WHERE op.commercial_partner_id = res_partner.id
+                AND po.state = 'purchase')
+      AND NOT EXISTS (SELECT 1 FROM res_company rc
+                      WHERE rc.partner_id = res_partner.id)
+    aliases: [supplier]
+    description: >-
+      a partner with a confirmed purchase order, not one of our own
+      companies (supplier_rank is often 0, so don't use it). Only needed to
+      LIST vendors - to look one up by name, filter on the name alone
+
+  customer_invoice:
+    table: account_move
+    predicate: move_type = 'out_invoice' AND state = 'posted'
+    aliases: [sales_invoice, invoice_issued]
+    description: a posted invoice to a customer
+
+  vendor_bill:
+    table: account_move
+    predicate: move_type = 'in_invoice' AND state = 'posted'
+    aliases: [supplier_invoice, purchase_invoice, bill]
+    description: a posted bill from a vendor
+
+  credit_note:
+    table: account_move
+    predicate: move_type IN ('out_refund', 'in_refund') AND state = 'posted'
+    aliases: [refund, credit_memo]
+    description: a posted credit note
+
+  overdue:
+    table: account_move
+    predicate: >-
+      state = 'posted' AND payment_state IN ('not_paid', 'partial')
+      AND invoice_date_due < CURRENT_DATE
+    aliases: [past_due, late_payment, overdue_invoice, debtor]
+    description: posted, not fully paid, and past its due date
+
+  unpaid:
+    table: account_move
+    predicate: state = 'posted' AND payment_state IN ('not_paid', 'partial')
+    aliases: [outstanding, open_invoice, receivable, payable]
+    description: posted and not fully paid
+
+  confirmed_purchase:
+    table: purchase_order
+    predicate: state = 'purchase'
+    aliases: [confirmed_po, approved_po]
+    description: a confirmed purchase order
+
+  open_rfq:
+    table: purchase_order
+    predicate: state IN ('draft', 'sent', 'to approve')
+    aliases: [rfq, pending_po, awaiting_approval]
+    description: a request for quotation not yet confirmed
+
+  not_received:
+    table: purchase_order
+    predicate: state = 'purchase' AND receipt_status IN ('pending', 'partial')
+    aliases: [awaiting_receipt, outstanding_po, on_order]
+    description: confirmed but not fully received
+
+  out_of_stock:
+    table: product_product
+    predicate: >-
+      NOT EXISTS (SELECT 1 FROM stock_quant q
+                  JOIN stock_location l ON l.id = q.location_id
+                  WHERE q.product_id = product_product.id
+                    AND l.usage = 'internal' AND q.quantity > 0)
+    aliases: [no_stock, sold_out, nil_stock, zero_stock, stock_out]
+    description: >-
+      no positive quantity in any internal location. Only meaningful for
+      products that track inventory (product_template.is_storable)
+
+  internal_stock:
+    table: stock_location
+    predicate: usage = 'internal'
+    aliases: [in_stock, on_hand, warehouse_stock]
+    description: a location that holds our own stock
+
+  late_delivery:
+    table: stock_picking
+    predicate: >-
+      state NOT IN ('done', 'cancel') AND scheduled_date < CURRENT_TIMESTAMP
+    aliases: [late, overdue_delivery, behind_schedule, delayed]
+    description: a transfer not done by its scheduled date
+
+  opportunity:
+    table: crm_lead
+    predicate: type = 'opportunity'
+    aliases: [deal, pipeline]
+    description: a qualified opportunity (not a raw lead)
+
+  won:
+    table: crm_lead
+    predicate: won_status = 'won'
+    aliases: [won_deal, closed_won]
+    description: an opportunity marked won
+
+  lost:
+    table: crm_lead
+    predicate: won_status = 'lost'
+    aliases: [lost_deal, lost_opportunity, closed_lost]
+    description: an opportunity marked lost (usually archived)
+
+  current_employee:
+    table: hr_employee
+    column: active
+    aliases: [active_employee, current_staff]
+    description: not archived
+
+  approved_leave:
+    table: hr_leave
+    predicate: state = 'validate'
+    aliases: [approved_time_off, booked_leave]
+    description: time off that has been approved
+
+  task_done:
+    table: project_task
+    predicate: state = '1_done'
+    aliases: [completed_task, closed_task, finished]
+    description: a task marked done
+
+  archived:
+    table: res_partner
+    predicate: active = false
+    aliases: [inactive, deleted]
+    description: archived (hidden in Odoo)

@@ -137,12 +137,36 @@ except ImportError:          # optional: without it, matching stays exact
     fuzz = process = None
 
 
+# Common English words are never treated as typos. Fuzzy matching against
+# the schema vocabulary alone "corrected" real words to longer schema words
+# that contain them ("currently" -> "current", "located" -> "allocated").
+# wordfreq gives each word a Zipf frequency: about 0 for a word it has
+# never seen (most typos), 3 for a word seen once per million words, and
+# 7 for the most common ("the").
+try:
+    from wordfreq import zipf_frequency
+except ImportError:          # without it, every unmatched word may be corrected
+    zipf_frequency = None
+
+
 def fuzzy_available():
     return process is not None
 
 
+def word_frequency_available():
+    return zipf_frequency is not None
+
+
+def is_common_word(word, min_zipf):
+    """True if word is an English word at least this common (Zipf scale).
+    min_zipf 0, or wordfreq not installed: always False."""
+    if not min_zipf or zipf_frequency is None:
+        return False
+    return zipf_frequency(word, "en") >= min_zipf
+
+
 def correct_words(text, known, candidates, *, min_score, min_length, margin,
-                  skip=frozenset()):
+                  skip=frozenset(), same_first_letter=True, common_word_zipf=0):
     """
     Corrections for the words of text that match nothing.
 
@@ -155,6 +179,15 @@ def correct_words(text, known, candidates, *, min_score, min_length, margin,
                 within this many points of the best, the word is
                 ambiguous and left alone
     skip        words never corrected (e.g. GENERIC_TERMS)
+    same_first_letter
+                only correct to a word with the same first letter. Real
+                typos almost never change it, while a real English word
+                that isn't in the vocabulary often sits inside one that
+                is ("located" -> "allocated", 88)
+    common_word_zipf
+                an English word at least this common (wordfreq Zipf
+                frequency) is never corrected: it is a real word, not a
+                typo ("currently", "located"). 0: no check
 
     Words containing a digit (codes such as PUR0410) are never corrected.
 
@@ -165,6 +198,11 @@ def correct_words(text, known, candidates, *, min_score, min_length, margin,
     if process is None or not candidates:
         return corrections, ambiguous
 
+    by_letter = {}
+    if same_first_letter:
+        for cand in candidates:
+            by_letter.setdefault(cand[:1], []).append(cand)
+
     for word in dict.fromkeys(words(text)):   # unique, in order
         if (len(word) < min_length or word in skip
                 or any(ch.isdigit() for ch in word)):
@@ -172,8 +210,13 @@ def correct_words(text, known, candidates, *, min_score, min_length, margin,
         forms = tokenize(word)
         if forms & known or forms & skip:
             continue
+        if is_common_word(word, common_word_zipf):
+            continue
 
-        found = process.extract(word, candidates, scorer=fuzz.ratio,
+        pool = by_letter.get(word[:1], []) if same_first_letter else candidates
+        if not pool:
+            continue
+        found = process.extract(word, pool, scorer=fuzz.ratio,
                                 score_cutoff=min_score, limit=5)
         if not found:
             continue
