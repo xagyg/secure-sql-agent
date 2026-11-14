@@ -33,6 +33,7 @@ HISTORY_SAMPLE_ROWS = _LLM.history_sample_rows
 HISTORY_VALUE_CHARS = _LLM.history_value_chars
 HISTORY_SQL_TURNS = _LLM.history_sql_turns
 HISTORY_SUMMARY_CHARS = _LLM.history_summary_chars
+CORRECTION_SQL_CHARS = _LLM.correction_sql_chars
 
 # Timeouts for calls to Ollama, in seconds. The ollama client's default is
 # no timeout at all, so a call sent on a connection that was silently

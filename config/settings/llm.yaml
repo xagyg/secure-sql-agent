@@ -33,6 +33,11 @@ history_value_chars: 40       # longest single value shown
 history_summary_chars: 400    # longest summary per turn
 history_sql_turns: 1          # most recent turns that also carry their SQL (0 = none)
 
+# A correction shows the model the SQL that failed. If the prepared SQL is
+# longer than this many characters (SELECT * expanded to every column),
+# the model's own SQL is shown instead, so the correction stays quick.
+correction_sql_chars: 4000
+
 # Sent with every request. Skips ngrok's browser warning page; harmless
 # without ngrok.
 headers:

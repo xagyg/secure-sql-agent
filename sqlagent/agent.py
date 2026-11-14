@@ -38,6 +38,7 @@ from sqlagent.controls.result_policy import apply_result_policy
 from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
 from sqlagent.adaptive.history import summarise_result
 from sqlagent.adaptive.llm import (
+    CORRECTION_SQL_CHARS,
     HISTORY_SAMPLE_ROWS,
     HISTORY_SUMMARY_CHARS,
     HISTORY_VALUE_CHARS,
@@ -148,6 +149,22 @@ def _prepare_sql(sql, security, catalog):
         failure = _validation_failure(prepared.failure_reason, prepared.sql)
 
     return prepared.sql, prepared.withheld, failure
+
+
+def _sql_for_correction(sql, generated_sql):
+    """
+    The SQL to show the model when asking it to fix a failed query: the
+    prepared SQL that ran, unless that is over llm.correction_sql_chars
+    (SELECT * expanded to hundreds of columns), when the model's own SQL
+    is shorter and enough to fix. A 300-column SELECT list once pushed
+    the correction past the read timeout.
+    """
+    if len(sql) > CORRECTION_SQL_CHARS and generated_sql \
+            and len(generated_sql) < len(sql):
+        print(f"\n[agent] The prepared SQL is long ({len(sql)} characters) - "
+              "showing the model its own SQL for the correction")
+        return generated_sql
+    return sql
 
 
 def _normalise_sql(sql):
@@ -505,7 +522,9 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
             llm_error = _sanitize_sql_error_for_llm(str(ex))
 
             corrected_sql = correct_sql(
-                question, schema, sql, llm_error, correction_hint
+                question, schema,
+                _sql_for_correction(sql, generated_sql),
+                llm_error, correction_hint
             )
 
             print("\n[corrected sql]")
