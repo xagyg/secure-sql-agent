@@ -369,7 +369,7 @@ def _all_withheld(results):
 
 def _run_pipeline(question, catalog, history, security, schema, domain_key):
     """Generate, control, execute and explain - unchanged by domains."""
-    sql = generate_sql(question, schema, history)
+    sql = generate_sql(question, schema, history, allowed_tables=catalog.tables)
     generated_sql = sql   # as the model wrote it, before any rewriting
 
     print("\n[sql]")

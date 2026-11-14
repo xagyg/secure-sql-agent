@@ -114,34 +114,6 @@ sql_examples:
       WHERE l.parent_state = 'posted' AND a.account_type IN ('income', 'income_other')
         AND l.date >= date_trunc('year', CURRENT_DATE)
       GROUP BY 1, 2 ORDER BY 1
-  - question: list our customers in Australia
-    note: >-
-      res_country.name is JSONB, so filter countries on the ISO code;
-      a customer is a company with a confirmed sales order
-    sql: >-
-      SELECT c.name AS customer, c.city, s.name AS state
-      FROM res_partner c
-      JOIN res_country co ON co.id = c.country_id
-      LEFT JOIN res_country_state s ON s.id = c.state_id
-      WHERE co.code = 'AU' AND c.is_company AND c.active
-        AND EXISTS (SELECT 1 FROM sale_order so
-                    JOIN res_partner p ON p.id = so.partner_id
-                    WHERE p.commercial_partner_id = c.id AND so.state = 'sale')
-      ORDER BY c.name
-  - question: which products are currently out of stock?
-    note: >-
-      stock on hand is stock_quant in internal locations; never use
-      product_product.qty_available (JSONB, not kept up to date)
-    sql: >-
-      SELECT pt.name->>'en_US' AS product, pp.default_code AS sku
-      FROM product_product pp
-      JOIN product_template pt ON pt.id = pp.product_tmpl_id
-      WHERE pt.is_storable AND pt.active AND pp.active
-        AND NOT EXISTS (SELECT 1 FROM stock_quant q
-                        JOIN stock_location l ON l.id = q.location_id
-                        WHERE q.product_id = pp.id
-                          AND l.usage = 'internal' AND q.quantity > 0)
-      ORDER BY 1
   - question: what is the total inventory value by product category?
     note: >-
       cost (product_product.standard_price) is JSONB by company - read it

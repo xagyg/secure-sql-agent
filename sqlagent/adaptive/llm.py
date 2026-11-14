@@ -4,13 +4,15 @@
 import re
 import json
 import base64
+from functools import lru_cache
 
 import httpx
 from ollama import Client
 
 from sqlagent.adaptive.history import format_history
 from sqlagent.databases import active_database
-from sqlagent.execution.engines import active_engine
+from sqlagent.controls.security_utils import full_table_name
+from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.settings import get_settings
 
 
@@ -136,7 +138,49 @@ def _format_examples(examples):
     return "".join(line + "\n" for line in lines)
 
 
-def generate_sql(question, schema, history):
+@lru_cache(maxsize=256)
+def _example_tables(sql, dialect):
+    """The tables an example's SQL reads, as lowercase full names, or None
+    if it can't be parsed."""
+    import sqlglot
+    from sqlglot import exp
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except Exception:
+        return None
+    return frozenset(
+        full_table_name(f"{t.db}.{t.name}" if t.db else t.name).lower()
+        for t in tree.find_all(exp.Table)
+    )
+
+
+def examples_for_role(examples, allowed_tables):
+    """
+    The SQL examples whose tables are all ones the role may see. The
+    examples go into every SQL prompt, so without this a sales user's
+    prompt carried the HR and accounting examples - tables the role can't
+    see, which the model then tried to use. allowed_tables is the role's
+    catalog (full names); None keeps every example. An example that can't
+    be parsed is left out.
+    """
+    if allowed_tables is None:
+        return list(examples)
+    allowed = {name.lower() for name in allowed_tables}
+    dialect = active_dialect()
+    kept = []
+    for example in examples:
+        tables = _example_tables(example.sql, dialect)
+        if tables is not None and tables <= allowed:
+            kept.append(example)
+    return kept
+
+
+def generate_sql(question, schema, history, allowed_tables=None):
+    """
+    allowed_tables: the tables the role may see (the catalog's full
+    names), used to choose which SQL examples go in the prompt
+    (examples_for_role). None sends them all.
+    """
     history_text = format_history(history, MAX_HISTORY_TURNS, HISTORY_SQL_TURNS)
 
     db = active_database()
@@ -145,7 +189,11 @@ def generate_sql(question, schema, history):
 
     engine = active_engine().label
     engine_rules = active_engine().prompt_rules
-    sql_examples = _format_examples(db.sql_examples)
+    examples = examples_for_role(db.sql_examples, allowed_tables)
+    if len(examples) < len(db.sql_examples):
+        print(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
+              "(the rest use tables this role can't see)")
+    sql_examples = _format_examples(examples)
 
     system_prompt = f"""
 You are a {engine} assistant working with the {db.connection.database} database.
