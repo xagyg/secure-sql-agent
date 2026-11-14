@@ -113,3 +113,33 @@ def format_history(history, turns, sql_turns=1):
         lines += ["", f"{label} result:", summary]
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+def format_results_table(results, *, max_rows=20, max_value_chars=40):
+    """
+    The first max_rows rows as a plain text table, for runs that skip the
+    LLM explanation (run_agent(explain=False)), e.g.
+
+        name                | country
+        --------------------+--------
+        Alfreds Futterkiste | Germany
+        ... 28 more row(s)
+    """
+    if not results:
+        return "(no rows)"
+    columns = []
+    for row in results:
+        for column in row:
+            if column not in columns:
+                columns.append(column)
+    shown = results[:max_rows]
+    cells = [[_format_value(row.get(c), max_value_chars) for c in columns]
+             for row in shown]
+    widths = [max([len(str(c))] + [len(r[i]) for r in cells])
+              for i, c in enumerate(columns)]
+    lines = [" | ".join(str(c).ljust(w) for c, w in zip(columns, widths)).rstrip(),
+             "-+-".join("-" * w for w in widths)]
+    lines += [" | ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in cells]
+    if len(results) > len(shown):
+        lines.append(f"... {len(results) - len(shown)} more row(s)")
+    return "\n".join(lines)
