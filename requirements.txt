@@ -17,6 +17,7 @@ pydantic_core==2.46.4
 pyodbc==5.5.0
 psycopg2-binary==2.9.13
 PyYAML==6.0.3
+rapidfuzz==3.14.6
 sgp4==2.27
 skyfield==1.54
 sqlglot==30.18.0

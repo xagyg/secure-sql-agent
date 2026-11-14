@@ -27,3 +27,6 @@ htmlcov/
 # Logs (audit.log holds visitor questions and hashed IPs; logs/ holds Ollama server logs)
 *.log
 logs/
+
+# Other
+*outputs/

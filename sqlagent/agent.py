@@ -36,7 +36,11 @@ from sqlagent.controls.question_policy import (
 )
 from sqlagent.controls.result_policy import apply_result_policy
 from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
+from sqlagent.adaptive.history import summarise_result
 from sqlagent.adaptive.llm import (
+    HISTORY_SAMPLE_ROWS,
+    HISTORY_SUMMARY_CHARS,
+    HISTORY_VALUE_CHARS,
     MAX_HISTORY_TURNS,
     classify_model_output,
     looks_like_write_request,
@@ -557,6 +561,17 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
         "question": question,
         "sql": explanation_sql,
         "answer": explanation,
+        # What the next SQL prompt sees instead of the prose answer.
+        # Built from the rows after the result policy, so withheld
+        # columns never reach it.
+        "result_summary": summarise_result(
+            results,
+            sample_rows=HISTORY_SAMPLE_ROWS,
+            max_value_chars=HISTORY_VALUE_CHARS,
+            max_chars=HISTORY_SUMMARY_CHARS,
+            row_cap=MAX_ROWS,
+            withheld=sorted(set(withheld)),
+        ),
         "domain": domain_key,
         "row_count": len(results),
     })

@@ -103,7 +103,16 @@ class LlmSettings(_Strict):
     connect_timeout: float = Field(10, gt=0, le=300)
     read_timeout: float = Field(120, gt=0, le=3600)
     # Earlier questions/answers sent with each new question.
-    history_turns: int = Field(5, ge=0, le=50)
+    history_turns: int = Field(3, ge=0, le=50)
+    # Each earlier turn carries a compact summary of its result, not the
+    # full answer: this many sample rows, values cut to history_value_chars
+    # and the whole summary to history_summary_chars.
+    history_sample_rows: int = Field(3, ge=0, le=20)
+    history_value_chars: int = Field(40, ge=8, le=500)
+    history_summary_chars: int = Field(400, ge=50, le=4000)
+    # How many of those turns (the most recent) also carry their SQL.
+    # 0 sends none; a value above history_turns just means all of them.
+    history_sql_turns: int = Field(1, ge=0, le=50)
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
@@ -205,6 +214,13 @@ class TableMatch(_Strict):
         return self
 
 
+class TypoCorrection(_Strict):
+    enabled: bool = True
+    min_score: int = Field(85, ge=50, le=100)
+    min_length: int = Field(5, ge=3)
+    margin: int = Field(3, ge=0, le=50)
+
+
 class DomainRouting(_Strict):
     weights: Weights = Field(default_factory=Weights)
     sticky_bonus: float = Field(0.10, ge=0, le=1)
@@ -219,6 +235,7 @@ class DomainRouting(_Strict):
 class RetrievalSettings(_Strict):
     domains: DomainRouting = Field(default_factory=DomainRouting)
     table_match: TableMatch = Field(default_factory=TableMatch)
+    typo_correction: TypoCorrection = Field(default_factory=TypoCorrection)
 
 
 # ---------------------------------------------------------------------------
