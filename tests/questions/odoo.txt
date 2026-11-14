@@ -1,0 +1,37 @@
+# Odoo regression questions for batch mode:
+#     .\run.ps1 -questions tests\questions\odoo.txt -db odoo -identity admin
+# One question per line. Lines starting with # are skipped; a line of ---
+# starts a new conversation, so the next question isn't read as a
+# follow-up. Each question below came up while tuning the agent; the
+# comment above it says what a good run looks like.
+
+# Typo correction must leave real words alone: no "Typo correction" line
+# for "located" or "currently".
+Find customers located in Australia.
+---
+Which products are currently out of stock?
+---
+
+# A real typo is still corrected (custmers -> customers).
+List all custmers in Germany
+---
+
+# Schema size: the context line should be well under the old 2,523 lines.
+Where is AU Company located?
+---
+
+# AU Company is one of our own companies, so it is not a customer: the
+# customer term excludes it.
+What country is "AU Company" located?
+Is AU Company a customer?
+---
+
+# Unpaid invoices: should use payment_state, not an invented table such
+# as account_payment_rel.
+Which customers have unpaid invoices?
+---
+
+# Follow-ups use the conversation history (last 3 turns, compact).
+Who are our top 5 customers by revenue?
+only the ones in the United States
+what did the first one buy?

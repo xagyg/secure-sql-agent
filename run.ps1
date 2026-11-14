@@ -6,6 +6,7 @@
 #     .\run.ps1 -local -db adventureworks
 #     .\run.ps1 -local -db northwind_mssql
 #     .\run.ps1 -local -identity steven    (sign in as a local identity)
+#     .\run.ps1 -questions questions.txt   (run a file of questions, see below)
 #
 # Without -local, starts the FastAPI API on 127.0.0.1:8000.
 # With -local, starts the interactive command-line REPL.
@@ -37,13 +38,26 @@
 # run_with_ollama.ps1 instead. Note that it shuts down any Ollama that is
 # already running.
 
+# -questions runs a file of questions (one per line) through the REPL and
+# exits; the output also goes to a results file next to it, or to -out.
+# Lines starting with # are skipped; a line of --- starts a new
+# conversation. -db and -identity apply as usual.
+#     .\run.ps1 -questions tests\questions\odoo.txt -db odoo -identity sam
+#     .\run.ps1 -questions q.txt -out q-results.txt
+
 param(
     [switch]$local,
     [string]$db,
-    [string]$identity
+    [string]$identity,
+    [string]$questions,
+    [string]$out
 )
 
 $ErrorActionPreference = "Stop"
+# Paths given relative to where you ran the script from, before moving to
+# the project folder.
+if ($questions) { $questions = (Resolve-Path $questions).Path }
+if ($out) { $out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($out) }
 Set-Location $PSScriptRoot
 
 # --- Ollama: same machine, so no tunnel and no auth needed --------------
@@ -120,7 +134,13 @@ if ($identity) {
     Remove-Item Env:SQLAGENT_IDENTITY -ErrorAction SilentlyContinue
 }
 
-if ($local) {
+if ($questions) {
+    Write-Host "Running the questions in $questions..."
+    $batchArgs = @("main.py", "--questions", $questions)
+    if ($out) { $batchArgs += @("--out", $out) }
+    & .\.venv\Scripts\python.exe @batchArgs
+}
+elseif ($local) {
     Write-Host "Starting Secure SQL Agent REPL..."
     & .\.venv\Scripts\python.exe main.py
 }
