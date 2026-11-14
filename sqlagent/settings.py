@@ -114,6 +114,11 @@ class LlmSettings(_Strict):
     # How many of those turns (the most recent) also carry their SQL.
     # 0 sends none; a value above history_turns just means all of them.
     history_sql_turns: int = Field(1, ge=0, le=50)
+    # The correction prompt shows the SQL that failed. When the prepared
+    # SQL is longer than this (e.g. SELECT * expanded to every column),
+    # the model's own, shorter SQL is shown instead, so one long rewrite
+    # can't push the correction past the read timeout.
+    correction_sql_chars: int = Field(4000, ge=500)
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")

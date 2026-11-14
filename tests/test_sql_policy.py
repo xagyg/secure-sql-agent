@@ -85,5 +85,71 @@ class PrepareSql(unittest.TestCase):
         self.assertEqual(parse.call_count, 2)
 
 
+
+class SelectStarSources(unittest.TestCase):
+    """SELECT * expands to the columns of the tables the SELECT reads
+    directly (FROM and JOINs), never those of tables in its subqueries."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.catalog = make_catalog(exclude={"territories"})
+        cls.security = SecurityContext(
+            user_id="test", roles={"demo"}, tables=set(cls.catalog.tables),
+            denied_columns={"public.customers": {"phone", "fax", "address"}},
+        )
+
+    def prepare(self, sql):
+        return prepare_sql(sql, self.security, self.catalog)
+
+    def select_list(self, sql):
+        return sql.split(" FROM ", 1)[0]
+
+    def test_exists_subquery_tables_are_not_expanded(self):
+        # The bug: o.order_id, o.freight ... were added to the outer
+        # SELECT list, and the query failed ("missing FROM-clause entry").
+        p = self.prepare("SELECT * FROM customers c WHERE EXISTS "
+                         "(SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id)")
+        self.assertIsNone(p.failure_reason)
+        self.assertIn("c.company_name", self.select_list(p.sql))
+        self.assertNotIn("o.", self.select_list(p.sql))
+
+    def test_not_exists_with_a_join_inside(self):
+        p = self.prepare(
+            "SELECT * FROM customers WHERE NOT EXISTS (SELECT 1 FROM orders o "
+            "JOIN employees e ON e.employee_id = o.employee_id "
+            "WHERE o.customer_id = customers.customer_id)")
+        listed = self.select_list(p.sql)
+        self.assertIn("customers.company_name", listed)
+        self.assertNotIn("o.", listed)
+        self.assertNotIn("e.", listed)
+
+    def test_joined_tables_are_still_expanded(self):
+        p = self.prepare("SELECT * FROM customers c JOIN orders o "
+                         "ON o.customer_id = c.customer_id")
+        listed = self.select_list(p.sql)
+        self.assertIn("c.company_name", listed)
+        self.assertIn("o.order_id", listed)
+        self.assertNotIn("fax", listed)
+
+    def test_alias_star_beside_a_scalar_subquery(self):
+        p = self.prepare("SELECT c.*, (SELECT COUNT(*) FROM orders o "
+                         "WHERE o.customer_id = c.customer_id) AS n FROM customers c")
+        self.assertIsNone(p.failure_reason)
+        self.assertIn("c.company_name", p.sql)
+        self.assertNotIn("o.order_id", p.sql)
+
+    def test_star_over_a_derived_table_is_refused(self):
+        # Left unexpanded, this would return the restricted columns.
+        for sql in ("SELECT * FROM (SELECT * FROM customers) t",
+                    "SELECT * FROM (SELECT company_name FROM customers) t"):
+            with self.subTest(sql=sql), \
+                    self.assertRaisesRegex(ValueError, "subquery or derived table"):
+                self.prepare(sql)
+
+    def test_alias_star_for_a_subquery_table_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "Unable to determine table for 'o.\\*'"):
+            self.prepare("SELECT o.* FROM customers c WHERE EXISTS (SELECT 1 FROM orders o)")
+
+
 if __name__ == "__main__":
     unittest.main()

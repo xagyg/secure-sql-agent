@@ -369,29 +369,45 @@ def _identifier(name):
                           quoted=not _PLAIN_IDENTIFIER.fullmatch(name))
 
 
+def _select_sources(select):
+    """
+    The row sources this SELECT reads directly - its FROM and JOINs, in
+    order - as (tables, other). tables: {"full_table", "reference"} for
+    each plain table. other: the references of anything else (a derived
+    table, a function such as generate_series()), whose columns can't be
+    looked up in the catalog.
+
+    Tables inside subqueries (WHERE EXISTS (...), a scalar subquery, a
+    derived table's own FROM) are not this SELECT's sources: a * here
+    must not expand to their columns.
+    """
+    from_clause = select.args.get("from_") or select.args.get("from")
+    nodes = [from_clause.this] if from_clause else []
+    nodes += [join.this for join in select.args.get("joins") or []]
+
+    tables, other = [], []
+    for node in nodes:
+        if isinstance(node, exp.Table) and isinstance(node.this, exp.Identifier):
+            tables.append({
+                "full_table": full_table_name(node.name, node.db),
+                "reference": node.alias or node.name,
+            })
+        else:
+            other.append(node.alias_or_name or node.sql())
+    return tables, other
+
+
 def rewrite_select_stars_tree(tree, security, catalog):
     """
-    rewrite_select_stars() on a parsed SELECT, in place. Raises
-    ValueError for an alias.* whose table can't be determined.
+    rewrite_select_stars() on a parsed SELECT, in place. Only the tables
+    this SELECT reads directly (FROM and JOINs) are expanded; tables in
+    subqueries are not. Raises ValueError for an alias.* whose table
+    can't be determined, and for a * over a derived table or other
+    non-table source: its columns can't be checked against the catalog,
+    and left unexpanded it could return restricted columns
+    (SELECT * FROM (SELECT * FROM customers) t).
     """
-    # ---------------------------------------------------------
-    # Build table / alias map
-    # ---------------------------------------------------------
-    tables = []
-
-    for table in tree.find_all(exp.Table):
-        table_name = table.name
-        full_table = full_table_name(table_name, table.db)
-
-        if table.alias:
-            reference = table.alias
-        else:
-            reference = table_name
-
-        tables.append({
-            "full_table": full_table,
-            "reference": reference,
-        })
+    tables, other_sources = _select_sources(tree)
 
     # ---------------------------------------------------------
     # Expand SELECT expressions
@@ -403,6 +419,12 @@ def rewrite_select_stars_tree(tree, security, catalog):
         # SELECT *
         # -----------------------------------------------------
         if isinstance(expression, exp.Star):
+            if other_sources:
+                raise ValueError(
+                    "SELECT * over a subquery or derived table "
+                    f"({', '.join(other_sources)}) can't be expanded to "
+                    "authorised columns - list the columns instead."
+                )
             for table_info in tables:
                 full_table = table_info["full_table"]
                 reference = table_info["reference"]
