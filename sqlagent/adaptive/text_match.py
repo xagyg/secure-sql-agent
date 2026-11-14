@@ -38,6 +38,16 @@ ALIAS_MATCH = FULL_NAME_MATCH  # an alias (or label) counts as naming the table 
 TERM_MATCH = FULL_NAME_MATCH   # a business term ("shipped late") points at its table
 
 
+def words(text):
+    """
+    The words of text in order, lowercase, with CamelCase/PascalCase
+    split ("OrderDate" -> "order", "date"). No singulars and no length
+    filter: tokenize() adds those.
+    """
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    return re.findall(r"[A-Za-z0-9]+", text.lower())
+
+
 def tokenize(text):
     """
     The set of word forms in text: lowercase, CamelCase split, words of
@@ -45,14 +55,9 @@ def tokenize(text):
     ("categories" -> "category", "addresses" -> "address",
     "orders" -> "order").
     """
-    # Split CamelCase/PascalCase identifiers.
-    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
-
-    tokens = re.findall(r"[A-Za-z0-9]+", text.lower())
-
     result = set()
 
-    for token in tokens:
+    for token in words(text):
         if len(token) < 2:
             continue
 
@@ -111,3 +116,76 @@ def names_column(text, column):
     return any(
         re.search(rf"\b{re.escape(term)}(es|s)?\b", text) for term in terms
     )
+
+
+# ---------------------------------------------------------------------------
+# Typo correction
+# ---------------------------------------------------------------------------
+# Matching above is exact, so one typo ("custmers", "suplier") means the
+# word matches nothing. correct_words() maps such a word to the closest
+# word in the catalog's vocabulary (table and column names, aliases,
+# labels, terms, domain names), using RapidFuzz. It only ever ADDS a
+# vocabulary word: the question itself is not changed, and a word that
+# already matches is never touched. The vocabulary comes from the
+# security-filtered catalog, so a correction can't point anywhere the
+# role can't already see. Settings: typo_correction in
+# config/settings/retrieval.yaml.
+
+try:
+    from rapidfuzz import fuzz, process
+except ImportError:          # optional: without it, matching stays exact
+    fuzz = process = None
+
+
+def fuzzy_available():
+    return process is not None
+
+
+def correct_words(text, known, candidates, *, min_score, min_length, margin,
+                  skip=frozenset()):
+    """
+    Corrections for the words of text that match nothing.
+
+    known       every word form that already matches something (words
+                with their tokenize() forms); such words are left alone
+    candidates  the vocabulary words a typo may be corrected to
+    min_score   lowest RapidFuzz ratio (0-100) accepted
+    min_length  shorter words are never corrected ("po", "id", "ship")
+    margin      if another candidate with a different meaning scores
+                within this many points of the best, the word is
+                ambiguous and left alone
+    skip        words never corrected (e.g. GENERIC_TERMS)
+
+    Words containing a digit (codes such as PUR0410) are never corrected.
+
+    Returns (corrections, ambiguous): corrections maps word ->
+    (vocabulary word, score); ambiguous maps word -> the tied candidates.
+    """
+    corrections, ambiguous = {}, {}
+    if process is None or not candidates:
+        return corrections, ambiguous
+
+    for word in dict.fromkeys(words(text)):   # unique, in order
+        if (len(word) < min_length or word in skip
+                or any(ch.isdigit() for ch in word)):
+            continue
+        forms = tokenize(word)
+        if forms & known or forms & skip:
+            continue
+
+        found = process.extract(word, candidates, scorer=fuzz.ratio,
+                                score_cutoff=min_score, limit=5)
+        if not found:
+            continue
+        best, best_score, _ = found[0]
+        best_forms = tokenize(best)
+        rivals = [
+            cand for cand, score, _ in found[1:]
+            if score >= best_score - margin and not (tokenize(cand) & best_forms)
+        ]
+        if rivals:
+            ambiguous[word] = [best] + rivals
+            continue
+        corrections[word] = (best, round(best_score))
+
+    return corrections, ambiguous

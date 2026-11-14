@@ -1,1 +1,1 @@
-python -m unittest discover -s tests -t .
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t .

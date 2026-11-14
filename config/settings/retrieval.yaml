@@ -35,6 +35,26 @@ table_match:
   column: 3          # per matching column-name word
 
 # ---------------------------------------------------------------------------
+# Typo correction
+# ---------------------------------------------------------------------------
+# A question word that matches nothing ("custmers", "suplier") is mapped to
+# the closest word in the role's vocabulary: authorised table and column
+# names, their aliases and labels, business terms and domain names
+# (text_match.correct_words, using RapidFuzz). The correction is ADDED to
+# the words used for matching; the question sent to the LLM is unchanged,
+# and a word that already matches is never touched. Each correction is
+# logged as a [schema] line. Without the rapidfuzz package installed,
+# matching stays exact.
+typo_correction:
+  enabled: true
+  min_score: 85      # lowest similarity accepted, 0-100 (RapidFuzz ratio).
+                     # 85 accepts one missing, extra or swapped letter in
+                     # a 7+ letter word ("custmers", "prodcuts").
+  min_length: 5      # shorter words are never corrected ("po", "ship")
+  margin: 3          # another candidate this close to the best (and not
+                     # just its singular/plural) = ambiguous, no correction
+
+# ---------------------------------------------------------------------------
 # Domain of Discourse routing
 # ---------------------------------------------------------------------------
 domains:
