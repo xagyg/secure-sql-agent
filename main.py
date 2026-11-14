@@ -14,7 +14,7 @@
 # Batch mode runs a file of questions instead of reading the keyboard, and
 # can copy everything printed to a file to check later:
 #     python main.py --questions questions.txt --out results.txt
-#     .\run.ps1 -questions questions.txt          (results file is named for you)
+#     .\run.ps1 -questions questions.txt          (results go to .\outputs\)
 # See read_questions() for the file format.
 
 import argparse
@@ -145,10 +145,11 @@ def read_questions(path):
 
 
 def default_results_path(questions_path, now=None):
-    """questions.txt -> questions-results-20261114-1502.txt, alongside it."""
+    """questions.txt -> outputs/questions-results-20261114-1502.txt, in an
+    outputs folder next to the questions file (created when needed)."""
     path = Path(questions_path)
     stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M")
-    return path.with_name(f"{path.stem}-results-{stamp}.txt")
+    return path.parent / "outputs" / f"{path.stem}-results-{stamp}.txt"
 
 
 class Tee:
@@ -167,7 +168,7 @@ class Tee:
             stream.flush()
 
 
-def run_batch(items, catalog, security):
+def run_batch(items, catalog, security, explain=True):
     """Run each question as the REPL would, printing a header and timing
     for each, then a summary."""
     history = []
@@ -186,7 +187,7 @@ def run_batch(items, catalog, security):
         print(f"\n> {item}")
         begin = time.monotonic()
         try:
-            run_agent(item, catalog, history, security)
+            run_agent(item, catalog, history, security, explain=explain)
         except Exception as ex:
             failed += 1
             print(f"\n[error] {type(ex).__name__}: {ex}")
@@ -207,10 +208,15 @@ def parse_args(argv=None):
                         help="run these questions (one per line) and exit")
     parser.add_argument("--out", metavar="FILE",
                         help="with --questions: also write everything printed "
-                             "to this file (default: <questions>-results-"
-                             "<date>-<time>.txt next to the questions file)")
+                             "to this file (default: outputs/<questions>-"
+                             "results-<date>-<time>.txt, in an outputs folder "
+                             "next to the questions file)")
     parser.add_argument("--no-out", action="store_true",
                         help="with --questions: print to the console only")
+    parser.add_argument("--no-explain", action="store_true",
+                        help="skip the LLM's explanation of each result and "
+                             "show the rows instead (faster; for checking "
+                             "the SQL)")
     return parser.parse_args(argv)
 
 
@@ -250,24 +256,28 @@ def main():
         if not items:
             print(f"No questions in {args.questions}.")
             sys.exit(1)
+        explain = not args.no_explain
         if args.no_out:
-            return start(items)
+            return start(items, explain)
         out_path = Path(args.out) if args.out else default_results_path(args.questions)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as out:
             console = sys.stdout
             sys.stdout = Tee(console, out)
             try:
-                print(f"[batch] {args.questions} - {datetime.now():%Y-%m-%d %H:%M}")
-                start(items)
+                print(f"[batch] {args.questions} - {datetime.now():%Y-%m-%d %H:%M}"
+                      + ("" if explain else " - explanations skipped (--no-explain)"))
+                start(items, explain)
             finally:
                 sys.stdout = console
         print(f"\n[batch] Results written to {out_path}")
         return
-    start(None)
+    start(None, not args.no_explain)
 
 
-def start(batch_items):
-    """Load everything, then run the REPL, or the batch when given one."""
+def start(batch_items, explain=True):
+    """Load everything, then run the REPL, or the batch when given one.
+    explain=False skips the LLM's explanation of each result."""
     # Configuration errors stop here, before the database is touched.
     try:
         local_user = get_settings().repl.user
@@ -280,6 +290,8 @@ def start(batch_items):
 
     if batch_items is None:
         print_banner()
+        if not explain:
+            print("Explanations are off (--no-explain): results are shown as rows.\n")
 
     try:
         identity = local_identity(profile)
@@ -319,7 +331,7 @@ def start(batch_items):
     )
 
     if batch_items is not None:
-        run_batch(batch_items, catalog, security)
+        run_batch(batch_items, catalog, security, explain=explain)
         return
 
     while True:
@@ -377,7 +389,8 @@ def start(batch_items):
 #            continue
 
         try:
-            run_agent(question, catalog, conversation_history, security)
+            run_agent(question, catalog, conversation_history, security,
+                      explain=explain)
         except Exception as ex:
             # e.g. Ollama unreachable or too slow (see the timeouts in
             # config/settings/llm.yaml). Report it and keep the REPL going.

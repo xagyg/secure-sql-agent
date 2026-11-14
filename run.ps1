@@ -39,18 +39,23 @@
 # already running.
 
 # -questions runs a file of questions (one per line) through the REPL and
-# exits; the output also goes to a results file next to it, or to -out.
+# exits; the output also goes to a results file in an outputs folder next
+# to it, or to -out.
 # Lines starting with # are skipped; a line of --- starts a new
 # conversation. -db and -identity apply as usual.
 #     .\run.ps1 -questions tests\questions\odoo.txt -db odoo -identity sam
 #     .\run.ps1 -questions q.txt -out q-results.txt
+# -noExplain skips the LLM's explanation of each result and shows the rows
+# instead: faster, for checking the SQL (batch or -local REPL).
+#     .\run.ps1 -questions q.txt -db odoo -noExplain
 
 param(
     [switch]$local,
     [string]$db,
     [string]$identity,
     [string]$questions,
-    [string]$out
+    [string]$out,
+    [switch]$noExplain
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,11 +143,14 @@ if ($questions) {
     Write-Host "Running the questions in $questions..."
     $batchArgs = @("main.py", "--questions", $questions)
     if ($out) { $batchArgs += @("--out", $out) }
+    if ($noExplain) { $batchArgs += "--no-explain" }
     & .\.venv\Scripts\python.exe @batchArgs
 }
 elseif ($local) {
     Write-Host "Starting Secure SQL Agent REPL..."
-    & .\.venv\Scripts\python.exe main.py
+    $replArgs = @("main.py")
+    if ($noExplain) { $replArgs += "--no-explain" }
+    & .\.venv\Scripts\python.exe @replArgs
 }
 else {
     Write-Host "Starting Secure SQL Agent API on http://127.0.0.1:8000..."
