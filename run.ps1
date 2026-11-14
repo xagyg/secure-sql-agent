@@ -39,7 +39,8 @@
 # already running.
 
 # -questions runs a file of questions (one per line) through the REPL and
-# exits; the output also goes to a results file next to it, or to -out.
+# exits; the output also goes to a results file in an outputs folder next
+# to it, or to -out.
 # Lines starting with # are skipped; a line of --- starts a new
 # conversation. -db and -identity apply as usual.
 #     .\run.ps1 -questions tests\questions\odoo.txt -db odoo -identity sam
