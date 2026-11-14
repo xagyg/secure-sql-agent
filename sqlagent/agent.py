@@ -633,7 +633,8 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
     explanation_sql = active_engine().strip_row_limit(sql, MAX_ROWS)
 
     explanation = explain_results(
-        question, explanation_sql, results, withheld=sorted(set(withheld))
+        question, explanation_sql, results, withheld=sorted(set(withheld)),
+        row_cap=MAX_ROWS,
     )
 
     print("\n[answer]")

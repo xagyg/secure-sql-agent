@@ -38,6 +38,14 @@ history_sql_turns: 1          # most recent turns that also carry their SQL (0 =
 # the model's own SQL is shown instead, so the correction stays quick.
 correction_sql_chars: 4000
 
+# Explaining a result: at most this many rows are shown to the model (one
+# compact line each), and values longer than explain_value_chars are cut.
+# The exact row count is always stated, so the answer can say "100 rows,
+# for example ..." without miscounting.
+explain_rows: 50
+explain_value_chars: 300
+explain_result_chars: 8000    # ~2,000 tokens of rows; wide rows show fewer
+
 # Sent with every request. Skips ngrok's browser warning page; harmless
 # without ngrok.
 headers:

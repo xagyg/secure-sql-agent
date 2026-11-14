@@ -34,6 +34,9 @@ HISTORY_VALUE_CHARS = _LLM.history_value_chars
 HISTORY_SQL_TURNS = _LLM.history_sql_turns
 HISTORY_SUMMARY_CHARS = _LLM.history_summary_chars
 CORRECTION_SQL_CHARS = _LLM.correction_sql_chars
+EXPLAIN_ROWS = _LLM.explain_rows
+EXPLAIN_VALUE_CHARS = _LLM.explain_value_chars
+EXPLAIN_RESULT_CHARS = _LLM.explain_result_chars
 
 # Timeouts for calls to Ollama, in seconds. The ollama client's default is
 # no timeout at all, so a call sent on a connection that was silently
@@ -474,7 +477,31 @@ def looks_like_write_request(question):
     return bool(_WRITE_INTENT.search(question))
 
 
-def explain_results(question, sql, results, withheld=()):
+def _results_for_prompt(results, max_rows, max_value_chars, max_chars):
+    """
+    (text, rows shown): the rows to show the model, one compact JSON
+    object per line with long values cut, adding rows until max_rows or
+    max_chars is reached (always at least one). Indented JSON of a large
+    result could fill the model's context, which then drops the start of
+    the prompt - the question and the row count.
+    """
+    def short(value):
+        if isinstance(value, str) and len(value) > max_value_chars:
+            return value[:max_value_chars - 3] + "..."
+        return value
+
+    lines, used = [], 0
+    for row in results[:max_rows]:
+        line = json.dumps({key: short(value) for key, value in row.items()},
+                          default=str, ensure_ascii=False)
+        if lines and used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines), len(lines)
+
+
+def explain_results(question, sql, results, withheld=(), row_cap=None):
     """
     Send SQL results back to Ollama and ask for a natural-language answer.
 
@@ -482,9 +509,25 @@ def explain_results(question, sql, results, withheld=()):
     stated in the prompt, rather than left for the model to infer: it
     previously miscounted (reading a supplier_id of 27 as "27 suppliers")
     and described columns from the SQL that weren't in the results.
-    withheld lists result columns removed by the security policy.
+    withheld lists result columns removed by the security policy. At most
+    llm.explain_rows rows (and explain_result_chars characters of them)
+    are shown; the full count is stated twice, before and after them. row_cap is the query's row limit: a result that
+    reached it is reported as "at least" that many.
     """
     row_count = len(results)
+    rows_text, shown = _results_for_prompt(
+        results, EXPLAIN_ROWS, EXPLAIN_VALUE_CHARS, EXPLAIN_RESULT_CHARS)
+    capped = bool(row_cap) and row_count >= row_cap
+
+    if capped:
+        count_text = (f"{row_count} (the row limit: there may be more; say "
+                      f"\"at least {row_count}\")")
+    else:
+        count_text = str(row_count)
+    if shown < row_count:
+        results_label = f"RESULTS (the first {shown} of {row_count} rows, one per line)"
+    else:
+        results_label = "RESULTS (one row per line)"
 
     columns = []
     for row in results:
@@ -512,7 +555,7 @@ SQL QUERY
 {sql}
 
 ROW COUNT
-{row_count}
+{count_text}
 
 COLUMNS IN THE RESULTS
 {", ".join(columns) if columns else "(no rows)"}
@@ -520,12 +563,17 @@ COLUMNS IN THE RESULTS
 WITHHELD COLUMNS
 {withheld_text}
 
-RESULTS
-{json.dumps(results, default=str, indent=2)}
+{results_label}
+{rows_text or "(no rows)"}
+
+ROW COUNT (again): {count_text}
 
 Rules:
 * ROW COUNT is the exact number of rows. Use it for any count; never
   count rows yourself and never treat an ID value as a count.
+* If only some rows are shown, give the total from ROW COUNT and
+  describe the shown rows as examples; don't present them as the full
+  list.
 * Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
   name other columns; ignore them.
 * If ROW COUNT is 0, say no matching records were found and suggest

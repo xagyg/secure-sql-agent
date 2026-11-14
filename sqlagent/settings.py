@@ -119,6 +119,15 @@ class LlmSettings(_Strict):
     # the model's own, shorter SQL is shown instead, so one long rewrite
     # can't push the correction past the read timeout.
     correction_sql_chars: int = Field(4000, ge=500)
+    # Rows shown to the model when it explains a result, and the longest
+    # value shown. The full row count is always stated. 100 rows x 16
+    # columns of indented JSON (~12,500 tokens) once crowded the question
+    # and the row count out of the prompt.
+    explain_rows: int = Field(50, ge=1, le=1000)
+    explain_value_chars: int = Field(300, ge=20)
+    # ... and the most characters of rows (~4 characters a token); rows
+    # are added until either limit is reached, always at least one.
+    explain_result_chars: int = Field(8000, ge=500)
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
