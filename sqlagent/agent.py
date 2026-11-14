@@ -55,6 +55,7 @@ from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.execution.sql_diagnostics import (
     diagnose_sql_error,
     json_correction_hint,
+    missing_column_hint,
 )
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 
@@ -507,6 +508,15 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
                     "Use the physical column in the corrected SQL.\n"
                 )
 
+        # A column that doesn't exist: name the table, its closest real
+        # columns and its note, so the retry doesn't send the same SQL
+        # back (see sql_diagnostics.missing_column_hint).
+        if not correction_hint:
+            correction_hint = missing_column_hint(sql, ex, catalog)
+            if correction_hint:
+                print("\n[sql] Missing column hint for the correction:")
+                print(correction_hint.rstrip())
+
         # A json/jsonb column used as text or a number: name the columns
         # and how to read them, so the retry fixes the right one instead
         # of stripping a correct ->> (see sql_diagnostics.py).
@@ -529,6 +539,18 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
 
             print("\n[corrected sql]")
             print(corrected_sql)
+
+            # The hint said nothing similar exists and the model agreed:
+            # the data isn't in the schema. Same answer as when the first
+            # attempt says so (a restricted column is still reported as
+            # restricted).
+            if classify_model_output(corrected_sql) == "not_available":
+                if mentions_denied_column(question, security):
+                    print("\n[security] Question refers to a restricted column.")
+                    return _policy_block("restricted_data", sql)
+                print("\n[agent] Correction: the requested data isn't in the "
+                      "authorised schema.")
+                return _policy_block("not_available", sql)
 
             # Compare with what the model first wrote, not the prepared
             # SQL: that has LIMIT 1000 (and maybe rewrites) added, so the

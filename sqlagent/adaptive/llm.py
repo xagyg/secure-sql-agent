@@ -322,6 +322,10 @@ IMPORTANT:
 * If a KNOWN COLUMN MAPPING is supplied, use its physical column.
 * If JSON COLUMNS are listed, read each one the way its note says and
   keep any ->> already applied to it.
+* If COLUMN NOT FOUND is listed, use one of its closest columns, or a
+  column of another table it names. Never send back the same column.
+* If no column in the schema holds what the question asks for, return
+  exactly {DATA_NOT_AVAILABLE_SENTINEL} instead of SQL.
 * Do not use a mapped column if it is not authorised.
 * Do not modify data.
 * Return ONLY SQL.

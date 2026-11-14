@@ -242,3 +242,155 @@ def json_correction_hint(sql, error_text, catalog):
         "already applied to a JSONB column; do not remove it.",
     ]
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Missing columns
+# ---------------------------------------------------------------------------
+# The model often writes a column from memory of another Odoo version or
+# ERP (hr_version.contract_end_date for contract_date_end, project_task.hours
+# for allocated_hours) and, told only "column does not exist", sends the
+# same SQL back. This names the table the column was looked for in, the
+# closest real columns, the table's own note from the semantic model, and
+# any other table in the query that does have that column - so the retry
+# has something to go on, or is told plainly that nothing similar exists.
+#
+# Only the role's catalog is used: it never holds an unauthorised table or
+# a denied column, so nothing here can name data the role can't see.
+
+MISSING_COLUMN_MIN_SCORE = 70     # weakest suggestion shown
+MISSING_COLUMN_SUGGESTIONS = 3
+MISSING_COLUMN_NOTE_CHARS = 400   # table note, trimmed to this
+
+_QUALIFIED_MISSING = re.compile(
+    r'column\s+"?([A-Za-z_][\w$]*)"?\s*\.\s*"?([A-Za-z_][\w$]*)"?\s+does not exist',
+    re.IGNORECASE)
+
+
+def _words(name):
+    return name.replace("_", " ").lower()
+
+
+def column_similarity(missing, candidate):
+    """
+    0-100: how likely `candidate` is the column meant by `missing`.
+    Whole-name similarity, word order (contract_end_date ~
+    contract_date_end) and word subsets (hours ~ allocated_hours, scaled
+    down a little). A bare "id" never counts: nearly every *_id contains
+    it.
+    """
+    from rapidfuzz import fuzz
+    if candidate.lower() == "id":
+        return 0
+    a, b = missing.lower(), candidate.lower()
+    return max(fuzz.ratio(a, b),
+               fuzz.token_sort_ratio(_words(a), _words(b)),
+               0.9 * fuzz.token_set_ratio(_words(a), _words(b)))
+
+
+def _similar_columns(missing, table):
+    """[(score, column name)] best first, from names, labels and aliases."""
+    try:
+        import rapidfuzz  # noqa: F401  (pinned; without it, names only)
+        fuzzy = True
+    except ImportError:
+        fuzzy = False
+
+    scored = {}
+    for column in table["columns"]:
+        name = column["name"]
+        words = [column.get("label") or ""] + list(column.get("aliases") or ())
+        if any(w and _words(w) == _words(missing) for w in words):
+            scored[name] = 100           # the model used the column's label
+            continue
+        if fuzzy:
+            score = column_similarity(missing, name)
+            if score >= MISSING_COLUMN_MIN_SCORE:
+                scored[name] = score
+    return sorted(((round(s), n) for n, s in scored.items()),
+                  key=lambda item: (-item[0], item[1]))[:MISSING_COLUMN_SUGGESTIONS]
+
+
+def missing_column_hint(sql, error_text, catalog):
+    """
+    The COLUMN NOT FOUND block for correct_sql(), or "" when the error
+    isn't a missing column or its table can't be found in the catalog.
+    """
+    column_name = extract_missing_column(str(error_text or ""))
+    if not column_name:
+        return ""
+    try:
+        tree = parse_single_sql(sql)
+    except ValueError:
+        return ""
+
+    # reference (alias or bare name) -> catalog table
+    by_reference = {}
+    for table in tree.find_all(exp.Table):
+        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
+        if full and full in catalog.tables:
+            by_reference[(table.alias_or_name or table.name).lower()] = catalog.tables[full]
+            by_reference.setdefault(table.name.lower(), catalog.tables[full])
+    if not by_reference:
+        return ""
+
+    # Which table it was looked for in: the error's qualifier (column
+    # sp.purchase_order_id), else how the SQL uses it, else every table.
+    qualifiers = []
+    match = _QUALIFIED_MISSING.search(str(error_text).splitlines()[0])
+    if match and match.group(2).lower() == column_name.lower():
+        qualifiers.append(match.group(1).lower())
+    else:
+        qualifiers += [c.table.lower() for c in tree.find_all(exp.Column)
+                       if c.name.lower() == column_name.lower() and c.table]
+
+    targets = []
+    for reference in dict.fromkeys(qualifiers):
+        table = by_reference.get(reference)
+        if table and all(table is not t for _, t in targets):
+            targets.append((reference, table))
+    if not targets:
+        seen = []
+        for reference, table in by_reference.items():
+            if all(table is not t for t in seen):
+                seen.append(table)
+                targets.append((reference, table))
+
+    def has_column(table, name):
+        return any(c["name"].lower() == name.lower() for c in table["columns"])
+
+    lines = ["COLUMN NOT FOUND"]
+    for reference, table in targets:
+        name = table["name"]
+        shown = f"{reference}.{column_name}" if reference != name.lower() else column_name
+        lines.append(f"- {shown}: {name} has no column {column_name}.")
+        similar = _similar_columns(column_name, table)
+        if similar:
+            lines.append(f"  Closest columns in {name}: "
+                         + ", ".join(column for _, column in similar))
+        else:
+            lines.append(f"  {name} has no similar column.")
+        note = " ".join((table.get("description") or "").split())
+        if note:
+            if len(note) > MISSING_COLUMN_NOTE_CHARS:
+                note = note[:MISSING_COLUMN_NOTE_CHARS - 3] + "..."
+            lines.append(f"  About {name}: {note}")
+
+    # Another table in the query that does have it (standard_price is on
+    # product_product, not product_template).
+    elsewhere = []
+    for reference, table in by_reference.items():
+        if all(table is not t for _, t in targets) and has_column(table, column_name):
+            label = f"{table['name']} ({reference})" if reference != table["name"].lower() \
+                else table["name"]
+            if label not in elsewhere:
+                elsewhere.append(label)
+    if elsewhere:
+        lines.append(f"- {column_name} is a column of: {', '.join(elsewhere)}")
+
+    lines += [
+        "Use only columns that the schema lists for each table. If none of",
+        "the closest columns means what the question asks, the data may not",
+        "be recorded: return DATA_NOT_AVAILABLE rather than invent a column.",
+    ]
+    return "\n".join(lines) + "\n"
