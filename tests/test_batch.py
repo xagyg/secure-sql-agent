@@ -91,7 +91,7 @@ class OutputsFolder(unittest.TestCase):
         folder = Path(tempfile.mkdtemp())
         questions = folder / "odoo.txt"
         questions.write_text("q1\n", encoding="utf-8")
-        with mock.patch.object(main, "start", lambda items: print("ran", items)), \
+        with mock.patch.object(main, "start", lambda items, explain: print("ran", items)), \
              mock.patch("sys.argv", ["main.py", "--questions", str(questions)]), \
              redirect_stdout(io.StringIO()):
             main.main()
@@ -100,13 +100,37 @@ class OutputsFolder(unittest.TestCase):
         self.assertIn("ran ['q1']", results[0].read_text(encoding="utf-8"))
 
 
+class NoExplainOption(unittest.TestCase):
+
+    def test_flag(self):
+        self.assertTrue(main.parse_args(["--questions", "q.txt", "--no-explain"]).no_explain)
+        self.assertFalse(main.parse_args(["--questions", "q.txt"]).no_explain)
+
+    def test_results_file_says_explanations_were_skipped(self):
+        folder = Path(tempfile.mkdtemp())
+        questions = folder / "q.txt"
+        questions.write_text("q1\n", encoding="utf-8")
+        seen = []
+        with mock.patch.object(main, "start",
+                               lambda items, explain: seen.append(explain)), \
+             mock.patch("sys.argv", ["main.py", "--questions", str(questions),
+                                     "--no-explain"]), \
+             redirect_stdout(io.StringIO()):
+            main.main()
+        self.assertEqual(seen, [False])
+        text = next((folder / "outputs").glob("q-results-*.txt")).read_text(encoding="utf-8")
+        self.assertIn("explanations skipped (--no-explain)", text)
+
+
 class RunBatch(unittest.TestCase):
 
     def run_items(self, items, side_effect=None):
-        seen = []
+        seen, explains = [], []
+        self.explains = explains
 
-        def fake_run_agent(question, catalog, history, security):
+        def fake_run_agent(question, catalog, history, security, explain=True):
             seen.append((question, list(history)))
+            explains.append(explain)
             history.append(question)
             if side_effect:
                 side_effect(question)
@@ -130,6 +154,16 @@ class RunBatch(unittest.TestCase):
         self.assertIn("Question 2 of 2", out)
         self.assertIn("\n> q2", out)
         self.assertIn("Done: 2 question(s)", out)
+
+    def test_explanations_are_on_unless_turned_off(self):
+        self.run_items(["q1"])
+        self.assertEqual(self.explains, [True])
+        out = io.StringIO()
+        with mock.patch.object(main, "run_agent",
+                               lambda q, c, h, s, explain=True: self.explains.append(explain)), \
+             redirect_stdout(out):
+            main.run_batch(["q1"], None, None, explain=False)
+        self.assertEqual(self.explains[-1], False)
 
     def test_an_error_is_reported_and_the_batch_goes_on(self):
         def boom(question):

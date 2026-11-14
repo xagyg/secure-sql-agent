@@ -36,7 +36,7 @@ from sqlagent.controls.question_policy import (
 )
 from sqlagent.controls.result_policy import apply_result_policy
 from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
-from sqlagent.adaptive.history import summarise_result
+from sqlagent.adaptive.history import format_results_table, summarise_result
 from sqlagent.adaptive.llm import (
     CORRECTION_SQL_CHARS,
     HISTORY_SAMPLE_ROWS,
@@ -151,6 +151,19 @@ def _prepare_sql(sql, security, catalog):
     return prepared.sql, prepared.withheld, failure
 
 
+def _results_without_explanation(results, withheld):
+    """The answer when the LLM explanation is skipped: the row count,
+    anything withheld, and the first rows as a table."""
+    count = len(results)
+    lines = [f"{count} row(s)"
+             + (f" (the row limit of {MAX_ROWS}; there may be more)"
+                if count >= MAX_ROWS else "") + "."]
+    if withheld:
+        lines.append(f"Withheld by policy: {', '.join(sorted(set(withheld)))}.")
+    lines += ["", format_results_table(results)]
+    return "\n".join(lines)
+
+
 def _sql_for_correction(sql, generated_sql):
     """
     The SQL to show the model when asking it to fix a failed query: the
@@ -201,7 +214,7 @@ def _available_areas(catalog):
     ]
 
 
-def run_agent(question, catalog, history, security):
+def run_agent(question, catalog, history, security, explain=True):
     """
     Complete agent cycle:
 
@@ -346,6 +359,7 @@ def run_agent(question, catalog, history, security):
     result = _run_pipeline(
         question, catalog, history, security, schema,
         decision.domains[0] if decision.domains else None,
+        explain=explain,
     )
     # The domain label is generic ("Purchasing & Inventory"), so it is
     # safe to show in the UI. Table names are never returned.
@@ -384,7 +398,8 @@ def _all_withheld(results):
     return bool(results) and all(not row for row in results)
 
 
-def _run_pipeline(question, catalog, history, security, schema, domain_key):
+def _run_pipeline(question, catalog, history, security, schema, domain_key,
+                  explain=True):
     """Generate, control, execute and explain - unchanged by domains."""
     sql = generate_sql(question, schema, history, allowed_tables=catalog.tables)
     generated_sql = sql   # as the model wrote it, before any rewriting
@@ -582,11 +597,18 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
     # Postgres) is the engine's.
     explanation_sql = active_engine().strip_row_limit(sql, MAX_ROWS)
 
-    explanation = explain_results(
-        question, explanation_sql, results, withheld=sorted(set(withheld))
-    )
+    if explain:
+        explanation = explain_results(
+            question, explanation_sql, results, withheld=sorted(set(withheld)),
+        )
+        print("\n[answer]")
+    else:
+        # explain=False (main.py --no-explain): the rows themselves, built
+        # by code. Everything that protects the result - withheld columns,
+        # the result policy - already ran in _execute().
+        explanation = _results_without_explanation(results, withheld)
+        print("\n[answer] (explanation skipped)")
 
-    print("\n[answer]")
     print(explanation)
 
     history.append({
@@ -601,7 +623,6 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
             sample_rows=HISTORY_SAMPLE_ROWS,
             max_value_chars=HISTORY_VALUE_CHARS,
             max_chars=HISTORY_SUMMARY_CHARS,
-            row_cap=MAX_ROWS,
             withheld=sorted(set(withheld)),
         ),
         "domain": domain_key,
