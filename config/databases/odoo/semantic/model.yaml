@@ -185,6 +185,14 @@ tables:
     description: >-
       The companies this Odoo database runs (multi-company). Almost every
       business table has company_id. partner_id holds the company's address.
+      FINANCIAL YEAR: fiscalyear_last_month (text '1'-'12') and
+      fiscalyear_last_day are the year-end. "This financial year" runs from
+      the day after the most recent year-end, NOT from 1 January unless
+      the year-end month is '12' (in Australia it is 30 June, so the year
+      runs 1 July - 30 June).
+    columns:
+      fiscalyear_last_month: {label: financial year end month, aliases: [fiscal_year_end, fy_end, year_end_month]}
+      fiscalyear_last_day:   {label: financial year end day}
 
   res_users:
     label: user
@@ -328,7 +336,7 @@ tables:
       margin:          {aliases: [gross_profit, profit]}
       invoice_status:
         label: invoice status
-        description: "upselling, invoiced, to invoice, no = nothing to invoice"
+        description: "to invoice = confirmed, waiting to be invoiced; invoiced = fully invoiced; upselling; no = nothing to invoice. Use this for 'not invoiced' questions, not account_move"
       delivery_status:
         label: delivery status
         description: "pending, started, partial, full; null for services"
@@ -484,6 +492,12 @@ tables:
       stock_picking_type.code (incoming, outgoing, internal). state:
       draft, waiting, confirmed, assigned = ready, done, cancel. sale_id is
       the sales order a delivery is for; origin is the source document.
+      There is NO purchase_id: a receipt's purchase order is found through
+      its moves (stock_move.picking_id = stock_picking.id, then
+      stock_move.purchase_line_id -> purchase_order_line.order_id), or
+      origin = purchase_order.name. Supplier delivery time for a receipt:
+      date_done - purchase_order.date_approve; for on-time delivery use
+      vendor_delay_report.
     columns:
       scheduled_date: {label: scheduled date, aliases: [planned_date]}
       date_deadline:  {label: deadline}
@@ -507,7 +521,9 @@ tables:
       A product movement from location_id to location_dest_id, usually
       part of a transfer (picking_id). Done moves (state = 'done') are
       the stock history. sale_line_id / purchase_line_id / production_id
-      link it to its order. value is its stock valuation.
+      link it to its order. value is its stock valuation. state: draft,
+      waiting, confirmed, partially_available, assigned, done, cancel
+      (there is no 'partial'; quantity is what has been moved so far).
     columns:
       product_uom_qty: {label: demand, aliases: [planned_qty]}
       quantity:        {aliases: [done_qty, moved_qty]}
@@ -552,7 +568,10 @@ tables:
       posted, cancel - only posted counts. amount_total is in the
       document currency; amount_total_signed is in AUD and negative for
       refunds. amount_residual is what is still owed. This version has no
-      invoice analysis view: sum account_move or account_move_line.
+      invoice analysis view: sum account_move or account_move_line. There
+      is no sale_id or purchase_id: invoice_origin holds the source order
+      number(s); whether an order has been invoiced is
+      sale_order.invoice_status.
     columns:
       name:                {label: number, aliases: [invoice_number, bill_number]}
       ref:                 {label: reference, aliases: [vendor_reference]}
@@ -579,7 +598,9 @@ tables:
       display_type: product = invoice line, tax, payment_term (the
       receivable / payable line), cogs, rounding; line_section and
       line_note carry no amount. For the general ledger use lines whose
-      entry is posted (parent_state = 'posted').
+      entry is posted (parent_state = 'posted'). Income accounts carry
+      credits, so their balance is negative: income = -SUM(balance);
+      expenses are positive.
     columns:
       account_id:     {label: account, aliases: [gl_account]}
       price_subtotal: {label: subtotal, aliases: [line_total]}
@@ -648,7 +669,11 @@ tables:
 
   account_analytic_line:
     label: analytic line
-    aliases: [cost_allocation, timesheet_cost]
+    aliases: [cost_allocation]
+    description: >-
+      Analytic (cost-centre) amounts from invoices and bills. NOT
+      timesheets: the timesheet app isn't installed, so there is no
+      project_id, task_id or employee_id here and no hours worked.
 
   # -- HR --------------------------------------------------------------------
 
@@ -660,10 +685,12 @@ tables:
       user_id the Odoo user (if any). active = false is archived
       (departed). Job title, job position and department are NOT here in
       Odoo 19: join hr_version v ON v.id = hr_employee.current_version_id.
+      Personal and contract details (country_id, sex, marital, children,
+      private address, contract dates) are on hr_version too.
     columns:
       parent_id:  {label: manager, aliases: [supervisor, reports_to, boss]}
       coach_id:   {label: coach, aliases: [mentor]}
-      work_email: {label: work email, aliases: [email]}
+      work_email: {label: work email, aliases: [email, company_email, work_email_address]}
       work_phone: {label: work phone, aliases: [phone, extension]}
       mobile_phone: {label: work mobile}
       first_contract_date: {label: start date, aliases: [hire_date, joined, join_date, date_joined, joining_date, start_date, date_start, employment_start, commencement_date, date_contract_start, first_contract], description: "the date the employee joined - the ONLY joining / start date on hr_employee (there is no date_joined, hire_date or date_start column)"}
@@ -684,7 +711,7 @@ tables:
       employee_type_id: {label: employee type}
       work_location_id: {label: work location, aliases: [office, site]}
       contract_date_start: {label: contract start, aliases: [date_contract_start, contract_start_date], description: "start of this contract / version; for when someone joined use hr_employee.first_contract_date"}
-      contract_date_end:   {label: contract end, aliases: [end_date, finish_date]}
+      contract_date_end:   {label: contract end, aliases: [end_date, finish_date, contract_end_date, contract_end]}
 
   hr_department:
     label: department
@@ -803,10 +830,18 @@ tables:
       stage_id is the column on the project's board (project_task_type).
       Assignees are in project_task_user_rel (task_id, user_id). state:
       01_in_progress, 02_changes_requested, 03_approved, 04_waiting_normal,
-      1_done, 1_canceled.
+      1_done, 1_canceled. Hours WORKED are not recorded in this database
+      (the timesheet app isn't installed): there is no hours,
+      effective_hours, planned_hours or remaining_hours column, here or on
+      project_project. allocated_hours is the planned estimate only; a
+      project's planned hours are SUM(allocated_hours) of its tasks.
+      date_assign is when the task was first assigned, date_end when it
+      was closed, date_last_stage_update its last stage change.
     columns:
       date_deadline: {label: deadline, aliases: [due_date]}
-      allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours]}
+      allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours, planned_hours, estimated_hours]}
+      date_end:        {label: closed date, aliases: [date_done, completed_date, completion_date]}
+      date_assign:     {label: assigned date}
 
   project_task_type:
     label: task stage

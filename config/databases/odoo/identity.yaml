@@ -25,6 +25,24 @@ sql_examples:
       FROM product_template pt
       WHERE pt.sale_ok AND pt.active
       ORDER BY 1
+  - question: what is our sales revenue this financial year?
+    note: >-
+      the financial year ends on res_company.fiscalyear_last_month /
+      fiscalyear_last_day (30 June in Australia), not 31 December; it starts
+      the day after the most recent year-end
+    sql: >-
+      SELECT SUM(so.amount_untaxed) AS revenue
+      FROM sale_order so
+      JOIN res_company rc ON rc.id = so.company_id
+      WHERE so.state = 'sale'
+        AND so.date_order::date > CASE
+          WHEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day) < CURRENT_DATE
+          THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
+          ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int - 1,
+                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
+        END
   - question: who are our top 5 customers by revenue?
     note: orders can be addressed to a contact person, so group on the company
     sql: >-
