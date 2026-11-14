@@ -261,6 +261,7 @@ def json_correction_hint(sql, error_text, catalog):
 MISSING_COLUMN_MIN_SCORE = 70     # weakest suggestion shown
 MISSING_COLUMN_SUGGESTIONS = 3
 MISSING_COLUMN_NOTE_CHARS = 400   # table note, trimmed to this
+MISSING_COLUMN_DETAILED = 6       # columns explained in full; the rest are listed
 
 _QUALIFIED_MISSING = re.compile(
     r'column\s+"?([A-Za-z_][\w$]*)"?\s*\.\s*"?([A-Za-z_][\w$]*)"?\s+does not exist',
@@ -311,14 +312,24 @@ def _similar_columns(missing, table):
                   key=lambda item: (-item[0], item[1]))[:MISSING_COLUMN_SUGGESTIONS]
 
 
-def missing_column_hint(sql, error_text, catalog):
+def missing_column_hint(sql, error_text, catalog, unknown=None):
     """
     The COLUMN NOT FOUND block for correct_sql(), or "" when the error
     isn't a missing column or its table can't be found in the catalog.
+    unknown: [(column, qualifier, table)] from find_unknown_columns() -
+    every column the pre-execution check found missing, all covered in
+    one block; otherwise the one the database error names.
     """
-    column_name = extract_missing_column(str(error_text or ""))
-    if not column_name:
-        return ""
+    if unknown:
+        wanted = [(column, qualifier) for column, qualifier, _ in unknown]
+    else:
+        column_name = extract_missing_column(str(error_text or ""))
+        if not column_name:
+            return ""
+        match = _QUALIFIED_MISSING.search(str(error_text).splitlines()[0])
+        qualifier = match.group(1) if match and \
+            match.group(2).lower() == column_name.lower() else None
+        wanted = [(column_name, qualifier)]
     try:
         tree = parse_single_sql(sql)
     except ValueError:
@@ -334,12 +345,34 @@ def missing_column_hint(sql, error_text, catalog):
     if not by_reference:
         return ""
 
-    # Which table it was looked for in: the error's qualifier (column
+    lines = ["COLUMN NOT FOUND"]
+    noted = set()            # each table's note once
+    for column_name, qualifier in wanted[:MISSING_COLUMN_DETAILED]:
+        lines += _missing_column_lines(tree, by_reference, column_name,
+                                       qualifier, noted)
+    if len(lines) == 1:
+        return ""
+    rest = wanted[MISSING_COLUMN_DETAILED:]
+    if rest:
+        lines.append("- Also not found: " + ", ".join(
+            f"{qualifier}.{column}" if qualifier else column
+            for column, qualifier in rest))
+    lines += [
+        "Use only columns that the schema lists for each table. If none of",
+        "the closest columns means what the question asks, the data may not",
+        "be recorded: return DATA_NOT_AVAILABLE rather than invent a column.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _missing_column_lines(tree, by_reference, column_name, qualifier, noted):
+    """The hint lines for one missing column. noted: names of tables whose
+    note is already in the hint (updated)."""
+    # Which table it was looked for in: its qualifier (column
     # sp.purchase_order_id), else how the SQL uses it, else every table.
     qualifiers = []
-    match = _QUALIFIED_MISSING.search(str(error_text).splitlines()[0])
-    if match and match.group(2).lower() == column_name.lower():
-        qualifiers.append(match.group(1).lower())
+    if qualifier:
+        qualifiers.append(qualifier.lower())
     else:
         qualifiers += [c.table.lower() for c in tree.find_all(exp.Column)
                        if c.name.lower() == column_name.lower() and c.table]
@@ -359,7 +392,7 @@ def missing_column_hint(sql, error_text, catalog):
     def has_column(table, name):
         return any(c["name"].lower() == name.lower() for c in table["columns"])
 
-    lines = ["COLUMN NOT FOUND"]
+    lines = []
     for reference, table in targets:
         name = table["name"]
         shown = f"{reference}.{column_name}" if reference != name.lower() else column_name
@@ -371,7 +404,8 @@ def missing_column_hint(sql, error_text, catalog):
         else:
             lines.append(f"  {name} has no similar column.")
         note = " ".join((table.get("description") or "").split())
-        if note:
+        if note and name not in noted:
+            noted.add(name)
             if len(note) > MISSING_COLUMN_NOTE_CHARS:
                 note = note[:MISSING_COLUMN_NOTE_CHARS - 3] + "..."
             lines.append(f"  About {name}: {note}")
@@ -387,10 +421,118 @@ def missing_column_hint(sql, error_text, catalog):
                 elsewhere.append(label)
     if elsewhere:
         lines.append(f"- {column_name} is a column of: {', '.join(elsewhere)}")
+    return lines
 
-    lines += [
-        "Use only columns that the schema lists for each table. If none of",
-        "the closest columns means what the question asks, the data may not",
-        "be recorded: return DATA_NOT_AVAILABLE rather than invent a column.",
-    ]
-    return "\n".join(lines) + "\n"
+
+# ---------------------------------------------------------------------------
+# Unknown columns, before the query runs
+# ---------------------------------------------------------------------------
+# The catalog holds every column of each discovered table except the role's
+# denied ones, and by the time this runs prepare_sql() has stripped or
+# blocked every denied column. So a column the SQL names that isn't in its
+# catalog table doesn't exist (or the catalog is out of date - restart after
+# a schema change). Catching it here saves a database round trip and sends
+# the model straight to correction with missing_column_hint().
+#
+# It only ever errs towards running the query: anything it can't be sure
+# of is left for the database to judge.
+#   - a qualified column (t.col) is checked only when t is a catalog table;
+#     an alias used for several tables in different subqueries passes if
+#     any of them has the column
+#   - an unqualified column is checked only when every row source in the
+#     query is a catalog table (no derived tables, CTEs, functions or
+#     undiscovered tables), and passes if any of them has it or it is an
+#     output alias somewhere in the query (ORDER BY total)
+
+
+class UnknownColumnError(Exception):
+    """Columns the SQL names that aren't in the role's catalog (a list of
+    (column, qualifier, table) from find_unknown_columns). str() is the
+    engine's own "no such column" message for the first, so the
+    correction step reads it like a database error; missing_column_hint()
+    covers them all."""
+
+    def __init__(self, unknown):
+        self.unknown = list(unknown)
+        column, qualifier, _ = self.unknown[0]
+        super().__init__(active_engine().missing_column_message(column, qualifier))
+
+
+def find_unknown_columns(sql, catalog):
+    """
+    [(column, qualifier, table name)] for every column the SQL names that
+    its catalog table doesn't have, in order, each once. qualifier is the
+    alias as written (None if unqualified); table is the catalog table's
+    name, or None for an unqualified column. [] when all are known or the
+    SQL can't be parsed. The database reports one missing column at a
+    time; this finds them all, so one correction can fix them all.
+    """
+    try:
+        tree = parse_single_sql(sql)
+    except ValueError:
+        return []
+
+    tables_for = {}           # reference -> [catalog table]
+    other_sources = set()     # references whose columns we can't know
+    for table in tree.find_all(exp.Table):
+        reference = (table.alias_or_name or table.name).lower()
+        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
+        if full and full in catalog.tables and isinstance(table.this, exp.Identifier):
+            entry = catalog.tables[full]
+            for key in {reference, table.name.lower()}:
+                bucket = tables_for.setdefault(key, [])
+                if all(entry is not t for t in bucket):
+                    bucket.append(entry)
+        else:
+            other_sources.add(reference)
+    for node in tree.find_all(exp.Subquery, exp.CTE, exp.Unnest, exp.Lateral):
+        if node.alias:
+            other_sources.add(node.alias.lower())
+    has_other = bool(other_sources) or any(
+        isinstance(source, (exp.Subquery, exp.Unnest, exp.Lateral))
+        for source in _row_sources(tree))
+
+    output_names = {a.alias.lower() for a in tree.find_all(exp.Alias) if a.alias}
+    for table_alias in tree.find_all(exp.TableAlias):
+        output_names.update(c.name.lower() for c in table_alias.columns)
+
+    def has(table, name):
+        return any(c["name"].lower() == name for c in table["columns"])
+
+    every_table = [t for bucket in tables_for.values() for t in bucket]
+
+    unknown, seen = [], set()
+    for column in tree.find_all(exp.Column):
+        if isinstance(column.this, exp.Star) or not column.name:
+            continue
+        name = column.name.lower()
+        if column.table:
+            qualifier = column.table.lower()
+            if qualifier in other_sources or qualifier not in tables_for:
+                continue
+            candidates = tables_for[qualifier]
+            if any(has(t, name) for t in candidates):
+                continue
+            found = (column.name, column.table, candidates[0]["name"])
+        else:
+            if has_other or name in output_names or not every_table:
+                continue
+            if any(has(t, name) for t in every_table):
+                continue
+            found = (column.name, None, None)
+        key = (found[0].lower(), (found[1] or "").lower())
+        if key not in seen:
+            seen.add(key)
+            unknown.append(found)
+    return unknown
+
+
+def _row_sources(tree):
+    """Every FROM / JOIN source in the query, at any depth."""
+    for select in tree.find_all(exp.Select):
+        from_clause = select.args.get("from_") or select.args.get("from")
+        if from_clause:
+            yield from_clause.this
+        for join in select.args.get("joins") or []:
+            yield join.this
+

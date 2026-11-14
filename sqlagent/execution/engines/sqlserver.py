@@ -250,6 +250,10 @@ class SqlServerEngine(Engine):
 
     # -- errors -------------------------------------------------------------
 
+    def missing_column_message(self, column, qualifier=None):
+        # SQL Server never names the qualifier (error 207).
+        return "Invalid column name '" + column.replace("'", "''") + "'."
+
     def missing_column(self, error_text):
         """SQL Server: "Invalid column name 'PhoneNr'." (error 207). The
         first one if several are reported; the name is unqualified."""

@@ -54,10 +54,13 @@ from sqlagent.controls.row_scope import RowScopeError, apply_row_scope
 from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.execution.sql_diagnostics import (
     diagnose_sql_error,
+    UnknownColumnError,
+    find_unknown_columns,
     json_correction_hint,
     missing_column_hint,
 )
 from sqlagent.execution.sql_execution import execute_sql_with_sources
+from sqlagent.settings import get_settings
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +153,24 @@ def _prepare_sql(sql, security, catalog):
         failure = _validation_failure(prepared.failure_reason, prepared.sql)
 
     return prepared.sql, prepared.withheld, failure
+
+
+def _check_columns(sql, catalog):
+    """
+    Before running the SQL, check every column it names against the
+    role's catalog (query.check_columns). Raises UnknownColumnError for
+    any that aren't there, so the query goes to correction without a
+    database round trip; see sql_diagnostics.find_unknown_columns.
+    """
+    if not get_settings().query.check_columns:
+        return
+    unknown = find_unknown_columns(sql, catalog)
+    if unknown:
+        names = ", ".join(
+            f"{qualifier}.{column}" if qualifier else column
+            for column, qualifier, _ in unknown)
+        print(f"\n[sql] Column check: not in the schema - {names}")
+        raise UnknownColumnError(unknown)
 
 
 def _sql_for_correction(sql, generated_sql):
@@ -467,13 +488,17 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
     print("\n[agent] Executing SQL...")
 
     try:
+        _check_columns(sql, catalog)
         results, removed = _execute(sql, security)
         withheld = withheld + removed
     except RowScopeError as ex:
         print(f"\n[security] Row scope could not be applied: {ex}")
         return _policy_block("policy", sql)
     except Exception as ex:
-        print(f"\n[SQL ERROR] {ex}")
+        if isinstance(ex, UnknownColumnError):
+            print("[agent] Not run: correcting it first.")
+        else:
+            print(f"\n[SQL ERROR] {ex}")
 
         diagnosis = diagnose_sql_error(sql, ex, security, catalog.semantic)
         correction_hint = ""
@@ -512,7 +537,9 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
         # columns and its note, so the retry doesn't send the same SQL
         # back (see sql_diagnostics.missing_column_hint).
         if not correction_hint:
-            correction_hint = missing_column_hint(sql, ex, catalog)
+            correction_hint = missing_column_hint(
+                sql, ex, catalog,
+                unknown=ex.unknown if isinstance(ex, UnknownColumnError) else None)
             if correction_hint:
                 print("\n[sql] Missing column hint for the correction:")
                 print(correction_hint.rstrip())
@@ -573,6 +600,7 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key):
 
             print("\n[agent] Executing corrected SQL...")
 
+            _check_columns(corrected_sql, catalog)
             results, removed = _execute(corrected_sql, security)
             withheld = withheld + removed
             sql = corrected_sql

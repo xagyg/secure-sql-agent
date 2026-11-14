@@ -189,6 +189,10 @@ class QuerySettings(_Strict):
     # Most values one row-scope dimension may resolve to for one user
     # (security_policy.py). Above it the user's context isn't built.
     max_scope_values: int = Field(1000, ge=1, le=10_000)
+    # Check every column the SQL names against the role's catalog before
+    # running it; a column that isn't there goes straight to correction
+    # (sql_diagnostics.find_unknown_column).
+    check_columns: bool = True
 
 
 # ---------------------------------------------------------------------------

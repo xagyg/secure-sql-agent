@@ -208,6 +208,11 @@ class PostgresEngine(Engine):
 
     # -- errors -------------------------------------------------------------
 
+    def missing_column_message(self, column, qualifier=None):
+        if qualifier:
+            return f"column {qualifier}.{column} does not exist"
+        return f'column "{column}" does not exist'
+
     def missing_column(self, error_text):
         """
         Postgres words the error differently depending on how the column
