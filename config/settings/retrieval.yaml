@@ -53,6 +53,13 @@ typo_correction:
   min_length: 5      # shorter words are never corrected ("po", "ship")
   margin: 3          # another candidate this close to the best (and not
                      # just its singular/plural) = ambiguous, no correction
+  same_first_letter: true  # only correct to a word with the same first
+                     # letter: typos rarely change it, and it stops real
+                     # words being "corrected" ("located" -> "allocated")
+  common_word_zipf: 3.0  # an English word at least this common is never
+                     # corrected ("currently" 5.1, "located" 4.9; typos
+                     # such as "custmers" score 0, "employes" 1.8). Zipf
+                     # frequency from the wordfreq package; 0 = no check
 
 # ---------------------------------------------------------------------------
 # Domain of Discourse routing
@@ -95,8 +102,34 @@ domains:
   # Decision rule.
   min_domain_score: 0.25   # below this, no domain: search the whole UoD
   blend_margin: 0.15       # top two closer than this: use both domains
+  blend: true              # false: always use the top domain only. A
+                           # database can override this in its semantic
+                           # folder (retrieval: blend:), as Odoo does.
 
   # Demo only: lets the person asking set Who with "[who=buyer]". This
   # affects ROUTING only - never authorisation, which always comes from the
   # authenticated SecurityContext. Turn off in any real deployment.
   allow_who_tag: true
+
+# ---------------------------------------------------------------------------
+# Relationship walk
+# ---------------------------------------------------------------------------
+# After the anchor tables are chosen, the schema is widened by following
+# relationships (foreign keys and declared joins) out to the domain's hop
+# limit. A database can override any of these in its semantic folder under
+# retrieval: (see config/databases/odoo/semantic/domains.yaml).
+relationships:
+  # A table that more than this many other tables point at is a hub (in
+  # Odoo: res_company, res_users, res_currency, ...). A hub is included
+  # and its own foreign keys are followed, but the walk does not fan out
+  # to every table that points at it, which pulled most of the schema
+  # into the prompt. 0 turns this off. Per database, hub_tables: and
+  # not_hub_tables: add or remove tables by name.
+  hub_threshold: 15
+
+  # A table the question names in full that sits outside the chosen
+  # domain ("list the shippers" asked from the HR desk):
+  #   walk - add it and walk its relationships
+  #   add  - add it, without walking its relationships
+  #   note - log it only; the domain's schema is used as is
+  named_outside_domain: add

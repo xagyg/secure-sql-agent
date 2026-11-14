@@ -33,7 +33,7 @@
 #     A contact person's parent_id is its company; commercial_partner_id
 #     is the top-level company. customer_rank / supplier_rank only rise
 #     when invoices / bills are posted, so they are often 0 - a customer is
-#     a partner with a confirmed sales order. A user (res_users) has its
+#     a partner with a confirmed sales order (see the customer term). A user (res_users) has its
 #     name on its partner (partner_id).
 #   - Invoices, bills, credit notes and journal entries are all
 #     account_move, told apart by move_type.
@@ -160,29 +160,6 @@ tables:
       industry_id:   {label: industry, aliases: [sector]}
       ref:           {label: reference, aliases: [customer_code, account_number]}
       type:          {label: address type, description: "contact, invoice, delivery, other"}
-      properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      additional_identifiers: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      barcode: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      specific_property_product_pricelist: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      qr_code_method: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      credit_limit: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_payable_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_receivable_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_position_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_payment_term_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_supplier_payment_term_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      trust: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      ignore_abnormal_invoice_date: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      ignore_abnormal_invoice_amount: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      invoice_sending_method: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      invoice_edi_format_store: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_outbound_payment_method_line_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_inbound_payment_method_line_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_customer: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_supplier: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_purchase_currency_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      receipt_reminder_email: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      reminder_date_before_receipt: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   res_partner_category:
     label: partner tag
@@ -201,7 +178,6 @@ tables:
     description: name is JSONB (name->>'en_US').
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
-      full_name: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   res_company:
     label: company
@@ -209,15 +185,6 @@ tables:
     description: >-
       The companies this Odoo database runs (multi-company). Almost every
       business table has company_id. partner_id holds the company's address.
-    columns:
-      report_header: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      report_footer: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      company_details: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      pay_now_label: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      pay_later_label: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      invoice_terms: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      invoice_terms_html: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      employee_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   res_users:
     label: user
@@ -230,14 +197,10 @@ tables:
       login:        {aliases: [username, user_name]}
       share:        {description: "true = portal or public user, not an internal user"}
       sale_team_id: {label: sales team}
-      property_warehouse_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   res_currency:
     label: currency
     description: name is the ISO code (AUD, USD, EUR).
-    columns:
-      currency_unit_label: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      currency_subunit_label: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   res_currency_rate:
     label: currency rate
@@ -294,18 +257,6 @@ tables:
       description_purchase: {description: "JSONB by language: use description_purchase->>'en_US', never description_purchase = 'text'"}
       description_sale: {description: "JSONB by language: use description_sale->>'en_US', never description_sale = 'text'"}
       description_picking: {description: "JSONB by language: use description_picking->>'en_US', never description_picking = 'text'"}
-      product_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_income_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_expense_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      sale_delay: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      project_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      project_template_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      task_template_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      responsible_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_production: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_inventory: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      description_pickingout: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      description_pickingin: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   product_product:
     label: product variant
@@ -322,7 +273,6 @@ tables:
       barcode:        {aliases: [ean, upc, gtin]}
       standard_price: {label: cost, aliases: [unit_cost, cost_price], description: "JSONB by company: use (standard_price->>'1')::numeric (company 1's cost), never standard_price = value"}
       qty_available: {description: "NOT stock on hand - a JSONB column Odoo doesn't keep up to date; never use it. For stock use SUM(stock_quant.quantity) in internal locations (stock_location.usage = 'internal')"}
-      lot_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   product_category:
     label: product category
@@ -332,19 +282,6 @@ tables:
       parent_path holds the ids from the root ("1/4/9/").
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
-      product_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_income_categ_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_expense_categ_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_valuation: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_valuation_account_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_journal: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_cost_method: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_price_difference_account_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_invoices_to_issue_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_invoiced_not_delivered_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_stock_account_production_cost_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_bills_to_receive_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      property_account_billed_not_received_id: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   product_pricelist:
     label: pricelist
@@ -398,7 +335,6 @@ tables:
       commitment_date: {label: delivery date, aliases: [promised_date, due_date]}
       client_order_ref: {label: customer reference, aliases: [customer_po, po_number]}
       opportunity_id:  {label: opportunity}
-      customizable_pdf_form_fields: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   sale_order_line:
     label: sales order line
@@ -421,8 +357,6 @@ tables:
       margin:          {aliases: [gross_profit, profit]}
       salesman_id:     {label: salesperson}
       order_partner_id: {label: customer}
-      analytic_distribution: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      extra_tax_data: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   crm_team:
     label: sales team
@@ -430,7 +364,6 @@ tables:
     description: name is JSONB (name->>'en_US'). user_id is the team leader.
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
-      lead_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   crm_team_member:
     label: sales team member
@@ -458,8 +391,6 @@ tables:
       partner_id:       {label: customer}
       partner_name:     {label: company name}
       lost_reason_id:   {label: lost reason}
-      duration_tracking: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      lead_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   crm_stage:
     label: pipeline stage
@@ -508,7 +439,6 @@ tables:
       qty_invoiced:   {label: billed quantity}
       price_unit:     {label: unit price, aliases: [cost]}
       price_subtotal: {label: subtotal, aliases: [line_total, spend]}
-      analytic_distribution: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   vendor_delay_report:
     label: vendor on-time delivery
@@ -560,7 +490,6 @@ tables:
       date_done:      {label: date done, aliases: [shipped_date, received_date, effective_date]}
       origin:         {label: source document, aliases: [so_number, po_number]}
       sale_id:        {label: sales order}
-      picking_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   stock_picking_type:
     label: operation type
@@ -570,9 +499,6 @@ tables:
       mrp_operation = manufacturing. name is JSONB (name->>'en_US').
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
-      picking_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      batch_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      wo_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   stock_move:
     label: stock move
@@ -596,7 +522,6 @@ tables:
     aliases: [serial_number, batch, lot_number]
     columns:
       standard_price: {description: "JSONB by company: use (standard_price->>'1')::numeric (company 1's cost), never standard_price = value"}
-      lot_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   stock_warehouse_orderpoint:
     label: reordering rule
@@ -645,7 +570,6 @@ tables:
         label: payment status
         description: "not_paid, partial, in_payment, paid, reversed"
       invoice_origin:      {label: source document, aliases: [so_number, po_number]}
-      sending_data: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   account_move_line:
     label: journal item
@@ -662,8 +586,6 @@ tables:
       quantity:       {aliases: [qty]}
       date_maturity:  {label: due date}
       parent_state:   {label: entry status}
-      analytic_distribution: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      extra_tax_data: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   account_account:
     label: account
@@ -708,7 +630,6 @@ tables:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
       description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
       invoice_label: {description: "JSONB by language: use invoice_label->>'en_US', never invoice_label = 'text'"}
-      invoice_legal_notes: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   account_payment_term:
     label: payment terms
@@ -747,8 +668,6 @@ tables:
       mobile_phone: {label: work mobile}
       first_contract_date: {label: start date, aliases: [hire_date, joined, join_date, date_joined, joining_date, start_date, date_start, employment_start, commencement_date, date_contract_start, first_contract], description: "the date the employee joined - the ONLY joining / start date on hr_employee (there is no date_joined, hire_date or date_start column)"}
       current_version_id: {label: current employment details}
-      salary_distribution: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      employee_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   hr_version:
     label: employment record
@@ -838,8 +757,6 @@ tables:
       One operation of a manufacturing order (production_id) at a work
       centre. state: blocked, ready, progress, done, cancel. duration is
       actual minutes, duration_expected planned.
-    columns:
-      properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   mrp_bom:
     label: bill of materials
@@ -856,8 +773,6 @@ tables:
   mrp_workcenter:
     label: work centre
     aliases: [work_center, machine, workstation]
-    columns:
-      analytic_distribution: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   maintenance_equipment:
     label: equipment
@@ -865,15 +780,11 @@ tables:
     description: name is JSONB (name->>'en_US').
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
-      equipment_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      equipment_req_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   maintenance_request:
     label: maintenance request
     aliases: [repair, breakdown, service_request, maintenance_job]
     description: "maintenance_type: corrective (repair) or preventive"
-    columns:
-      equipment_req_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   # -- projects ----------------------------------------------------------------
 
@@ -884,8 +795,6 @@ tables:
     columns:
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
       label_tasks: {description: "JSONB by language: use label_tasks->>'en_US', never label_tasks = 'text'"}
-      duration_tracking: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      task_properties_definition: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   project_task:
     label: task
@@ -898,9 +807,6 @@ tables:
     columns:
       date_deadline: {label: deadline, aliases: [due_date]}
       allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours]}
-      html_field_history: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      duration_tracking: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
-      task_properties: {description: "JSONB, not a plain value - don't compare it with text or numbers"}
 
   project_task_type:
     label: task stage
@@ -974,27 +880,39 @@ terms:
     aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
     description: confirmed but not fully delivered
 
+  # Orders may be addressed to a contact person, so a partner is a
+  # customer when any partner under it (commercial_partner_id) has a
+  # confirmed order. Our own companies (res_company.partner_id, e.g. "AU
+  # Company") are never customers or vendors.
   customer:
     table: res_partner
     predicate: >-
       EXISTS (SELECT 1 FROM sale_order so
-              WHERE so.partner_id = res_partner.id AND so.state = 'sale')
+              JOIN res_partner op ON op.id = so.partner_id
+              WHERE op.commercial_partner_id = res_partner.id
+                AND so.state = 'sale')
+      AND NOT EXISTS (SELECT 1 FROM res_company rc
+                      WHERE rc.partner_id = res_partner.id)
     aliases: [client]
     description: >-
-      a partner with a confirmed sales order (customer_rank is often 0, so
-      don't use it). Only needed to LIST customers - to look one up by
-      name, filter on the name alone
+      a partner with a confirmed sales order, not one of our own companies
+      (customer_rank is often 0, so don't use it). Only needed to LIST
+      customers - to look one up by name, filter on the name alone
 
   vendor:
     table: res_partner
     predicate: >-
       EXISTS (SELECT 1 FROM purchase_order po
-              WHERE po.partner_id = res_partner.id AND po.state = 'purchase')
+              JOIN res_partner op ON op.id = po.partner_id
+              WHERE op.commercial_partner_id = res_partner.id
+                AND po.state = 'purchase')
+      AND NOT EXISTS (SELECT 1 FROM res_company rc
+                      WHERE rc.partner_id = res_partner.id)
     aliases: [supplier]
     description: >-
-      a partner with a confirmed purchase order (supplier_rank is often 0,
-      so don't use it). Only needed to LIST vendors - to look one up by
-      name, filter on the name alone
+      a partner with a confirmed purchase order, not one of our own
+      companies (supplier_rank is often 0, so don't use it). Only needed to
+      LIST vendors - to look one up by name, filter on the name alone
 
   customer_invoice:
     table: account_move

@@ -96,6 +96,7 @@ WHERE_PHRASE_POINTS = _ROUTING.where_phrase_points
 # Decision rule.
 MIN_DOMAIN_SCORE = _ROUTING.min_domain_score   # below this, no domain: search the whole UoD
 BLEND_MARGIN = _ROUTING.blend_margin           # top two closer than this: use both domains
+BLEND = _ROUTING.blend                         # off: always the top domain only
 
 # Demo only: lets the person asking set Who with "[who=buyer]". This
 # affects ROUTING only - never authorisation, which always comes from the
@@ -218,6 +219,10 @@ class DomainResolver:
             else (semantic.function_aliases if semantic else {}))
         self.domain_tables = {}      # key -> set of full table names
         self.domain_fallbacks = {}   # key -> set of full table names
+        # The database's own setting (semantic retrieval: blend) wins
+        # over retrieval.yaml's.
+        overrides = getattr(semantic, "retrieval", None) or {}
+        self.blend = overrides.get("blend", BLEND)
         self.refresh()
 
     # -- setup ---------------------------------------------------------
@@ -443,7 +448,8 @@ class DomainResolver:
         if best.total < MIN_DOMAIN_SCORE:
             return decision   # too weak: whole UoD, as before
 
-        if len(scores) > 1 and best.total - scores[1].total < BLEND_MARGIN \
+        if self.blend and len(scores) > 1 \
+                and best.total - scores[1].total < BLEND_MARGIN \
                 and scores[1].total >= MIN_DOMAIN_SCORE:
             # Too close to call. At Northwind scale, just use both. On a
             # large ERP this is where the agent would ask the user which

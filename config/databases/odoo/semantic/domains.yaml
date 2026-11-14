@@ -15,6 +15,14 @@
 
 version: 1
 
+# Overrides of config/settings/retrieval.yaml for Odoo. Its domains share
+# many tables (res_partner is in Sales, CRM, Purchase and Accounting), so
+# the top two often score within blend_margin, and searching both doubled
+# an already large schema. Use the top domain only: the relationship walk
+# still crosses into neighbouring domains.
+retrieval:
+  blend: false
+
 domains:
   sales:
     label: Sales

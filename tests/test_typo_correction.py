@@ -14,12 +14,19 @@ from unittest import mock
 from pydantic import ValidationError
 
 from sqlagent.adaptive.text_match import (
-    GENERIC_TERMS, correct_words, fuzzy_available, tokenize)
+    GENERIC_TERMS, correct_words, fuzzy_available, is_common_word, tokenize,
+    word_frequency_available)
 from sqlagent.settings import TypoCorrection
 from tests.fixtures import make_catalog
 
 
 class Dependency(unittest.TestCase):
+
+    # wordfreq is pinned too: without it, real words get "corrected".
+    def test_wordfreq_installed(self):
+        self.assertTrue(
+            word_frequency_available(),
+            "wordfreq not installed (pip install -r requirements.txt)")
 
     # rapidfuzz is a pinned requirement, so a missing install is a broken
     # environment: fail here rather than skip the typo tests and report
@@ -78,6 +85,18 @@ class CorrectWords(unittest.TestCase):
         fixed, _ = corrections("informations", {"formation"}, min_score=60)
         self.assertEqual(fixed, {})
 
+    def test_real_word_inside_a_vocabulary_word_is_left_alone(self):
+        # "located" scores 88 against "allocated", above min_score.
+        fixed, _ = corrections("customers located in Australia",
+                               {"customers", "allocated"})
+        self.assertNotIn("located", fixed)
+
+    def test_first_letter_rule_can_be_turned_off(self):
+        fixed, _ = corrections("customers located in Australia",
+                               {"customers", "allocated"},
+                               same_first_letter=False)
+        self.assertEqual(fixed["located"][0], "allocated")
+
     def test_below_threshold_not_corrected(self):
         fixed, _ = corrections("Margaret", {"market"})
         self.assertEqual(fixed, {})
@@ -91,6 +110,39 @@ class CorrectWords(unittest.TestCase):
         fixed, tied = corrections("custmers", {"customer", "customers"})
         self.assertIn(fixed["custmers"][0], {"customer", "customers"})
         self.assertEqual(tied, {})
+
+
+class CommonWords(unittest.TestCase):
+
+    def test_real_words_are_common(self):
+        for word in ("currently", "located", "contract", "supplied"):
+            with self.subTest(word=word):
+                self.assertTrue(is_common_word(word, 3.0))
+
+    def test_typos_are_not(self):
+        for word in ("custmers", "suplier", "prodcuts", "shiped",
+                     "employes", "territores", "purchsing"):
+            with self.subTest(word=word):
+                self.assertFalse(is_common_word(word, 3.0))
+
+    def test_zero_turns_the_check_off(self):
+        self.assertFalse(is_common_word("currently", 0))
+
+    def test_common_word_is_left_alone(self):
+        # "currently" scores 88 against "current", same first letter.
+        fixed, _ = corrections("products currently out of stock",
+                               {"products", "current"}, common_word_zipf=3.0)
+        self.assertNotIn("currently", fixed)
+
+    def test_without_the_check_it_is_corrected(self):
+        fixed, _ = corrections("products currently out of stock",
+                               {"products", "current"}, common_word_zipf=0)
+        self.assertEqual(fixed["currently"][0], "current")
+
+    def test_typo_still_corrected_with_the_check(self):
+        fixed, _ = corrections("list custmers", {"customers", "orders"},
+                               common_word_zipf=3.0)
+        self.assertEqual(fixed["custmers"][0], "customers")
 
 
 class CatalogQuestionTerms(unittest.TestCase):
@@ -195,6 +247,8 @@ class Settings(unittest.TestCase):
         t = TypoCorrection()
         self.assertTrue(t.enabled)
         self.assertEqual((t.min_score, t.min_length, t.margin), (85, 5, 3))
+        self.assertTrue(t.same_first_letter)
+        self.assertEqual(t.common_word_zipf, 3.0)
 
     def test_limits(self):
         for bad in ({"min_score": 40}, {"min_score": 101},

@@ -128,5 +128,49 @@ class Hint(unittest.TestCase):
             sql, "invalid input syntax for type json", CATALOG), "")
 
 
+
+class SchemaJsonNote(unittest.TestCase):
+    """The short note json/jsonb columns get in the schema shown to the
+    model (SchemaCatalog._json_note), from their discovered type."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.fixtures import NORTHWIND, make_catalog
+        cls.catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+            "public.res_company": ["name", "settings", "notes", "label_json"]})
+        columns = cls.catalog.tables["public.res_company"]["columns"]
+        types = {"name": "character varying", "settings": "jsonb",
+                 "notes": "json", "label_json": "jsonb"}
+        for column in columns:
+            column["type"] = types[column["name"]]
+        next(c for c in columns if c["name"] == "label_json")["description"] = (
+            "JSONB by language: use label_json->>'en_US'")
+        cls.context = cls.catalog._format_context({"public.res_company"})
+
+    def line(self, column):
+        return next(l for l in self.context.splitlines()
+                    if l.startswith(f"  - {column} ") or l.startswith(f'  - "{column}" '))
+
+    def test_jsonb_and_json_columns_get_the_note(self):
+        from sqlagent.adaptive.schema_catalog import JSON_NOTE
+        self.assertIn(JSON_NOTE, self.line("settings"))
+        self.assertIn(JSON_NOTE, self.line("notes"))
+
+    def test_other_columns_do_not(self):
+        self.assertNotIn("--", self.line("name"))
+
+    def test_own_description_is_not_repeated(self):
+        from sqlagent.adaptive.schema_catalog import JSON_NOTE
+        line = self.line("label_json")
+        self.assertIn("label_json->>'en_US'", line)
+        self.assertNotIn(JSON_NOTE, line)
+
+    def test_shipped_odoo_model_has_no_generic_notes(self):
+        from pathlib import Path
+        model = (Path(__file__).resolve().parent.parent / "config" / "databases"
+                 / "odoo" / "semantic" / "model.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("JSONB, not a plain value", model)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -219,6 +220,10 @@ class TypoCorrection(_Strict):
     min_score: int = Field(85, ge=50, le=100)
     min_length: int = Field(5, ge=3)
     margin: int = Field(3, ge=0, le=50)
+    same_first_letter: bool = True
+    # An English word at least this common (wordfreq Zipf frequency) is
+    # never corrected. 0 turns the check off.
+    common_word_zipf: float = Field(3.0, ge=0, le=8)
 
 
 class DomainRouting(_Strict):
@@ -229,13 +234,30 @@ class DomainRouting(_Strict):
     where_phrase_points: int = Field(10, ge=0)
     min_domain_score: float = Field(0.25, ge=0, le=1)
     blend_margin: float = Field(0.15, ge=0, le=1)
+    # Search the top two domains together when they are within
+    # blend_margin. Off: always use the top domain only.
+    blend: bool = True
     allow_who_tag: bool = False
+
+
+class RelationshipWalk(_Strict):
+    # A table that more than this many other tables point at (Odoo's
+    # res_company, res_users) is a hub: it is included, and the walk
+    # follows its own foreign keys outward, but does not fan out to the
+    # tables that point at it. 0 turns hub detection off.
+    hub_threshold: int = Field(15, ge=0)
+    # A table the question names that sits outside the chosen domain:
+    #   walk  add it and walk its relationships (the original behaviour)
+    #   add   add it, without walking its relationships
+    #   note  log it only; the domain's schema is used as is
+    named_outside_domain: Literal["walk", "add", "note"] = "add"
 
 
 class RetrievalSettings(_Strict):
     domains: DomainRouting = Field(default_factory=DomainRouting)
     table_match: TableMatch = Field(default_factory=TableMatch)
     typo_correction: TypoCorrection = Field(default_factory=TypoCorrection)
+    relationships: RelationshipWalk = Field(default_factory=RelationshipWalk)
 
 
 # ---------------------------------------------------------------------------

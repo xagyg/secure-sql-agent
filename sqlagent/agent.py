@@ -323,7 +323,8 @@ def run_agent(question, catalog, history, security):
     schema = catalog.discover_schema(
         question, scope=resolver.scope(decision), anchors=anchors or None)
 
-    print(f"\n[schema] Retrieved context: {len(schema.splitlines())} lines")
+    print(f"\n[schema] Retrieved context: {len(schema.splitlines())} lines, "
+          f"{catalog.context_summary(schema)}")
 
     result = _run_pipeline(
         question, catalog, history, security, schema,
