@@ -206,7 +206,8 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 
 
 # ---------------------------------------------------------------------------
-# A table outside the role's schema: one retry
+# A table that isn't in the role's schema: an invented name gets one
+# retry, a real table the role can't see gets none
 # ---------------------------------------------------------------------------
 # The model sometimes writes a table it remembers rather than one it was
 # shown (timesheet_line, account_payment_rel, Northwind's "order details").
