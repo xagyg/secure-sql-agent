@@ -168,12 +168,57 @@ class Tee:
             stream.flush()
 
 
+# How each question ended, for the summary at the end of a batch. A
+# refusal is a guardrail (run_agent's rule); a failure is a technical
+# error, grouped by the answer the user got.
+_NOT_RUN_LABELS = {
+    "unclear": "unclear question",
+    "off_topic": "not a data question",
+    "overview": "question about the database",
+    "no_question": "no question",
+}
+
+
+def batch_outcome(result):
+    """(group, detail) for one run_agent() result: ("rows", None),
+    ("no rows", None), ("refused", rule label), ("not run", why) or
+    ("failed", the answer given)."""
+    if not isinstance(result, dict):
+        return "failed", "no result"
+    if result.get("row_count") is not None:
+        return ("rows" if result["row_count"] else "no rows"), None
+    if result.get("blocked"):
+        return "refused", result.get("rule_label") or result.get("rule") or "policy"
+    if result.get("outcome"):
+        return "not run", _NOT_RUN_LABELS.get(result["outcome"], result["outcome"])
+    return "failed", (result.get("answer") or "no answer").strip()
+
+
+def print_batch_summary(outcomes, seconds):
+    """The totals at the end of a batch: outcomes is [(group, detail)]."""
+    groups = [("rows", "Returned rows"), ("no rows", "Returned 0 rows"),
+              ("refused", "Refused"), ("not run", "Not run"),
+              ("failed", "Failed")]
+    print(f"\n{'=' * 70}")
+    print(f"[batch] Summary: {len(outcomes)} question(s) in {seconds:.0f}s")
+    for key, title in groups:
+        details = [detail for group, detail in outcomes if group == key]
+        print(f"  {title:<16} {len(details):>4}")
+        counts = {}
+        for detail in details:
+            if detail:
+                counts[detail] = counts.get(detail, 0) + 1
+        for detail, count in sorted(counts.items(), key=lambda i: (-i[1], i[0])):
+            print(f"    {count:>4}  {detail}")
+
+
 def run_batch(items, catalog, security, explain=True):
     """Run each question as the REPL would, printing a header and timing
     for each, then a summary."""
     history = []
     questions = [i for i in items if i != NEW_CONVERSATION]
     failed = 0
+    outcomes = []
     started = time.monotonic()
     number = 0
 
@@ -187,17 +232,20 @@ def run_batch(items, catalog, security, explain=True):
         print(f"\n> {item}")
         begin = time.monotonic()
         try:
-            run_agent(item, catalog, history, security, explain=explain)
+            result = run_agent(item, catalog, history, security, explain=explain)
+            outcomes.append(batch_outcome(result))
         except Exception as ex:
             failed += 1
+            outcomes.append(("failed", f"error: {type(ex).__name__}"))
             print(f"\n[error] {type(ex).__name__}: {ex}")
             print("\n[answer] Something went wrong answering that question.")
         print(f"\n[batch] Took {time.monotonic() - begin:.1f}s")
 
+    seconds = time.monotonic() - started
     print(f"\n{'=' * 70}")
-    print(f"[batch] Done: {len(questions)} question(s) in "
-          f"{time.monotonic() - started:.0f}s"
+    print(f"[batch] Done: {len(questions)} question(s) in {seconds:.0f}s"
           + (f", {failed} failed with an error" if failed else ""))
+    print_batch_summary(outcomes, seconds)
 
 
 def parse_args(argv=None):

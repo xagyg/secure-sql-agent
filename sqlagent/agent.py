@@ -90,7 +90,7 @@ def _validation_reason_kind(reason):
 
 
 def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
-            label=None):
+            label=None, outcome=None, row_count=None):
     """
     The dict run_agent() returns (see its docstring). rule_label is taken
     from BLOCK_RULES unless label is given.
@@ -104,6 +104,8 @@ def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
         "rule": rule,
         "rule_label": label,
         "sql": sql,
+        "outcome": outcome,
+        "row_count": row_count,
     }
 
 
@@ -490,6 +492,10 @@ def run_agent(question, catalog, history, security, explain=True):
             "rule_label": str | None,      # short UI label, policy blocks only
             "sql":     str | None,
             "domain":  str | None,         # Domain of Discourse label
+            "outcome": str | None,         # answered without SQL: "unclear",
+                                           # "off_topic", "overview",
+                                           # "no_question"
+            "row_count": int | None,       # rows returned, when a query ran
         }
 
     reason:
@@ -512,7 +518,8 @@ def run_agent(question, catalog, history, security, explain=True):
         print(f"\n[context] where={context.where!r} who={context.who!r}")
 
     if not question:
-        result = _result("Please add a question to go with the context tag.")
+        result = _result("Please add a question to go with the context tag.",
+                         outcome="no_question")
         result["domain"] = None
         return result
 
@@ -526,7 +533,7 @@ def run_agent(question, catalog, history, security, explain=True):
               "listing the available areas.")
         message = overview_message(_available_areas(catalog))
         print(f"\n[answer] {message}")
-        result = _result(message)
+        result = _result(message, outcome="overview")
         result["domain"] = None
         return result
 
@@ -702,7 +709,7 @@ def _answer_without_sql(question, sql, security, catalog):
         print("\n[agent] Question too vague to answer with one query.")
         message = clarify_message(_available_areas(catalog))
         print(f"\n[answer] {message}")
-        return _result(message)
+        return _result(message, outcome="unclear")
 
     if output_kind == "not_available":
         return _not_available(question, security)
@@ -719,7 +726,7 @@ def _answer_without_sql(question, sql, security, catalog):
         print("\n[agent] Not a data question.")
         message = off_topic_message()
         print(f"\n[answer] {message}")
-        return _result(message)
+        return _result(message, outcome="off_topic")
 
     if output_kind == "no_sql":
         print("\n[agent] Model did not return a SQL statement.")
@@ -981,6 +988,7 @@ def _answer_from_results(question, sql, results, withheld, history,
         return _result(
             f"{explanation}\n\n_{WITHHELD_NOTE}_", explanation_sql,
             reason="policy", rule=WITHHELD_RULE, label=WITHHELD_LABEL,
+            row_count=len(results),
         )
 
-    return _result(explanation, explanation_sql)
+    return _result(explanation, explanation_sql, row_count=len(results))

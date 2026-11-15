@@ -44,6 +44,7 @@ class Retry(unittest.TestCase):
         self.assertIn("return exactly DATA_NOT_AVAILABLE", hint)
         self.assertIn("required_date", execute.call_args[0][0])
         self.assertEqual(result["answer"], "three")
+        self.assertEqual(result["row_count"], 1)       # for the batch summary
         self.assertIn("Asking Ollama to rewrite it without order_shipping_log", out)
 
     def test_rewrite_hint_names_the_closest_table(self):
