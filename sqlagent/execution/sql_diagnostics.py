@@ -216,95 +216,11 @@ def json_columns_in_sql(sql, catalog):
     return found
 
 
-# The opposite mistake: ->> or -> on a column that isn't json, usually a
-# plain-text name copied from the JSONB pattern (res_country_state.name
-# ->> 'en_US'). PostgreSQL says "operator does not exist: character
-# varying ->> unknown", which names no column. The column's type is in
-# the catalog, so the hint says which column is plain text.
-_NOT_JSON_OPERATOR = re.compile(
-    r"operator does not exist:\s*(?!jsonb?\b)[\w ]+?\s*->>?", re.IGNORECASE)
-
-
-def is_json_operator_on_text_error(error_text):
-    """True when ->> / -> was used on a column that isn't json."""
-    return bool(_NOT_JSON_OPERATOR.search(str(error_text or "")))
-
-
-def not_json_columns_in_sql(sql, catalog):
-    """
-    [(table, column, type)] for columns the SQL reads with ->> or -> whose
-    catalog type isn't json/jsonb, in order of first use. Unparseable SQL,
-    or a column that can't be tied to one catalog table, is skipped.
-    """
-    try:
-        tree = parse_single_sql(sql)
-    except ValueError:
-        return []
-    by_alias = _tables_by_alias(tree, catalog)
-
-    found, seen = [], set()
-    for node in tree.find_all(exp.JSONExtract, exp.JSONExtractScalar):
-        column = node.this
-        if not isinstance(column, exp.Column):
-            continue
-        for table in _owners(by_alias, column):
-            info = _column_of(table, column.name)
-            if not info or str(info.get("type", "")).lower() in _JSON_TYPES:
-                continue
-            key = (table["name"].lower(), info["name"].lower())
-            if key not in seen:
-                seen.add(key)
-                found.append((table["name"], info["name"], str(info.get("type", ""))))
-    return found
-
-
-def _tables_by_alias(tree, catalog):
-    """alias (or bare name) -> catalog table, for the tables a query reads."""
-    by_alias = {}
-    for table in tree.find_all(exp.Table):
-        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
-        if full and full in catalog.tables:
-            by_alias[(table.alias_or_name or table.name).lower()] = catalog.tables[full]
-            by_alias.setdefault(table.name.lower(), catalog.tables[full])
-    return by_alias
-
-
-def _column_of(table, name):
-    return next((c for c in table["columns"]
-                 if c["name"].lower() == name.lower()), None)
-
-
-def _owners(by_alias, column):
-    """The catalog table(s) a column reference belongs to: its qualifier's
-    table, or - unqualified - the one referenced table that has it."""
-    if column.table:
-        table = by_alias.get(column.table.lower())
-        return [table] if table else []
-    owners = {id(t): t for t in by_alias.values() if _column_of(t, column.name)}
-    return list(owners.values()) if len(owners) == 1 else []
-
-
 def json_correction_hint(sql, error_text, catalog):
     """
     The JSON COLUMNS block for correct_sql(), or "" when the error isn't
-    about json or the SQL names no json column. ->> on a plain-text
-    column gets a NOT JSON block instead.
+    about json or the SQL names no json column.
     """
-    if is_json_operator_on_text_error(error_text):
-        columns = not_json_columns_in_sql(sql, catalog)
-        if not columns:
-            return ""
-        lines = ["NOT JSON COLUMNS IN THE FAILED SQL"]
-        for table, column, column_type in columns:
-            lines.append(f"- {table}.{column} is {column_type} (plain text, not JSON): "
-                         f"compare it directly, e.g. {column} = 'value' or "
-                         f"{column} ILIKE '%value%'; never {column} ->> 'en_US'")
-        lines += [
-            "Use ->> only on columns the schema lists as jsonb. Keep it on",
-            "those; remove it from the columns above.",
-        ]
-        return "\n".join(lines) + "\n"
-
     if not is_json_type_error(error_text):
         return ""
 
@@ -571,6 +487,20 @@ def placeholder_hint(placeholders):
         "  filter on it: list every match with that value as a column, e.g.\n"
         "  each employee with their manager's name.\n"
     )
+
+
+def has_derived_table(sql):
+    """True when the SQL has a subquery in FROM or JOIN, or a WITH clause:
+    the policy can't tie their columns to a real table, so it rejects
+    them."""
+    try:
+        tree = parse_single_sql(sql)
+    except ValueError:
+        return False
+    if tree.find(exp.CTE):
+        return True
+    return any(isinstance(node.parent, (exp.From, exp.Join))
+               for node in tree.find_all(exp.Subquery))
 
 
 class UnknownColumnError(Exception):

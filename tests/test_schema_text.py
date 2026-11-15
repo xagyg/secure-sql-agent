@@ -3,15 +3,14 @@
 #
 # Tests for how the schema is written into the SQL prompt
 # (retrieval.schema_text): supporting tables list only the columns that
-# matter, types are shortened and NULL markers dropped. Also the hint for
-# ->> used on a plain-text column. No database or LLM needed.
+# matter, types are shortened and NULL markers dropped. No database or
+# LLM needed.
 #
 #     python -m unittest tests.test_schema_text -v
 
 import unittest
 from unittest import mock
 
-from sqlagent.execution.sql_diagnostics import json_correction_hint
 from sqlagent.settings import SchemaText
 from tests.fixtures import make_catalog
 
@@ -125,38 +124,6 @@ class ColumnLines(unittest.TestCase):
     def test_nullability_can_be_shown(self):
         self.assertEqual(self.line("integer", show_nullability=True),
                          "  - a int NOT NULL")
-
-
-class PlainTextJsonOperator(unittest.TestCase):
-
-    def setUp(self):
-        self.catalog = make_catalog(extra_tables={
-            "public.state": ["id", "name"], "public.country": ["id", "name"]})
-        self.catalog.tables["public.state"]["columns"][1]["type"] = "character varying"
-        self.catalog.tables["public.country"]["columns"][1]["type"] = "jsonb"
-
-    ERROR = "operator does not exist: character varying ->> unknown"
-
-    def test_names_the_plain_text_column(self):
-        hint = json_correction_hint(
-            "SELECT 1 FROM state s JOIN country c ON c.id = s.id "
-            "WHERE s.name ->> 'en_US' = 'Queensland' AND c.name ->> 'en_US' = 'Australia'",
-            self.ERROR, self.catalog)
-        self.assertIn("NOT JSON COLUMNS IN THE FAILED SQL", hint)
-        self.assertIn("state.name is character varying (plain text, not JSON)", hint)
-        # The real jsonb column keeps its ->>.
-        self.assertNotIn("country.name is", hint)
-
-    def test_no_plain_text_column_no_hint(self):
-        self.assertEqual(json_correction_hint(
-            "SELECT 1 FROM country c WHERE c.name ->> 'en_US' = 'x'",
-            self.ERROR, self.catalog), "")
-
-    def test_json_error_still_gets_the_json_hint(self):
-        hint = json_correction_hint(
-            "SELECT 1 FROM country c WHERE c.name = 'Australia'",
-            "invalid input syntax for type json", self.catalog)
-        self.assertIn("JSON COLUMNS IN THE FAILED SQL", hint)
 
 
 if __name__ == "__main__":

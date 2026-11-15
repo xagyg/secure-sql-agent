@@ -59,6 +59,7 @@ from sqlagent.execution.sql_diagnostics import (
     PlaceholderError,
     UnknownColumnError,
     find_placeholders,
+    has_derived_table,
     placeholder_hint,
     find_unknown_columns,
     json_correction_hint,
@@ -66,7 +67,7 @@ from sqlagent.execution.sql_diagnostics import (
 )
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 from sqlagent.settings import get_settings
-from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize
+from sqlagent.adaptive.text_match import tokenize
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,15 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
         elif table_retry and _validation_reason_kind(prepared.failure_reason) == "error":
             print(f"\n[security] {prepared.failure_reason}")
             failure = {"retry_parse": True, "reason": prepared.failure_reason}
+        elif table_retry and has_derived_table(sql):
+            # A subquery in FROM / JOIN (or a WITH): its columns can't be
+            # tied to a real table, so the policy rejects the query. Not
+            # a security issue - one rewrite without them.
+            print(f"\n[sql] {prepared.failure_reason} (a subquery in FROM "
+                  "or JOIN, which can't be checked)")
+            failure = {"retry_parse": True, "reason": prepared.failure_reason,
+                       "hint": _DERIVED_TABLE_HINT,
+                       "action": "rewrite it without subqueries in FROM"}
         else:
             failure = _validation_failure(prepared.failure_reason, prepared.sql)
 
@@ -182,18 +192,13 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 # as "restricted". Now it gets one rewrite using only the schema it was
 # given, or DATA_NOT_AVAILABLE. Nothing leaks: the hint names only the
 # table the model wrote itself, and says the same whether that table is
-# hidden from the role or doesn't exist. If the question itself names the
-# data ("show me the payslips"), it stays a block, so a restricted table
-# isn't quietly answered from a different one.
+# hidden from the role or doesn't exist. The hint tells the model not to
+# answer from a table that means something else, so a question for
+# restricted data ("show me the payslips") ends as DATA_NOT_AVAILABLE, not
+# as an answer from a different table. Every rewrite gets this one try;
+# there is no word-matching on the question to decide.
 
 _UNAUTHORISED_TABLE = re.compile(r"^Table '([^']+)' is not authorised\.$")
-
-# Words that say nothing about what a table holds.
-_TABLE_NAME_NOISE = frozenset({
-    "public", "dbo", "res", "hr", "account", "stock", "product", "sale",
-    "purchase", "project", "mrp", "line", "lines", "rel", "id", "report",
-    "x", "tbl", "table",
-})
 
 
 def _unauthorised_table(reason):
@@ -201,16 +206,6 @@ def _unauthorised_table(reason):
     (any other validation failure is never retried)."""
     match = _UNAUTHORISED_TABLE.match(reason.strip())
     return match.group(1) if match else None
-
-
-def _question_names_table(question, table):
-    """True if the question uses every meaningful word of the table's name
-    ("payslips" for hr_payslip, "employees" for employees): the user asked
-    for that data. One shared common word isn't enough ("orders" doesn't
-    name order_shipping_log)."""
-    bare = table.split(".")[-1]
-    table_words = tokenize(bare.replace("_", " ")) - _TABLE_NAME_NOISE - GENERIC_TERMS
-    return bool(table_words) and table_words <= tokenize(question)
 
 
 def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
@@ -222,10 +217,6 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     table = failure["retry_table"]
     reason = failure["reason"]
     bare = table.split(".")[-1]
-
-    if _question_names_table(question, table):
-        print("\n[security] The question asks for that data - not retrying.")
-        return _policy_block(block_rule(reason), sql)
 
     hint = (
         "TABLE NOT AVAILABLE\n"
@@ -274,13 +265,25 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
 # about asking again: the rewrite goes through every check in
 # _prepare_sql() like any other query, and a second parse failure ends it.
 
+_DERIVED_TABLE_HINT = (
+    "SUBQUERY IN FROM NOT ALLOWED\n"
+    "- Subqueries in FROM or JOIN, and WITH clauses, are rejected: their\n"
+    "  columns can't be checked against real tables.\n"
+    "- Read the base tables directly. To compare periods, use conditional\n"
+    "  aggregation, e.g. SUM(CASE WHEN so.date_order >= ... THEN\n"
+    "  so.amount_total ELSE 0 END) AS this_year, and compare the two sums\n"
+    "  in HAVING. A single lookup can be a subquery in WHERE or SELECT.\n"
+)
+
+
 def _retry_unparseable(question, schema, sql, failure, security, catalog):
     """
-    One rewrite of a query the parser couldn't read. Returns (sql,
-    withheld, failure) from _prepare_sql() on the rewrite, or a finished
-    result dict (not available / error).
+    One rewrite of a query the parser couldn't read, or (failure["hint"])
+    one with a subquery in FROM. Returns (sql, withheld, failure) from
+    _prepare_sql() on the rewrite, or a finished result dict (not
+    available / error).
     """
-    hint = (
+    hint = failure.get("hint") or (
         "SQL COULD NOT BE PARSED\n"
         "- The query is not valid SQL. Write ONE SELECT statement with a\n"
         "  single FROM clause. Put any lookup it needs (for example the\n"
@@ -289,7 +292,7 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
         "  rc.id = so.company_id) - never a second FROM after the WHERE.\n"
         "  WITH (CTEs) and subqueries in FROM are not allowed.\n"
     )
-    print("\n[agent] Asking Ollama to rewrite it as valid SQL...")
+    print(f"\n[agent] Asking Ollama to {failure.get('action', 'rewrite it as valid SQL')}...")
     try:
         corrected = correct_sql(question, schema, _sql_for_correction(sql, sql),
                                 _sanitize_sql_error_for_llm(failure["reason"]), hint)
@@ -321,19 +324,22 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
         return _error(message, corrected)
 
 
-def _check_columns(sql, catalog):
+def _check_before_running(sql, catalog):
     """
-    Before running the SQL, check every column it names against the
-    role's catalog (query.check_columns). Raises UnknownColumnError for
-    any that aren't there, so the query goes to correction without a
-    database round trip; see sql_diagnostics.find_unknown_columns.
+    The pre-run check: SQL that is valid - it parses and the database
+    would accept it - but can't give a correct answer. Each finding
+    raises an error the correction step has a hint for, so the query is
+    corrected without a database round trip:
+
+      - an unfilled parameter placeholder (%s, $1, ?, :name): it would
+        run against the marker itself (PlaceholderError)
+      - a column that isn't in the role's catalog (UnknownColumnError;
+        only with query.check_columns, see find_unknown_columns)
     """
-    # A parameter placeholder (%s) is never filled in: the query would
-    # run against the marker and match nothing. Always checked.
     placeholders = find_placeholders(sql)
     if placeholders:
-        print(f"\n[sql] Placeholder check: {', '.join(placeholders)} - "
-              "no value is supplied")
+        print(f"\n[sql] Pre-run check: unfilled placeholder "
+              f"{', '.join(placeholders)}")
         raise PlaceholderError(placeholders)
     if not get_settings().query.check_columns:
         return
@@ -342,7 +348,7 @@ def _check_columns(sql, catalog):
         names = ", ".join(
             f"{qualifier}.{column}" if qualifier else column
             for column, qualifier, _ in unknown)
-        print(f"\n[sql] Column check: not in the schema - {names}")
+        print(f"\n[sql] Pre-run check: not in the schema - {names}")
         raise UnknownColumnError(unknown)
 
 
@@ -497,6 +503,22 @@ def run_agent(question, catalog, history, security, explain=True):
         message = overview_message(_available_areas(catalog))
         print(f"\n[answer] {message}")
         result = _result(message)
+        result["domain"] = None
+        return result
+
+    # ---------------------------------------------------------
+    # Something this database doesn't record (semantic model
+    # not_recorded, e.g. Odoo timesheets): "not available", decided
+    # here rather than by the model, which kept answering from columns
+    # that only looked similar.
+    # ---------------------------------------------------------
+    missing = catalog.semantic.not_recorded_match(tokenize(question))
+    if missing:
+        name, phrase, description = missing
+        print(f"\n[semantic] Not recorded in this database: {name} "
+              f"(the question says \"{phrase}\")"
+              + (f" - {description}" if description else ""))
+        result = _policy_block("not_available")
         result["domain"] = None
         return result
 
@@ -697,7 +719,7 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
     print("\n[agent] Executing SQL...")
 
     try:
-        _check_columns(sql, catalog)
+        _check_before_running(sql, catalog)
         results, removed = _execute(sql, security)
         withheld = withheld + removed
     except RowScopeError as ex:
@@ -811,7 +833,7 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
 
             print("\n[agent] Executing corrected SQL...")
 
-            _check_columns(corrected_sql, catalog)
+            _check_before_running(corrected_sql, catalog)
             results, removed = _execute(corrected_sql, security)
             withheld = withheld + removed
             sql = corrected_sql

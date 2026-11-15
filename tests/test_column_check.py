@@ -2,7 +2,7 @@
 # Author: Brad Long
 #
 # Tests for the pre-execution column check (sql_diagnostics.
-# find_unknown_columns, agent._check_columns): a column that isn't in the
+# find_unknown_columns, agent._check_before_running): a column that isn't in the
 # role's catalog goes to correction without running the query, and
 # nothing the check can't be sure of is ever flagged. No database or LLM
 # needed.
@@ -152,7 +152,7 @@ class AgentFlow(unittest.TestCase):
 
     def test_bad_column_is_corrected_before_running(self):
         execute, correct, out = self.run_agent(self.BAD, self.GOOD)
-        self.assertIn("[sql] Column check: not in the schema - v.contract_end_date", out)
+        self.assertIn("[sql] Pre-run check: not in the schema - v.contract_end_date", out)
         self.assertNotIn("[SQL ERROR]", out)
         self.assertIn("Closest columns in hr_version: contract_date_end", correct.call_args[0][4])
         # Only the corrected SQL ran.
@@ -171,7 +171,7 @@ class AgentFlow(unittest.TestCase):
 
     def test_check_can_be_turned_off(self):
         execute, _, out = self.run_agent(self.BAD, self.GOOD, check=False)
-        self.assertNotIn("Column check", out)
+        self.assertNotIn("Pre-run check", out)
         self.assertIn("contract_end_date", execute.call_args_list[0][0][0])
 
 

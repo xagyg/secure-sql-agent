@@ -586,9 +586,10 @@ tables:
       document currency; amount_total_signed is in AUD and negative for
       refunds. amount_residual is what is still owed. This version has no
       invoice analysis view: sum account_move or account_move_line. There
-      is no sale_id or purchase_id: invoice_origin holds the source order
-      number(s); whether an order has been invoiced is
-      sale_order.invoice_status.
+      is no sale_id, sale_order_id or purchase_id: invoice_origin holds the
+      source order number(s) as text; whether an order has been invoiced
+      is sale_order.invoice_status. A customer never invoiced has no
+      posted out_invoice with commercial_partner_id = the customer.
     columns:
       name:                {label: number, aliases: [invoice_number, bill_number]}
       ref:                 {label: reference, aliases: [vendor_reference]}
@@ -617,7 +618,11 @@ tables:
       line_note carry no amount. For the general ledger use lines whose
       entry is posted (parent_state = 'posted'). Income accounts carry
       credits, so their balance is negative: income = -SUM(balance);
-      expenses are positive.
+      expenses are positive. There is no sale_line_ids, sale_order_id or
+      purchase_line_id column here: to tell whether an order was invoiced
+      use sale_order.invoice_status, and to find invoices for a customer
+      use account_move (move_type = 'out_invoice', state = 'posted',
+      commercial_partner_id = the customer).
     columns:
       account_id:     {label: account, aliases: [gl_account]}
       price_subtotal: {label: subtotal, aliases: [line_total]}
@@ -909,6 +914,19 @@ relationships:
 # ---------------------------------------------------------------------------
 # Terms: words that pick ROWS.
 # ---------------------------------------------------------------------------
+# Things this database doesn't record. A question naming one is answered
+# "not available" before any SQL is written - the model kept answering
+# timesheet questions from columns that only look similar
+# (working_hours_close, report_project_task_user). Each phrase matches when
+# all its words are in the question.
+not_recorded:
+  timesheets:
+    aliases: [timesheet, billable hours, hours worked, worked hours,
+              logged hours, hours logged, hours recorded, time spent,
+              spent hours, actual hours, exceeded allocated hours,
+              over allocated hours]
+    description: the timesheet app isn't installed, so hours worked aren't recorded
+
 terms:
   confirmed_sale:
     table: sale_order

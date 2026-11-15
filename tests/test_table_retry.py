@@ -78,34 +78,28 @@ class Retry(unittest.TestCase):
                          missing.call_args[0][4].replace("staff_list", "X"))
 
 
-class NoRetry(unittest.TestCase):
+class QuestionNamingTheData(unittest.TestCase):
+    """A question that names restricted data gets the same one rewrite;
+    the hint stops it being answered from a different table, so it ends
+    as not available - the same reply as for data that doesn't exist."""
 
-    def test_question_naming_the_data_stays_blocked(self):
-        result, correct, execute, out = run("list all employees",
-                                            "SELECT * FROM employees")
-        correct.assert_not_called()
+    def test_rewrite_says_not_available(self):
+        result, correct, execute, _ = run("list all employees",
+                                          "SELECT * FROM employees",
+                                          ["DATA_NOT_AVAILABLE"])
+        self.assertEqual(correct.call_count, 1)
+        self.assertIn("do not\nanswer it from a table that means something else",
+                      correct.call_args[0][4])
         execute.assert_not_called()
-        self.assertEqual(result["rule"], "restricted_data")
-        self.assertIn("The question asks for that data - not retrying", out)
+        self.assertEqual(result["rule"], "not_available")
+
+
+class NoRetry(unittest.TestCase):
 
     def test_other_validation_failures_are_not_retried(self):
         result, correct, _, _ = run("delete old orders", "DELETE FROM orders")
         correct.assert_not_called()
         self.assertTrue(result["blocked"])
-
-
-class QuestionNamesTable(unittest.TestCase):
-
-    def test_examples(self):
-        names = agent._question_names_table
-        self.assertTrue(names("show me the payslips", "public.hr_payslip"))
-        self.assertTrue(names("list all employees", "public.employees"))
-        self.assertFalse(names("which employees have the most billable hours?",
-                               "public.timesheet_line"))
-        self.assertFalse(names("which customers have unpaid invoices?",
-                               "public.account_payment_rel"))
-        self.assertFalse(names("how many orders were shipped late?",
-                               "public.order_shipping_log"))
 
 
 if __name__ == "__main__":

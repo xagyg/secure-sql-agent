@@ -58,7 +58,7 @@ class InTheAgent(unittest.TestCase):
         correct, execute, out = self.run_agent(
             "SELECT order_id FROM orders WHERE customer_id = %s",
             "SELECT order_id, customer_id FROM orders")
-        self.assertIn("Placeholder check: %s", out)
+        self.assertIn("Pre-run check: unfilled placeholder %s", out)
         self.assertIn("Not run: correcting it first", out)
         self.assertIn("NO PARAMETERS", correct.call_args[0][4])
         # Only the corrected SQL ran.

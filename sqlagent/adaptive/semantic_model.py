@@ -171,6 +171,13 @@ class SourcesSpec(_Strict):
     use_database_foreign_keys: bool = True
 
 
+class NotRecordedSpec(_Strict):
+    # Phrases (all words must be in the question) naming something this
+    # database doesn't hold. The name itself is a phrase too.
+    aliases: Words = []
+    description: str | None = None
+
+
 class SemanticFile(_Strict):
     version: Literal[1] = 1
     sources: SourcesSpec | None = None
@@ -179,6 +186,7 @@ class SemanticFile(_Strict):
     tables: dict[str, TableSpec] = {}
     relationships: list[RelationshipSpec] = []
     terms: dict[str, TermSpec] = {}
+    not_recorded: dict[str, NotRecordedSpec] = {}
     domains: dict[str, DomainSpec] = {}
     role_aliases: dict[str, Words] = {}
     function_aliases: dict[str, Words] = {}
@@ -227,6 +235,8 @@ class SemanticModel:
     tables: dict = field(default_factory=dict)          # full name (lower) -> TableSpec
     relationships: list = field(default_factory=list)   # Relationship
     terms: dict = field(default_factory=dict)           # name -> Term
+    # name -> (phrases, description): things the database doesn't hold.
+    not_recorded: dict = field(default_factory=dict)
     domains: dict = field(default_factory=dict)         # key -> dict (see domains.py)
     role_aliases: dict = field(default_factory=dict)    # role -> set of names
     function_aliases: dict = field(default_factory=dict)  # code -> set of names
@@ -250,6 +260,16 @@ class SemanticModel:
         return included and not excluded
 
     # -- lookup --------------------------------------------------------
+
+    def not_recorded_match(self, question_terms):
+        """(name, phrase, description) for the first not_recorded entry
+        whose phrase is in the question (tokenize()d), else None."""
+        from sqlagent.adaptive.text_match import phrase_matches
+        for name, (phrases, description) in self.not_recorded.items():
+            for phrase in phrases:
+                if phrase_matches(phrase, question_terms):
+                    return name, phrase, description
+        return None
 
     def table_spec(self, full_name):
         return self.tables.get(full_name.lower())
@@ -334,6 +354,7 @@ def load_semantic_model(path=None):
     model = SemanticModel(sources=tuple(str(f) for f in files))
     seen_sources = seen_fallback = seen_retrieval = None
     tables, terms, domains, role_aliases, function_aliases = {}, {}, {}, {}, {}
+    not_recorded = {}
 
     for file in files:
         try:
@@ -389,6 +410,11 @@ def load_semantic_model(path=None):
             )
             _set_once(terms, term.name, term, file, "term")
 
+        for name, spec in parsed.not_recorded.items():
+            phrases = (name.strip().lower(),) + tuple(_words(spec.aliases))
+            _set_once(not_recorded, name.strip().lower(),
+                      (phrases, spec.description), file, "not_recorded entry")
+
         for key, spec in parsed.domains.items():
             _set_once(domains, key.lower(), {
                 "label": spec.label,
@@ -409,6 +435,7 @@ def load_semantic_model(path=None):
 
     model.tables = tables
     model.terms = terms
+    model.not_recorded = not_recorded
     model.domains = domains
     model.role_aliases = role_aliases
     model.function_aliases = function_aliases
