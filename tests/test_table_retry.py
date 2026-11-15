@@ -65,16 +65,6 @@ class Retry(unittest.TestCase):
                                ["DATA_NOT_AVAILABLE"])
         self.assertNotIn("employees", correct.call_args[0][4])
 
-    def test_no_closest_tables_for_a_real_table_the_role_cant_see(self):
-        # employee_territories exists in the database; its closest
-        # visible name, territories, means something else (as
-        # salesorderheader for purchaseorderheader did in AdventureWorks).
-        _, correct, _, out = run("which staff cover which territories?",
-                                 "SELECT * FROM employee_territories",
-                                 ["DATA_NOT_AVAILABLE"])
-        self.assertNotIn("Closest tables", correct.call_args[0][4])
-        self.assertNotIn("Closest table(s)", out)
-
     def test_no_closest_line_when_nothing_is_near(self):
         _, correct, _, _ = run("total billable hours?",
                                "SELECT SUM(hours) FROM timesheet_line",
@@ -104,29 +94,48 @@ class Retry(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual(result["rule"], "restricted_data")
 
-    def test_hidden_and_missing_tables_get_the_same_hint(self):
-        _, hidden, _, _ = run("how many people report to Andrew?",
-                              "SELECT COUNT(*) FROM employees", ["DATA_NOT_AVAILABLE"])
-        _, missing, _, _ = run("how many people report to Andrew?",
+    def test_hidden_and_missing_tables_get_the_same_answer(self):
+        # The user can't tell a hidden table from one that doesn't exist.
+        hidden, _, _, _ = run("how many people report to Andrew?",
+                              "SELECT COUNT(*) FROM employees")
+        missing, _, _, _ = run("how many people report to Andrew?",
                                "SELECT COUNT(*) FROM staff_list", ["DATA_NOT_AVAILABLE"])
-        self.assertEqual(hidden.call_args[0][4].replace("employees", "X"),
-                         missing.call_args[0][4].replace("staff_list", "X"))
+        self.assertEqual(hidden["answer"], missing["answer"])
+        self.assertEqual(hidden["rule"], missing["rule"])
 
 
-class QuestionNamingTheData(unittest.TestCase):
-    """A question that names restricted data gets the same one rewrite;
-    the hint stops it being answered from a different table, so it ends
-    as not available - the same reply as for data that doesn't exist."""
+class RealTableTheRoleCantSee(unittest.TestCase):
+    """A real table outside the role's schema is not retried: the answer
+    is "not available" at once. Retried, these nearly always came back
+    DATA_NOT_AVAILABLE, and the one that didn't answered from a look-alike
+    table with wrong figures (AdventureWorks Q75)."""
 
-    def test_rewrite_says_not_available(self):
-        result, correct, execute, _ = run("list all employees",
-                                          "SELECT * FROM employees",
-                                          ["DATA_NOT_AVAILABLE"])
-        self.assertEqual(correct.call_count, 1)
-        self.assertIn("do not\nanswer it from a table that means something else",
-                      correct.call_args[0][4])
+    def test_not_retried(self):
+        result, correct, execute, out = run("list all employees",
+                                            "SELECT * FROM employees")
+        correct.assert_not_called()
         execute.assert_not_called()
         self.assertEqual(result["rule"], "not_available")
+        self.assertIn("employees is a table this role can't see; not retried", out)
+
+    def test_quoted_or_schema_qualified_name(self):
+        _, correct, _, _ = run("which staff cover which territories?",
+                               'SELECT * FROM public."employee_territories"')
+        correct.assert_not_called()
+
+    def test_restricted_column_named_is_still_reported_as_restricted(self):
+        catalog = make_catalog(exclude={"employees", "employee_territories"})
+        security = SecurityContext(user_id="sam", roles={"sales"},
+                                   tables=set(catalog.tables),
+                                   denied_columns={"public.customers": {"phone"}})
+        with mock.patch.object(agent, "generate_sql",
+                               return_value="SELECT * FROM employees"), \
+             mock.patch.object(agent, "correct_sql") as correct, \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = agent.run_agent("what is the phone of each employee?",
+                                     catalog, [], security)
+        correct.assert_not_called()
+        self.assertEqual(result["rule"], "restricted_data")
 
 
 class NoRetry(unittest.TestCase):

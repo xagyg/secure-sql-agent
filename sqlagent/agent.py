@@ -209,15 +209,20 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 # A table outside the role's schema: one retry
 # ---------------------------------------------------------------------------
 # The model sometimes writes a table it remembers rather than one it was
-# shown (timesheet_line, account_payment_rel). That used to end the request
-# as "restricted". Now it gets one rewrite using only the schema it was
-# given, or DATA_NOT_AVAILABLE. Nothing leaks: the hint names only the
-# table the model wrote itself, and says the same whether that table is
-# hidden from the role or doesn't exist. The hint tells the model not to
-# answer from a table that means something else, so a question for
-# restricted data ("show me the payslips") ends as DATA_NOT_AVAILABLE, not
-# as an answer from a different table. Every rewrite gets this one try;
-# there is no word-matching on the question to decide.
+# shown (timesheet_line, account_payment_rel, Northwind's "order details").
+# That gets one rewrite using only the schema it was given, or
+# DATA_NOT_AVAILABLE. Nothing leaks: the hint names only the table the
+# model wrote itself. The hint tells the model not to answer from a table
+# that means something else.
+#
+# A REAL table this role can't see (purchaseorderheader for a sales role)
+# is not retried: the answer is "not available" straight away. Retried,
+# those nearly always came back DATA_NOT_AVAILABLE anyway (5 of 6 in an
+# AdventureWorks run), and the one that didn't answered from a look-alike
+# join with wrong counts. Whether a table is real comes from the catalog
+# (database_table_names), not from word-matching on the question, and the
+# message is the same generic "not available / may be restricted" either
+# way, so it doesn't confirm the table exists.
 
 _UNAUTHORISED_TABLE = re.compile(r"^Table '([^']+)' is not authorised\.$")
 
@@ -239,16 +244,17 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     reason = failure["reason"]
     bare = table.split(".")[-1]
 
-    # Closest tables only for a name the model invented ("order details"
-    # for order_details). A real table this role can't see means
-    # something of its own: the closest name (salesorderheader for
-    # purchaseorderheader) would be a different thing. Only tables the
-    # role can see are suggested, so the hint never names a hidden one.
-    closest = []
-    if bare.strip('"[]`').lower() not in catalog.database_table_names:
-        visible = [t for t in catalog.tables
-                   if not security.tables or t in security.tables]
-        closest = similar_tables(bare, visible)
+    if bare.strip('"[]`').lower() in catalog.database_table_names:
+        print(f"\n[security] {bare} is a table this role can't see; "
+              "not retried.")
+        return _not_available(question, security, sql)
+
+    # An invented name: suggest the closest tables ("order details" ->
+    # order_details). Only tables the role can see, so the hint never
+    # names a hidden one.
+    visible = [t for t in catalog.tables
+               if not security.tables or t in security.tables]
+    closest = similar_tables(bare, visible)
     if closest:
         print(f"\n[sql] Closest table(s) to {bare}: {', '.join(closest)}")
 
