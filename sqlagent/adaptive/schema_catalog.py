@@ -134,6 +134,10 @@ class SchemaCatalog:
 
         self.tables = {}
         self.foreign_keys = []
+        # The bare name of every table and view in the database, the
+        # role's or not. Names only, never sent to the model: it tells a
+        # table the model invented from a real one the role can't see.
+        self.database_table_names = set()
 
         self.fallback_schema = ""
         self.fallback_table_names = set()
@@ -412,6 +416,7 @@ class SchemaCatalog:
         # such as semantic.employees_v is discovered like any table.
         tables = {}
         not_discovered = set()
+        self.database_table_names = set()
         seen_columns = {}   # full name -> every column name, before denial
 
         # closing(): a DB-API "with connection" block (psycopg2, pyodbc)
@@ -419,6 +424,7 @@ class SchemaCatalog:
         with closing(self.connection_factory()) as conn:
             for row in self.engine.column_rows(conn):
                 full_name = f"{row['table_schema']}.{row['table_name']}"
+                self.database_table_names.add(row["table_name"].lower())
 
                 # ------------------------------------------------------
                 # Discovery: the semantic model's sources

@@ -237,10 +237,16 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     reason = failure["reason"]
     bare = table.split(".")[-1]
 
-    # Only tables the role can see, so the hint never names a hidden one.
-    visible = [t for t in catalog.tables
-               if not security.tables or t in security.tables]
-    closest = similar_tables(bare, visible)
+    # Closest tables only for a name the model invented ("order details"
+    # for order_details). A real table this role can't see means
+    # something of its own: the closest name (salesorderheader for
+    # purchaseorderheader) would be a different thing. Only tables the
+    # role can see are suggested, so the hint never names a hidden one.
+    closest = []
+    if bare.strip('"[]`').lower() not in catalog.database_table_names:
+        visible = [t for t in catalog.tables
+                   if not security.tables or t in security.tables]
+        closest = similar_tables(bare, visible)
     if closest:
         print(f"\n[sql] Closest table(s) to {bare}: {', '.join(closest)}")
 

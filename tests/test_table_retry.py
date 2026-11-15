@@ -64,6 +64,16 @@ class Retry(unittest.TestCase):
                                ["DATA_NOT_AVAILABLE"])
         self.assertNotIn("employees", correct.call_args[0][4])
 
+    def test_no_closest_tables_for_a_real_table_the_role_cant_see(self):
+        # employee_territories exists in the database; its closest
+        # visible name, territories, means something else (as
+        # salesorderheader for purchaseorderheader did in AdventureWorks).
+        _, correct, _, out = run("which staff cover which territories?",
+                                 "SELECT * FROM employee_territories",
+                                 ["DATA_NOT_AVAILABLE"])
+        self.assertNotIn("Closest tables", correct.call_args[0][4])
+        self.assertNotIn("Closest table(s)", out)
+
     def test_no_closest_line_when_nothing_is_near(self):
         _, correct, _, _ = run("total billable hours?",
                                "SELECT SUM(hours) FROM timesheet_line",
