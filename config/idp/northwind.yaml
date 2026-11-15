@@ -39,3 +39,6 @@ identities:
   no_employee:
     description: Sales-Team with no employee record - must see no team rows
     groups: [Sales-Team]
+  explorer:
+    description: Explorer - every table, only personal details hidden (no row scope)
+    groups: [Northwind-Explorer]

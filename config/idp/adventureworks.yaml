@@ -63,6 +63,10 @@ identities:
     description: An HR analyst (not a particular employee) - employees, pay and leave
     groups: [AW-HR]
 
+  explorer:
+    description: Explorer - every table, only passwords, card numbers and national IDs hidden
+    groups: [AW-Explorer]
+
   contractor:
     description: Signed in, but in no AdventureWorks group - sees nothing (fails closed)
     groups: [Contoso-Staff]

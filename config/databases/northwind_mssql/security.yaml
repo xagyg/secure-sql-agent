@@ -69,9 +69,21 @@ roles:
     description: Sales manager - rows limited by the grant's scope
     scope: required
 
+  # Broad, exploratory access for trying the agent across the whole
+  # database: every table in dbo (a wildcard, so a table added later is
+  # visible after a restart), with only personal details hidden. Not for
+  # the public demo. Same as explorer on the PostgreSQL copy.
+  explorer:
+    description: Explorer - every Northwind table; only personal phone numbers and birth dates hidden
+    allow:
+      - dbo.*
+    deny_columns:
+      dbo.Employees: [HomePhone, BirthDate]
+
 # Identity-provider group -> roles.
 group_roles:
   Northwind-Sales: [sales]
+  Northwind-Explorer: [explorer]
   Public-Demo: [demo]
 
 # ---------------------------------------------------------------------------
