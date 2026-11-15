@@ -849,7 +849,9 @@ class SchemaCatalog:
                 # Nancy's details"), but we do know the area: use the
                 # domain's fallback tables rather than the global list.
                 print("[schema] No table match in domain - using fallback tables")
-                return self._format_context(set(fallback_names) | unwalked)
+                tables = set(fallback_names) | unwalked
+                return self._format_context(
+                    tables | self._link_tables(unwalked, tables))
             if unwalked:
                 return self._format_context(unwalked)
             return ""
@@ -876,8 +878,38 @@ class SchemaCatalog:
             selected |= set(fallback_names)
             focus |= set(fallback_names)
 
-        return self._format_context(selected | unwalked, focus=focus,
+        links = self._link_tables(unwalked, selected | unwalked)
+        return self._format_context(selected | unwalked | links, focus=focus,
                                     question=question)
+
+    def _link_tables(self, added, present):
+        """
+        Tables that join a table added without a relationship walk
+        (named_outside_domain: add) to the rest of the schema: a table with
+        foreign keys to both an added table and another table present.
+        "Which territories have the highest sales?" adds territories to
+        the Sales schema; employee_territories (-> employees and ->
+        territories) is the only way to join them, so it comes too. Just
+        the joins - not every neighbour, as a walk would add.
+        """
+        if not added:
+            return set()
+        targets = {}
+        for relationship in self.foreign_keys:
+            targets.setdefault(relationship["from_table"], set()).add(
+                relationship["to_table"])
+        links = set()
+        for table, points_to in targets.items():
+            if table in present or table not in self.tables:
+                continue
+            for name in points_to & added:
+                if points_to & (present - {name}):
+                    links.add(table)
+        if links:
+            print("[schema] Link table(s) added to join "
+                  + ", ".join(sorted(t.split(".")[-1] for t in added))
+                  + ": " + ", ".join(sorted(t.split(".")[-1] for t in links)))
+        return links
 
     def discover_schema(self, question, scope=None, anchors=None):
         """

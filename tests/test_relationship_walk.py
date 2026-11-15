@@ -153,6 +153,26 @@ class NamedOutsideDomain(unittest.TestCase):
         self.assertNotIn("categories", tables)
         self.assertIn("employees", tables)
 
+    def test_add_brings_the_link_table(self):
+        # "Which territories have the highest sales?" in the Sales domain:
+        # territories is added on its own, and employee_territories
+        # (-> employees and -> territories) is the only way to join it.
+        catalog = make_catalog()
+        links = catalog._link_tables({"public.territories"},
+                                     {"public.territories", "public.employees",
+                                      "public.orders"})
+        self.assertEqual(links, {"public.employee_territories"})
+
+    def test_link_tables_are_only_joins(self):
+        catalog = make_catalog()
+        # region is next to territories but joins it to nothing present.
+        links = catalog._link_tables({"public.territories"},
+                                     {"public.territories", "public.employees"})
+        self.assertNotIn("public.region", links)
+        # Nothing present to join to: no link table.
+        self.assertEqual(catalog._link_tables(
+            {"public.territories"}, {"public.territories", "public.shippers"}), set())
+
     def test_shipped_default_is_add(self):
         self.assertEqual(RelationshipWalk().named_outside_domain, "add")
 
