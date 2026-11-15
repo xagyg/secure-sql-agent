@@ -312,6 +312,28 @@ def _similar_columns(missing, table):
                   key=lambda item: (-item[0], item[1]))[:MISSING_COLUMN_SUGGESTIONS]
 
 
+def similar_tables(missing, tables):
+    """
+    The closest names in `tables` to a table the model wrote that isn't
+    in the schema ("order details" -> order_details), best first, at most
+    MISSING_COLUMN_SUGGESTIONS. Same scoring as columns; [] without
+    rapidfuzz.
+    """
+    try:
+        import rapidfuzz  # noqa: F401
+    except ImportError:
+        return []
+    wanted = missing.strip('"[]`').split(".")[-1]
+    scored = {}
+    for table in tables:
+        name = table.split(".")[-1]
+        score = column_similarity(wanted, name)
+        if score >= MISSING_COLUMN_MIN_SCORE:
+            scored[name] = max(score, scored.get(name, 0))
+    ranked = sorted(scored.items(), key=lambda item: (-item[1], item[0]))
+    return [name for name, _ in ranked[:MISSING_COLUMN_SUGGESTIONS]]
+
+
 def missing_column_hint(sql, error_text, catalog, unknown=None):
     """
     The COLUMN NOT FOUND block for correct_sql(), or "" when the error

@@ -46,6 +46,30 @@ class Retry(unittest.TestCase):
         self.assertEqual(result["answer"], "three")
         self.assertIn("Asking Ollama to rewrite it without order_shipping_log", out)
 
+    def test_rewrite_hint_names_the_closest_table(self):
+        # The SQL Server spelling of Northwind's order_details.
+        _, correct, execute, out = run(
+            "employee sales by year",
+            'SELECT SUM(od.quantity) FROM "order details" od',
+            ["SELECT SUM(quantity) FROM order_details"])
+        hint = correct.call_args[0][4]
+        self.assertIn("Closest tables in the schema: order_details", hint)
+        self.assertIn("Closest table(s) to order details: order_details", out)
+        execute.assert_called_once()
+
+    def test_closest_tables_never_name_a_hidden_table(self):
+        # employees exists but this role can't see it.
+        _, correct, _, _ = run("how many staff?",
+                               "SELECT COUNT(*) FROM employee",
+                               ["DATA_NOT_AVAILABLE"])
+        self.assertNotIn("employees", correct.call_args[0][4])
+
+    def test_no_closest_line_when_nothing_is_near(self):
+        _, correct, _, _ = run("total billable hours?",
+                               "SELECT SUM(hours) FROM timesheet_line",
+                               ["DATA_NOT_AVAILABLE"])
+        self.assertNotIn("Closest tables", correct.call_args[0][4])
+
     def test_rewrite_can_say_not_available(self):
         result, _, execute, _ = run("total billable hours?",
                                     "SELECT SUM(hours) FROM timesheet_line",

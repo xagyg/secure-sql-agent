@@ -61,6 +61,7 @@ from sqlagent.execution.sql_diagnostics import (
     find_placeholders,
     has_derived_table,
     placeholder_hint,
+    similar_tables,
     find_unknown_columns,
     json_correction_hint,
     missing_column_hint,
@@ -218,9 +219,18 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     reason = failure["reason"]
     bare = table.split(".")[-1]
 
+    # Only tables the role can see, so the hint never names a hidden one.
+    visible = [t for t in catalog.tables
+               if not security.tables or t in security.tables]
+    closest = similar_tables(bare, visible)
+    if closest:
+        print(f"\n[sql] Closest table(s) to {bare}: {', '.join(closest)}")
+
     hint = (
         "TABLE NOT AVAILABLE\n"
         f"- {bare} is not in the schema you were given.\n"
+        + (f"- Closest tables in the schema: {', '.join(closest)}\n"
+           if closest else "") +
         "Use only the tables listed in DATABASE SCHEMA. If the question needs\n"
         "data that isn't in them, return exactly DATA_NOT_AVAILABLE - do not\n"
         "answer it from a table that means something else.\n"
