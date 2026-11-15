@@ -33,7 +33,7 @@
 #     A contact person's parent_id is its company; commercial_partner_id
 #     is the top-level company. customer_rank / supplier_rank only rise
 #     when invoices / bills are posted, so they are often 0 - a customer is
-#     a partner with a confirmed sales order or a customer_rank above 0
+#     any active top-level partner that isn't one of our own companies
 #     (see the customer term). A user (res_users) has its
 #     name on its partner (partner_id).
 #   - Invoices, bills, credit notes and journal entries are all
@@ -152,7 +152,7 @@ tables:
       is_company:    {label: is company, description: "true for a company, false for a person; customers can be either, so don't use it to find customers"}
       parent_id:     {label: parent company, aliases: [employer, organisation], description: "on a contact person, the company they work for"}
       commercial_partner_id: {label: commercial entity, aliases: [top_level_company], description: "the company a partner belongs to (itself for a company); group company totals on this"}
-      customer_rank: {label: customer rank, description: "increased when customer invoices are posted - often 0 for real customers, so never use it on its own; the customer term combines it with confirmed orders"}
+      customer_rank: {label: customer rank, description: "increased when customer invoices are posted - often 0 for real customers; don't use it to find customers, use the customer term"}
       supplier_rank: {label: supplier rank, description: "only increased when vendor bills are posted - often 0 for real vendors; don't filter on it"}
       user_id:       {label: salesperson, aliases: [account_manager, sales_rep]}
       buyer_id:      {label: purchasing representative, aliases: [buyer, purchaser]}
@@ -952,34 +952,28 @@ terms:
     aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
     description: confirmed but not fully delivered
 
-  # Orders may be addressed to a contact person, so a partner is a
-  # customer when any partner under it (commercial_partner_id) has a
-  # confirmed order - or when Odoo has ranked it a customer (customer_rank
-  # rises when a customer invoice is posted, so this also catches
-  # partners invoiced without a confirmed order). The rank is checked on
-  # the top-level partner only, so contact people aren't listed as well
-  # as their company. account_move isn't read: the sales role can't see
-  # invoices, and a term that reads a hidden table is dropped. Our own
-  # companies (res_company.partner_id, e.g. "AU Company") are never
-  # customers or vendors.
+  # A customer is any active top-level partner - a company, or a person
+  # who isn't a contact at a company (commercial_partner_id = itself) -
+  # whether or not they have ordered yet. Contact people aren't listed
+  # separately from their company. Our own companies
+  # (res_company.partner_id, e.g. "AU Company") are never customers or
+  # vendors. This includes vendors and prospects: Odoo has no reliable
+  # "is a customer" flag (customer_rank is often 0).
   customer:
     table: res_partner
     predicate: >-
-      (EXISTS (SELECT 1 FROM sale_order so
-               JOIN res_partner op ON op.id = so.partner_id
-               WHERE op.commercial_partner_id = res_partner.id
-                 AND so.state = 'sale')
-       OR (res_partner.customer_rank > 0
-           AND res_partner.commercial_partner_id = res_partner.id))
+      res_partner.commercial_partner_id = res_partner.id
+      AND res_partner.active
       AND NOT EXISTS (SELECT 1 FROM res_company rc
                       WHERE rc.partner_id = res_partner.id)
     aliases: [client]
     description: >-
-      a partner with a confirmed sales order or a customer rank above 0
-      (Odoo's own mark, set when a customer invoice is posted), not one of
-      our own companies. Only needed to LIST customers - to look one up by
-      name, filter on the name alone. When none match, say no customers
-      with orders or invoices were found, not that none exist
+      any active top-level partner (a company, or a person who isn't a
+      contact at a company), not one of our own companies - whether or not
+      they have ordered. Only needed to LIST customers - to look one up by
+      name, filter on the name alone. Customers who have ordered: add
+      EXISTS a confirmed sale_order (state = 'sale') whose partner's
+      commercial_partner_id is the customer
 
   vendor:
     table: res_partner

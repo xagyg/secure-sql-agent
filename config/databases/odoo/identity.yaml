@@ -21,15 +21,13 @@ sql_examples:
   - question: which customers haven't ordered in the last 3 months?
     note: >-
       a customer can be a person or a company: use the customer term
-      (confirmed order or customer_rank), never is_company; orders may be
-      addressed to a contact person, so match on commercial_partner_id
+      (a top-level partner, not one of our companies), never is_company;
+      orders may be addressed to a contact person, so match on
+      commercial_partner_id
     sql: >-
       SELECT c.name AS customer
       FROM res_partner c
-      WHERE (EXISTS (SELECT 1 FROM sale_order so
-                     JOIN res_partner op ON op.id = so.partner_id
-                     WHERE op.commercial_partner_id = c.id AND so.state = 'sale')
-             OR (c.customer_rank > 0 AND c.commercial_partner_id = c.id))
+      WHERE c.commercial_partner_id = c.id AND c.active
         AND NOT EXISTS (SELECT 1 FROM res_company rc WHERE rc.partner_id = c.id)
         AND NOT EXISTS (SELECT 1 FROM sale_order so
                         JOIN res_partner op ON op.id = so.partner_id
@@ -44,10 +42,7 @@ sql_examples:
     sql: >-
       SELECT c.name AS customer
       FROM res_partner c
-      WHERE (EXISTS (SELECT 1 FROM sale_order so
-                     JOIN res_partner op ON op.id = so.partner_id
-                     WHERE op.commercial_partner_id = c.id AND so.state = 'sale')
-             OR (c.customer_rank > 0 AND c.commercial_partner_id = c.id))
+      WHERE c.commercial_partner_id = c.id AND c.active
         AND NOT EXISTS (SELECT 1 FROM res_company rc WHERE rc.partner_id = c.id)
         AND COALESCE(c.phone, '') = ''
         AND NOT EXISTS (SELECT 1 FROM res_partner ct
