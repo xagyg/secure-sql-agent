@@ -113,6 +113,22 @@ class NotRecorded(unittest.TestCase):
         self.assertEqual(model.not_recorded_match(tokenize("hours worked by Mitchell"))[0],
                          "timesheets")
 
+    def test_adventureworks_model_lists_country_of_manufacture(self):
+        from sqlagent.adaptive.semantic_model import load_semantic_model
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        with contextlib.redirect_stdout(io.StringIO()):
+            model = load_semantic_model(root / "config/databases/adventureworks/semantic")
+        match = model.not_recorded_match(tokenize(
+            "Which customers have purchased products manufactured in a "
+            "different country from their own?"))
+        self.assertEqual(match[0], "country_of_manufacture")
+        # Questions about making things, or about countries, still run.
+        for question in ("Which products were manufactured last month?",
+                         "Which products are made in-house?",
+                         "How many products manufactured in-house were sold in each country?"):
+            self.assertIsNone(model.not_recorded_match(tokenize(question)), question)
+
 
 if __name__ == "__main__":
     unittest.main()
