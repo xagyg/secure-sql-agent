@@ -108,7 +108,17 @@ class Hint(unittest.TestCase):
         text = self.hint("SELECT pt.standard_price FROM product_template pt "
                          "JOIN product_product pp ON pp.product_tmpl_id = pt.id",
                          "pt.standard_price")
-        self.assertIn("standard_price is a column of: product_product (pp)", text)
+        self.assertIn("standard_price is a column of: product_product (pp)\n", text)
+
+    def test_other_table_listed_once(self):
+        # Its alias and its bare name are both references to it: it was
+        # listed as "product_product (pp), product_product".
+        text = self.hint("SELECT pt.standard_price FROM product_template pt "
+                         "JOIN product_product pp ON pp.product_tmpl_id = pt.id "
+                         "WHERE product_product.active",
+                         "pt.standard_price")
+        self.assertEqual(text.count("product_product (pp)"), 1)
+        self.assertNotIn("product_product (pp), product_product", text)
 
     def test_unqualified_column_checks_every_table(self):
         text = missing_column_hint(

@@ -45,6 +45,7 @@ class ParseRetry(unittest.TestCase):
         hint = correct.call_args[0][4]
         self.assertIn("SQL COULD NOT BE PARSED", hint)
         self.assertIn("single FROM clause", hint)
+        self.assertNotIn("res_company", hint)   # generic: not Odoo's tables
         self.assertIn("FROM orders", execute.call_args[0][0])
         self.assertEqual(result["answer"], "three")
         self.assertIn("rewrite it as valid SQL", out)

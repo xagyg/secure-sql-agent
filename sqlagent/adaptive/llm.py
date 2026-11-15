@@ -283,6 +283,7 @@ def generate_sql(question, schema, history, allowed_tables=None):
     db = active_database()
     db_names = " (or ".join(f'"{n}"' for n in db.names[:2]) + (")" if len(db.names) > 1 else "")
     db_values = " or ".join(f"'{n}'" for n in db.names)
+    db_name = db.names[0] if db.names else "the database"
 
     engine = active_engine().label
     engine_rules = active_engine().prompt_rules
@@ -333,7 +334,7 @@ IMPORTANT:
   column you need may be one of them.
 * If the current message is about the data but too vague to answer
   with one query (it names no record, measure or kind of thing, e.g.
-  "what does Northwind have?", "show me stuff", "what's going on?"),
+  "what does {db_name} have?", "show me stuff", "what's going on?"),
   do NOT guess a table or a filter. Return exactly this and nothing
   else:
   {UNCLEAR_QUESTION_SENTINEL}
@@ -683,4 +684,4 @@ Rules:
             },
             {"role": "user", "content": prompt},
         ]
-    )
+    )

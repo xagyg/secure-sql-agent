@@ -115,6 +115,24 @@ def _policy_block(rule, sql=None):
     return _result(message, sql, blocked=True, reason="policy", rule=rule)
 
 
+def _not_available(question, security, sql=None, corrected=False):
+    """
+    The model said the data isn't in the schema (DATA_NOT_AVAILABLE),
+    first time or (corrected) in a rewrite: "restricted" when the
+    question names a column this role is denied, otherwise "not
+    available".
+    """
+    if mentions_denied_column(question, security):
+        print("\n[security] Question refers to a restricted column.")
+        return _policy_block("restricted_data", sql)
+    if corrected:
+        print("\n[agent] Correction: the requested data isn't in the "
+              "authorised schema.")
+    else:
+        print("\n[security] Requested data isn't in the authorised schema.")
+    return _policy_block("not_available", sql)
+
+
 def _error(message, sql=None):
     """A technical failure (not a guardrail)."""
     return _result(message, sql, reason="error")
@@ -247,12 +265,7 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     print(corrected)
 
     if classify_model_output(corrected) == "not_available":
-        if mentions_denied_column(question, security):
-            print("\n[security] Question refers to a restricted column.")
-            return _policy_block("restricted_data", sql)
-        print("\n[agent] Correction: the requested data isn't in the "
-              "authorised schema.")
-        return _policy_block("not_available", sql)
+        return _not_available(question, security, sql, corrected=True)
 
     if _normalise_sql(corrected) == _normalise_sql(sql):
         print("\n[agent] Correction produced the same SQL. Stopping.")
@@ -296,11 +309,11 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
     hint = failure.get("hint") or (
         "SQL COULD NOT BE PARSED\n"
         "- The query is not valid SQL. Write ONE SELECT statement with a\n"
-        "  single FROM clause. Put any lookup it needs (for example the\n"
-        "  company's financial year-end from res_company) in a subquery in\n"
-        "  the WHERE clause, e.g. col > (SELECT ... FROM res_company rc WHERE\n"
-        "  rc.id = so.company_id) - never a second FROM after the WHERE.\n"
-        "  WITH (CTEs) and subqueries in FROM are not allowed.\n"
+        "  single FROM clause. Put any lookup it needs from another table\n"
+        "  in a subquery in the WHERE clause, e.g. col > (SELECT ... FROM\n"
+        "  other_table t WHERE t.id = x.other_id) - never a second FROM\n"
+        "  after the WHERE. WITH (CTEs) and subqueries in FROM are not\n"
+        "  allowed.\n"
     )
     print(f"\n[agent] Asking Ollama to {failure.get('action', 'rewrite it as valid SQL')}...")
     try:
@@ -314,12 +327,7 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
     print(corrected)
 
     if classify_model_output(corrected) == "not_available":
-        if mentions_denied_column(question, security):
-            print("\n[security] Question refers to a restricted column.")
-            return _policy_block("restricted_data", sql)
-        print("\n[agent] Correction: the requested data isn't in the "
-              "authorised schema.")
-        return _policy_block("not_available", sql)
+        return _not_available(question, security, sql, corrected=True)
 
     if _normalise_sql(corrected) == _normalise_sql(sql):
         print("\n[agent] Correction produced the same SQL. Stopping.")
@@ -666,13 +674,7 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
         return _result(message)
 
     if output_kind == "not_available":
-        if mentions_denied_column(question, security):
-            print("\n[security] Question refers to a restricted column.")
-            rule = "restricted_data"
-        else:
-            print("\n[security] Requested data isn't in the authorised schema.")
-            rule = "not_available"
-        return _policy_block(rule)
+        return _not_available(question, security)
 
     if output_kind == "write_request":
         # The model recognised a request to modify data and declined to
@@ -815,12 +817,7 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
             # attempt says so (a restricted column is still reported as
             # restricted).
             if classify_model_output(corrected_sql) == "not_available":
-                if mentions_denied_column(question, security):
-                    print("\n[security] Question refers to a restricted column.")
-                    return _policy_block("restricted_data", sql)
-                print("\n[agent] Correction: the requested data isn't in the "
-                      "authorised schema.")
-                return _policy_block("not_available", sql)
+                return _not_available(question, security, sql, corrected=True)
 
             # Compare with what the model first wrote, not the prepared
             # SQL: that has LIMIT 1000 (and maybe rewrites) added, so the

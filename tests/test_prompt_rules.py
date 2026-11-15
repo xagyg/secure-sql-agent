@@ -12,9 +12,9 @@ from sqlagent.adaptive import llm
 from tests.test_sqlserver import use_database
 
 
-def system_prompt():
+def system_prompt(database="northwind"):
     captured = []
-    with use_database("northwind"), \
+    with use_database(database), \
          mock.patch.object(llm, "ask_ollama",
                            side_effect=lambda m: captured.append(m) or "SELECT 1"):
         llm.generate_sql("q", "SCHEMA", [])
@@ -44,6 +44,13 @@ class TrimmedRules(unittest.TestCase):
         self.assertNotIn("home phone", text)
         self.assertIn("no subqueries in FROM or JOIN", text)
         self.assertIn("Reply with the SQL only", text)
+
+    def test_unclear_example_names_the_active_database(self):
+        # It said "what does Northwind have?" for every database.
+        self.assertIn('"what does Northwind have?"', system_prompt())
+        odoo = system_prompt("odoo")
+        self.assertNotIn("Northwind", odoo)
+        self.assertIn("what does ", odoo)
 
     def test_correction_prompt(self):
         captured = []

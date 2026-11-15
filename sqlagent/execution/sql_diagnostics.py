@@ -167,6 +167,35 @@ def is_json_type_error(error_text):
     return bool(_JSON_ERROR.search(str(error_text or "")))
 
 
+def _tables_by_reference(tree, catalog):
+    """
+    (tables_for, other_sources) for a parsed query. tables_for maps each
+    way the SQL refers to a catalog table - its alias, and its bare name -
+    to [catalog table], first use first. other_sources: references to
+    anything else (a table outside the catalog, a table function), whose
+    columns can't be known.
+    """
+    tables_for, other_sources = {}, set()
+    for table in tree.find_all(exp.Table):
+        reference = (table.alias_or_name or table.name).lower()
+        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
+        if full and full in catalog.tables and isinstance(table.this, exp.Identifier):
+            entry = catalog.tables[full]
+            for key in (reference, table.name.lower()):
+                bucket = tables_for.setdefault(key, [])
+                if all(entry is not t for t in bucket):
+                    bucket.append(entry)
+        else:
+            other_sources.add(reference)
+    return tables_for, other_sources
+
+
+def _first_table_by_reference(tree, catalog):
+    """reference (alias or bare name) -> the catalog table it names."""
+    tables_for, _ = _tables_by_reference(tree, catalog)
+    return {reference: bucket[0] for reference, bucket in tables_for.items()}
+
+
 def json_columns_in_sql(sql, catalog):
     """
     [(table, column, note)] for the json/jsonb columns the SQL refers to,
@@ -179,13 +208,7 @@ def json_columns_in_sql(sql, catalog):
     except ValueError:
         return []
 
-    # alias (or bare name) -> catalog table
-    by_alias = {}
-    for table in tree.find_all(exp.Table):
-        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
-        if full and full in catalog.tables:
-            by_alias[(table.alias_or_name or table.name).lower()] = catalog.tables[full]
-            by_alias.setdefault(table.name.lower(), catalog.tables[full])
+    by_alias = _first_table_by_reference(tree, catalog)
 
     def column_of(table, name):
         return next((c for c in table["columns"]
@@ -357,13 +380,7 @@ def missing_column_hint(sql, error_text, catalog, unknown=None):
     except ValueError:
         return ""
 
-    # reference (alias or bare name) -> catalog table
-    by_reference = {}
-    for table in tree.find_all(exp.Table):
-        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
-        if full and full in catalog.tables:
-            by_reference[(table.alias_or_name or table.name).lower()] = catalog.tables[full]
-            by_reference.setdefault(table.name.lower(), catalog.tables[full])
+    by_reference = _first_table_by_reference(tree, catalog)
     if not by_reference:
         return ""
 
@@ -434,13 +451,17 @@ def _missing_column_lines(tree, by_reference, column_name, qualifier, noted):
 
     # Another table in the query that does have it (standard_price is on
     # product_product, not product_template).
-    elsewhere = []
+    # Each table once: by_reference holds both its alias and its bare
+    # name ("stateprovince (sp), stateprovince" before). The alias comes
+    # first, so it is the one shown.
+    elsewhere, listed = [], []
     for reference, table in by_reference.items():
-        if all(table is not t for _, t in targets) and has_column(table, column_name):
-            label = f"{table['name']} ({reference})" if reference != table["name"].lower() \
-                else table["name"]
-            if label not in elsewhere:
-                elsewhere.append(label)
+        if any(table is t for _, t in targets) or any(table is t for t in listed):
+            continue
+        if has_column(table, column_name):
+            listed.append(table)
+            elsewhere.append(f"{table['name']} ({reference})"
+                             if reference != table["name"].lower() else table["name"])
     if elsewhere:
         lines.append(f"- {column_name} is a column of: {', '.join(elsewhere)}")
     return lines
@@ -552,19 +573,8 @@ def find_unknown_columns(sql, catalog):
     except ValueError:
         return []
 
-    tables_for = {}           # reference -> [catalog table]
-    other_sources = set()     # references whose columns we can't know
-    for table in tree.find_all(exp.Table):
-        reference = (table.alias_or_name or table.name).lower()
-        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
-        if full and full in catalog.tables and isinstance(table.this, exp.Identifier):
-            entry = catalog.tables[full]
-            for key in {reference, table.name.lower()}:
-                bucket = tables_for.setdefault(key, [])
-                if all(entry is not t for t in bucket):
-                    bucket.append(entry)
-        else:
-            other_sources.add(reference)
+    # reference -> [catalog table]; references whose columns we can't know
+    tables_for, other_sources = _tables_by_reference(tree, catalog)
     for node in tree.find_all(exp.Subquery, exp.CTE, exp.Unnest, exp.Lateral):
         if node.alias:
             other_sources.add(node.alias.lower())
