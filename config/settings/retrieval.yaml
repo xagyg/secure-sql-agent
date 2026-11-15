@@ -133,3 +133,17 @@ relationships:
   #   add  - add it, without walking its relationships
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
+
+# How the schema is written into the SQL prompt. It is most of the prompt,
+# and a prompt longer than the model's context (Ollama's num_ctx) is cut
+# without an error, so keep it small.
+schema_text:
+  # Supporting tables - every table the question doesn't name by table
+  # name, label, alias or term (those reached through a relationship and
+  # those matched only on a column word) - with more columns than this
+  # list only the ones that matter: relationship keys, documented
+  # columns, columns a term uses, columns the question names, and
+  # name/code/state/active. 0 lists every column.
+  supporting_table_columns: 10
+  compact_types: true       # "varchar" for "character varying", etc.
+  show_nullability: false   # NULL / NOT NULL after each column

@@ -1,0 +1,11 @@
+# Customers and contacts
+1.	Show me all customers.
+2.	Find customers located in Australia.
+3.	Which customers are based in Brisbane?
+4.	List the top 10 customers by total sales.
+5.	Which customers have not placed an order in the last 12 months?
+6.	Show me customers who have multiple contacts.
+7.	Find customers whose email addresses are missing.
+8.	Which customers have outstanding invoices?
+9.	Show me the contact details for customers who have purchased products in the last 30 days.
+10.	Which customers have the highest number of sales orders?

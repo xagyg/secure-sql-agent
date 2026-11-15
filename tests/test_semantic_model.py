@@ -241,7 +241,7 @@ class Labels(unittest.TestCase):
     def test_label_and_description_shown_to_model(self):
         context = self.catalog._format_context({"erp.cust_mst"})
         self.assertIn("TABLE erp.cust_mst  -- customers: customer master", context)
-        self.assertIn("cm_cr_lim text NULL  -- credit limit  (aka: credit)", context)
+        self.assertIn("cm_cr_lim text  -- credit limit  (aka: credit)", context)
 
     def test_column_label_maps_back_in_diagnostics(self):
         semantic = self.catalog.semantic

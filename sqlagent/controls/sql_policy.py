@@ -584,7 +584,8 @@ def apply_query_limits(sql):
     """
     Ensure SELECT queries have a maximum row count.
 
-    Existing explicit limits are preserved.
+    A smaller explicit limit ("top 10") is kept; a larger one is lowered
+    to MAX_ROWS.
     """
     try:
         tree = parse_single_sql(sql)
@@ -600,12 +601,25 @@ def apply_query_limits(sql):
 
 def apply_query_limits_tree(tree):
     """apply_query_limits() on a parsed SELECT, in place: add LIMIT
-    MAX_ROWS unless the query already has a limit."""
-    if tree.args.get("limit") is None:
+    MAX_ROWS when the query has no limit, and lower a literal limit above
+    MAX_ROWS (LIMIT 1000, TOP 1000, FETCH NEXT 1000 ROWS) to MAX_ROWS.
+    The result policy caps the rows anyway; this keeps the SQL honest, so
+    the explanation isn't told about a limit that never applied."""
+    limit = tree.args.get("limit")
+    if limit is None:
         tree.set(
             "limit",
             exp.Limit(expression=exp.Literal.number(MAX_ROWS)),
         )
+        return
+    key = "count" if isinstance(limit, exp.Fetch) else "expression"
+    value = limit.args.get(key)
+    if isinstance(value, exp.Literal) and not value.is_string:
+        try:
+            if int(value.this) > MAX_ROWS:
+                limit.set(key, exp.Literal.number(MAX_ROWS))
+        except ValueError:
+            pass
 
 
 # ---------------------------------------------------------------------------

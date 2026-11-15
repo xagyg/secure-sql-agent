@@ -216,11 +216,95 @@ def json_columns_in_sql(sql, catalog):
     return found
 
 
+# The opposite mistake: ->> or -> on a column that isn't json, usually a
+# plain-text name copied from the JSONB pattern (res_country_state.name
+# ->> 'en_US'). PostgreSQL says "operator does not exist: character
+# varying ->> unknown", which names no column. The column's type is in
+# the catalog, so the hint says which column is plain text.
+_NOT_JSON_OPERATOR = re.compile(
+    r"operator does not exist:\s*(?!jsonb?\b)[\w ]+?\s*->>?", re.IGNORECASE)
+
+
+def is_json_operator_on_text_error(error_text):
+    """True when ->> / -> was used on a column that isn't json."""
+    return bool(_NOT_JSON_OPERATOR.search(str(error_text or "")))
+
+
+def not_json_columns_in_sql(sql, catalog):
+    """
+    [(table, column, type)] for columns the SQL reads with ->> or -> whose
+    catalog type isn't json/jsonb, in order of first use. Unparseable SQL,
+    or a column that can't be tied to one catalog table, is skipped.
+    """
+    try:
+        tree = parse_single_sql(sql)
+    except ValueError:
+        return []
+    by_alias = _tables_by_alias(tree, catalog)
+
+    found, seen = [], set()
+    for node in tree.find_all(exp.JSONExtract, exp.JSONExtractScalar):
+        column = node.this
+        if not isinstance(column, exp.Column):
+            continue
+        for table in _owners(by_alias, column):
+            info = _column_of(table, column.name)
+            if not info or str(info.get("type", "")).lower() in _JSON_TYPES:
+                continue
+            key = (table["name"].lower(), info["name"].lower())
+            if key not in seen:
+                seen.add(key)
+                found.append((table["name"], info["name"], str(info.get("type", ""))))
+    return found
+
+
+def _tables_by_alias(tree, catalog):
+    """alias (or bare name) -> catalog table, for the tables a query reads."""
+    by_alias = {}
+    for table in tree.find_all(exp.Table):
+        full = catalog.resolve_table_name(full_table_name(table.name, table.db))
+        if full and full in catalog.tables:
+            by_alias[(table.alias_or_name or table.name).lower()] = catalog.tables[full]
+            by_alias.setdefault(table.name.lower(), catalog.tables[full])
+    return by_alias
+
+
+def _column_of(table, name):
+    return next((c for c in table["columns"]
+                 if c["name"].lower() == name.lower()), None)
+
+
+def _owners(by_alias, column):
+    """The catalog table(s) a column reference belongs to: its qualifier's
+    table, or - unqualified - the one referenced table that has it."""
+    if column.table:
+        table = by_alias.get(column.table.lower())
+        return [table] if table else []
+    owners = {id(t): t for t in by_alias.values() if _column_of(t, column.name)}
+    return list(owners.values()) if len(owners) == 1 else []
+
+
 def json_correction_hint(sql, error_text, catalog):
     """
     The JSON COLUMNS block for correct_sql(), or "" when the error isn't
-    about json or the SQL names no json column.
+    about json or the SQL names no json column. ->> on a plain-text
+    column gets a NOT JSON block instead.
     """
+    if is_json_operator_on_text_error(error_text):
+        columns = not_json_columns_in_sql(sql, catalog)
+        if not columns:
+            return ""
+        lines = ["NOT JSON COLUMNS IN THE FAILED SQL"]
+        for table, column, column_type in columns:
+            lines.append(f"- {table}.{column} is {column_type} (plain text, not JSON): "
+                         f"compare it directly, e.g. {column} = 'value' or "
+                         f"{column} ILIKE '%value%'; never {column} ->> 'en_US'")
+        lines += [
+            "Use ->> only on columns the schema lists as jsonb. Keep it on",
+            "those; remove it from the columns above.",
+        ]
+        return "\n".join(lines) + "\n"
+
     if not is_json_type_error(error_text):
         return ""
 
@@ -445,6 +529,50 @@ def _missing_column_lines(tree, by_reference, column_name, qualifier, noted):
 #     output alias somewhere in the query (ORDER BY total)
 
 
+class PlaceholderError(Exception):
+    """The SQL has a parameter placeholder (%s, $1, ?, :name) where a
+    value belongs. Nothing fills it in, so the query runs against the
+    marker itself and matches nothing; the correction is told to write a
+    complete query (placeholder_hint)."""
+
+    def __init__(self, placeholders):
+        self.placeholders = list(placeholders)
+        super().__init__(
+            "the query has a parameter placeholder ("
+            + ", ".join(self.placeholders)
+            + ") where a value belongs, but no value is supplied")
+
+
+def find_placeholders(sql):
+    """The parameter placeholders in the SQL (%s, $1, ?, :name), as
+    written, in order; [] when there are none or the SQL can't be parsed.
+    Text inside string literals ('%s%') isn't a placeholder."""
+    try:
+        tree = parse_single_sql(sql)
+    except ValueError:
+        return []
+    found = []
+    for node in tree.find_all(exp.Placeholder, exp.Parameter):
+        text = node.sql(dialect=active_engine().dialect)
+        if text not in found:
+            found.append(text)
+    return found
+
+
+def placeholder_hint(placeholders):
+    """The NO PARAMETERS block for correct_sql()."""
+    return (
+        "NO PARAMETERS\n"
+        f"- The SQL has a placeholder ({', '.join(placeholders)}) where a value\n"
+        "  belongs, but nothing fills it in: the query must be complete on\n"
+        "  its own.\n"
+        "- If the question names the value, write it in as a literal. If it\n"
+        "  doesn't (\"a particular manager\", \"a given customer\"), don't\n"
+        "  filter on it: list every match with that value as a column, e.g.\n"
+        "  each employee with their manager's name.\n"
+    )
+
+
 class UnknownColumnError(Exception):
     """Columns the SQL names that aren't in the role's catalog (a list of
     (column, qualifier, table) from find_unknown_columns). str() is the
@@ -535,4 +663,3 @@ def _row_sources(tree):
             yield from_clause.this
         for join in select.args.get("joins") or []:
             yield join.this
-

@@ -56,7 +56,10 @@ from sqlagent.controls.row_scope import RowScopeError, apply_row_scope
 from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.execution.sql_diagnostics import (
     diagnose_sql_error,
+    PlaceholderError,
     UnknownColumnError,
+    find_placeholders,
+    placeholder_hint,
     find_unknown_columns,
     json_correction_hint,
     missing_column_hint,
@@ -137,10 +140,12 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 
     Returns (sql, withheld, failure): failure is a result dict when
     validation stopped the query, else None. Errors from the rewrite
-    step are raised for the caller to report. With table_retry, a query
-    stopped ONLY because it reads a table outside the role's schema gives
-    failure = {"retry_table": name, "reason": ...} instead, for
-    _retry_unavailable_table().
+    step are raised for the caller to report. With table_retry (the
+    first attempt only), a query stopped ONLY because it reads a table
+    outside the role's schema gives failure = {"retry_table": name,
+    "reason": ...} instead, for _retry_unavailable_table(), and one the
+    parser couldn't read gives {"retry_parse": True, "reason": ...}, for
+    _retry_unparseable().
     """
     prepared = prepare_sql(sql, security, catalog)
 
@@ -160,6 +165,9 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
         if table:
             print(f"\n[security] {prepared.failure_reason}")
             failure = {"retry_table": table, "reason": prepared.failure_reason}
+        elif table_retry and _validation_reason_kind(prepared.failure_reason) == "error":
+            print(f"\n[security] {prepared.failure_reason}")
+            failure = {"retry_parse": True, "reason": prepared.failure_reason}
         else:
             failure = _validation_failure(prepared.failure_reason, prepared.sql)
 
@@ -258,6 +266,61 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
         return _error(message, corrected)
 
 
+# ---------------------------------------------------------------------------
+# SQL the parser couldn't read: one retry
+# ---------------------------------------------------------------------------
+# Usually a pattern copied wrongly - e.g. the financial-year lookup written
+# as a second FROM after the WHERE. Nothing was run and nothing is unsafe
+# about asking again: the rewrite goes through every check in
+# _prepare_sql() like any other query, and a second parse failure ends it.
+
+def _retry_unparseable(question, schema, sql, failure, security, catalog):
+    """
+    One rewrite of a query the parser couldn't read. Returns (sql,
+    withheld, failure) from _prepare_sql() on the rewrite, or a finished
+    result dict (not available / error).
+    """
+    hint = (
+        "SQL COULD NOT BE PARSED\n"
+        "- The query is not valid SQL. Write ONE SELECT statement with a\n"
+        "  single FROM clause. Put any lookup it needs (for example the\n"
+        "  company's financial year-end from res_company) in a subquery in\n"
+        "  the WHERE clause, e.g. col > (SELECT ... FROM res_company rc WHERE\n"
+        "  rc.id = so.company_id) - never a second FROM after the WHERE.\n"
+        "  WITH (CTEs) and subqueries in FROM are not allowed.\n"
+    )
+    print("\n[agent] Asking Ollama to rewrite it as valid SQL...")
+    try:
+        corrected = correct_sql(question, schema, _sql_for_correction(sql, sql),
+                                _sanitize_sql_error_for_llm(failure["reason"]), hint)
+    except Exception as ex:
+        print(f"\n[CORRECTION ERROR] {ex}")
+        return _error("I couldn't correct that query.", sql)
+
+    print("\n[corrected sql]")
+    print(corrected)
+
+    if classify_model_output(corrected) == "not_available":
+        if mentions_denied_column(question, security):
+            print("\n[security] Question refers to a restricted column.")
+            return _policy_block("restricted_data", sql)
+        print("\n[agent] Correction: the requested data isn't in the "
+              "authorised schema.")
+        return _policy_block("not_available", sql)
+
+    if _normalise_sql(corrected) == _normalise_sql(sql):
+        print("\n[agent] Correction produced the same SQL. Stopping.")
+        return _validation_failure(failure["reason"], sql)
+
+    try:
+        return _prepare_sql(corrected, security, catalog)
+    except Exception as ex:
+        print(f"\n[error] {ex}")
+        message = "I couldn't safely prepare the query for execution."
+        print(f"\n[answer] {message}")
+        return _error(message, corrected)
+
+
 def _check_columns(sql, catalog):
     """
     Before running the SQL, check every column it names against the
@@ -265,6 +328,13 @@ def _check_columns(sql, catalog):
     any that aren't there, so the query goes to correction without a
     database round trip; see sql_diagnostics.find_unknown_columns.
     """
+    # A parameter placeholder (%s) is never filled in: the query would
+    # run against the marker and match nothing. Always checked.
+    placeholders = find_placeholders(sql)
+    if placeholders:
+        print(f"\n[sql] Placeholder check: {', '.join(placeholders)} - "
+              "no value is supplied")
+        raise PlaceholderError(placeholders)
     if not get_settings().query.check_columns:
         return
     unknown = find_unknown_columns(sql, catalog)
@@ -605,6 +675,13 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
             return retried
         sql, withheld, failure = retried
 
+    if failure and "retry_parse" in failure:
+        retried = _retry_unparseable(
+            question, schema, generated_sql, failure, security, catalog)
+        if isinstance(retried, dict):
+            return retried
+        sql, withheld, failure = retried
+
     if failure:
         return failure
 
@@ -621,13 +698,15 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
         print(f"\n[security] Row scope could not be applied: {ex}")
         return _policy_block("policy", sql)
     except Exception as ex:
-        if isinstance(ex, UnknownColumnError):
+        if isinstance(ex, (UnknownColumnError, PlaceholderError)):
             print("[agent] Not run: correcting it first.")
         else:
             print(f"\n[SQL ERROR] {ex}")
 
-        diagnosis = diagnose_sql_error(sql, ex, security, catalog.semantic)
-        correction_hint = ""
+        diagnosis = (None if isinstance(ex, PlaceholderError)
+                     else diagnose_sql_error(sql, ex, security, catalog.semantic))
+        correction_hint = (placeholder_hint(ex.placeholders)
+                           if isinstance(ex, PlaceholderError) else "")
 
         if diagnosis:
             print(f"\n[sql] Error type: {diagnosis['error_type']}")

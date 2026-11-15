@@ -47,6 +47,14 @@ class ExplainPrompt(unittest.TestCase):
         self.assertIn("ROW COUNT (again): 100", text)
         self.assertIn("describe the shown rows as examples", text)
 
+    def test_complete_result_is_not_called_examples(self):
+        text = prompt_for(rows(6))
+        self.assertIn("Every row is shown: this is the complete result", text)
+        self.assertNotIn("describe the shown rows as examples", text)
+
+    def test_no_table_or_column_names_rule(self):
+        self.assertIn("Don't name tables or columns", prompt_for(rows(3)))
+
     def test_capped_result_says_at_least(self):
         text = prompt_for(rows(100), row_cap=100)
         self.assertIn('the row limit: there may be more; say "at least 100"', text)

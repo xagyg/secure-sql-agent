@@ -21,6 +21,7 @@
 # DEFAULT_FALLBACK_TABLES) now lives in config/databases/<database>/semantic/
 # (see semantic_model.py).
 
+import re
 from contextlib import closing
 
 from sqlagent.adaptive.domains import DomainResolver
@@ -82,6 +83,32 @@ class EmptyCatalogError(RuntimeError):
     a schema (the authorisation check would block the guess, but a user
     would only ever see "restricted").
     """
+
+
+# Always listed for a supporting table: how rows are named and filtered.
+_ALWAYS_LISTED = frozenset({
+    "id", "name", "display_name", "complete_name", "code", "state", "active",
+})
+
+# PostgreSQL's long type names, shortened in the prompt (the model reads
+# "varchar" the same way; it only saves tokens).
+_SHORT_TYPES = {
+    "character varying": "varchar",
+    "character": "char",
+    "timestamp without time zone": "timestamp",
+    "timestamp with time zone": "timestamptz",
+    "time without time zone": "time",
+    "time with time zone": "timetz",
+    "double precision": "double",
+    "integer": "int",
+    "boolean": "bool",
+}
+
+
+def _compact_type(type_name):
+    """A short form of a column type for the prompt ("varchar")."""
+    text = str(type_name)
+    return _SHORT_TYPES.get(text.lower(), text)
 
 
 def _words_of(name):
@@ -758,8 +785,10 @@ class SchemaCatalog:
             selected = {name for name in anchors if name in self.tables}
             if selected:
                 depth = scope[2] if scope is not None else relationship_depth
+                focus = set(selected)
                 selected = self.get_related_tables(selected, depth=depth)
-                return self._format_context(selected)
+                return self._format_context(selected, focus=focus,
+                                            question=question)
 
         if scope is None:
             matches = self.search(question, limit=table_limit)
@@ -771,11 +800,17 @@ class SchemaCatalog:
             matches = self.search(
                 question, limit=table_limit, restrict_to=domain_tables)
 
+            # Named outside the domain means named: its table name, label,
+            # alias or a term - not column words. A wide table (Odoo's
+            # res_company, 146 columns) otherwise reached the full-name
+            # score on words like "sale" and "customer" in its column
+            # names, and was added in full to questions that never named it.
+            terms = self.question_terms(question)
             outside = [
                 (score, table)
                 for score, table in self.search(question, limit=table_limit)
                 if f"{table['schema']}.{table['name']}" not in domain_tables
-                and score >= FULL_NAME_MATCH
+                and self.name_score(table, terms) >= FULL_NAME_MATCH
             ]
             if outside:
                 names = ", ".join(t["name"] for _, t in outside)
@@ -790,6 +825,18 @@ class SchemaCatalog:
                     print(f"[schema] Named outside the domain, added: {names}")
                     matches = sorted(matches + outside, key=lambda m: m[0],
                                      reverse=True)
+
+        # When the question names a table, a table matched only on a
+        # column word ("customers" in crm_lead's partner columns) is
+        # noise: it and its relationship walk filled most of the prompt.
+        # The walk from the named tables still brings in the related ones
+        # a query needs (sale_order_line from sale_order), and they keep
+        # the columns the question names.
+        terms = self.question_terms(question)
+        named = [(score, table) for score, table in matches
+                 if self.name_score(table, terms) >= FULL_NAME_MATCH]
+        if named:
+            matches = named
 
         selected = {
             f"{table['schema']}.{table['name']}"
@@ -807,6 +854,15 @@ class SchemaCatalog:
                 return self._format_context(unwalked)
             return ""
 
+        # Only tables the question names list every column. A table
+        # matched on a column word alone (product_template on "sales")
+        # is a supporting table; the best match always stays in focus.
+        focus = {
+            f"{table['schema']}.{table['name']}"
+            for _, table in matches
+            if self.name_score(table, terms) >= FULL_NAME_MATCH
+        } | unwalked
+        focus.add(f"{matches[0][1]['schema']}.{matches[0][1]['name']}")
         selected = self.get_related_tables(selected, depth=relationship_depth)
 
         # A weak match (no table named in full, only a partial name or a
@@ -818,8 +874,10 @@ class SchemaCatalog:
         if best_score < FULL_NAME_MATCH:
             print("[schema] Weak table match - adding fallback tables")
             selected |= set(fallback_names)
+            focus |= set(fallback_names)
 
-        return self._format_context(selected | unwalked)
+        return self._format_context(selected | unwalked, focus=focus,
+                                    question=question)
 
     def discover_schema(self, question, scope=None, anchors=None):
         """
@@ -960,9 +1018,35 @@ class SchemaCatalog:
         return (f"{len(sizes)} table(s); largest: "
                 + ", ".join(f"{name} ({count})" for name, count in top))
 
-    def _format_context(self, selected):
+    def _format_context(self, selected, focus=None, question=None):
+        """
+        The schema text for the selected tables. Tables in focus (matched
+        by the question, or named in it) list every column. Other tables
+        - supporting tables reached through a relationship - list only
+        the columns that matter when they have more than
+        schema_text.supporting_table_columns (see _supporting_columns).
+        focus None lists every column of every table.
+        """
+        style = get_settings().retrieval.schema_text
         lines = []
         terms = []
+
+        relationships = [
+            relationship
+            for relationship in self.foreign_keys
+            if (
+                relationship["from_table"] in selected
+                and relationship["to_table"] in selected
+            )
+        ]
+        # Words used by the selected tables' terms: a supporting table's
+        # column a term predicate reads (res_company.partner_id) stays.
+        term_words = set()
+        for full_name in selected:
+            for term in (self.tables.get(full_name) or {}).get("terms", ()):
+                term_words |= set(re.findall(r"[a-z_][a-z0-9_]*",
+                                             term["definition"].lower()))
+        question_words = self.question_terms(question) if question else set()
 
         for full_name in sorted(selected):
             table = self.tables.get(full_name)
@@ -976,11 +1060,20 @@ class SchemaCatalog:
                 header += f"  -- {notes}"
             lines.append(header)
 
-            for column in table["columns"]:
-                nullable = "NULL" if column["nullable"] else "NOT NULL"
+            columns = table["columns"]
+            limit = style.supporting_table_columns
+            if focus is not None and full_name not in focus and limit \
+                    and len(columns) > limit:
+                columns = self._supporting_columns(
+                    table, full_name, relationships, term_words, question_words)
+            hidden = len(table["columns"]) - len(columns)
 
-                line = (f"  - {self.engine.quote_name(column['name'])} "
-                        f"{column['type']} {nullable}")
+            for column in columns:
+                column_type = (_compact_type(column["type"])
+                               if style.compact_types else column["type"])
+                line = f"  - {self.engine.quote_name(column['name'])} {column_type}"
+                if style.show_nullability:
+                    line += " NULL" if column["nullable"] else " NOT NULL"
 
                 notes = self._notes(column)
                 json_note = self._json_note(column, notes)
@@ -996,19 +1089,12 @@ class SchemaCatalog:
 
                 lines.append(line)
 
+            if hidden:
+                lines.append(f"  ... {hidden} more columns, not listed")
             lines.append("")
 
             for term in table.get("terms", ()):
                 terms.append((full_name, term))
-
-        relationships = [
-            relationship
-            for relationship in self.foreign_keys
-            if (
-                relationship["from_table"] in selected
-                and relationship["to_table"] in selected
-            )
-        ]
 
         if relationships:
             lines.append("RELATIONSHIPS")
@@ -1029,6 +1115,35 @@ class SchemaCatalog:
                 lines.append(line)
 
         return "\n".join(lines)
+
+    def _supporting_columns(self, table, full_name, relationships, term_words,
+                            question_words):
+        """
+        The columns of a supporting table worth listing, in table order:
+        the keys of the relationships shown, columns the semantic model
+        documents (label, description or alias), columns a term reads,
+        columns whose name the question uses, json columns (so their note
+        is seen), and the usual identifying ones. The rest are counted,
+        not listed; the column check still accepts them.
+        """
+        keep = set(_ALWAYS_LISTED)
+        for relationship in relationships:
+            if relationship["from_table"] == full_name:
+                keep.update(c.lower() for c in relationship["from_columns"])
+            if relationship["to_table"] == full_name:
+                keep.update(c.lower() for c in relationship["to_columns"])
+        keep |= term_words
+
+        chosen = []
+        for column in table["columns"]:
+            name = column["name"].lower()
+            if (name in keep
+                    or column.get("label") or column.get("description")
+                    or column.get("aliases")
+                    or str(column.get("type", "")).lower() in JSON_TYPES
+                    or (question_words and tokenize(column["name"]) & question_words)):
+                chosen.append(column)
+        return chosen
 
     @staticmethod
     def _json_note(column, notes):
@@ -1087,6 +1202,26 @@ class SchemaCatalog:
         How well a table matches a question's terms (from
         text_match.tokenize). See the score constants in text_match.py.
         """
+        score = self.name_score(table, terms)
+
+        # Column matches, by name word and by label or alias.
+        for column in table["columns"]:
+            column_tokens = tokenize(column["name"])
+            score += len(terms & column_tokens) * COLUMN_MATCH
+
+            names = list(column.get("aliases", ()))
+            if column.get("label"):
+                names.append(column["label"])
+            if any(phrase_matches(name, terms) for name in names):
+                score += COLUMN_MATCH
+
+        return score
+
+    def name_score(self, table, terms):
+        """
+        The part of score_table() that says the question NAMES the table:
+        its name, label, aliases and terms - without column words.
+        """
         score = 0
 
         # Table name, part by part: order_details -> "order", "details".
@@ -1118,17 +1253,6 @@ class SchemaCatalog:
             for phrase in term["phrases"]
         ):
             score += TERM_MATCH
-
-        # Column matches, by name word and by label or alias.
-        for column in table["columns"]:
-            column_tokens = tokenize(column["name"])
-            score += len(terms & column_tokens) * COLUMN_MATCH
-
-            names = list(column.get("aliases", ()))
-            if column.get("label"):
-                names.append(column["label"])
-            if any(phrase_matches(name, terms) for name in names):
-                score += COLUMN_MATCH
 
         return score
 

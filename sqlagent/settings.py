@@ -128,6 +128,16 @@ class LlmSettings(_Strict):
     # ... and the most characters of rows (~4 characters a token); rows
     # are added until either limit is reached, always at least one.
     explain_result_chars: int = Field(8000, ge=500)
+    # Sent to Ollama with every request (its "options"); None leaves the
+    # model's own default. temperature 0 and a fixed seed make the same
+    # prompt give the same SQL, so two runs can be compared. num_ctx is
+    # the context window in tokens: a longer prompt is silently cut from
+    # the start, so set it here rather than relying on the Ollama app.
+    temperature: float | None = Field(None, ge=0, le=2)
+    seed: int | None = None
+    num_ctx: int | None = Field(None, ge=512, le=1_048_576)
+    # Print each call's token counts and times ([llm] lines).
+    log_tokens: bool = True
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
@@ -271,11 +281,31 @@ class RelationshipWalk(_Strict):
     named_outside_domain: Literal["walk", "add", "note"] = "add"
 
 
+class SchemaText(_Strict):
+    # How the schema is written into the SQL prompt. Every line is sent on
+    # every question, so it decides most of the prompt's size.
+    # Supporting tables - every table the question doesn't name (by table
+    # name, label, alias or term): those reached through a relationship
+    # and those matched only on a column word - with more columns than
+    # this show only the columns
+    # that matter: keys used by the shown relationships, columns with a
+    # label/description/alias, columns a term uses, columns the question
+    # names, and name/code/state/active. 0 shows every column.
+    supporting_table_columns: int = Field(10, ge=0)
+    # Short type names ("varchar", "timestamp") instead of PostgreSQL's
+    # long ones ("character varying", "timestamp without time zone").
+    compact_types: bool = True
+    # NULL / NOT NULL after each column. Rarely matters for a query and
+    # costs a few tokens on every line.
+    show_nullability: bool = False
+
+
 class RetrievalSettings(_Strict):
     domains: DomainRouting = Field(default_factory=DomainRouting)
     table_match: TableMatch = Field(default_factory=TableMatch)
     typo_correction: TypoCorrection = Field(default_factory=TypoCorrection)
     relationships: RelationshipWalk = Field(default_factory=RelationshipWalk)
+    schema_text: SchemaText = Field(default_factory=SchemaText)
 
 
 # ---------------------------------------------------------------------------

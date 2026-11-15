@@ -18,6 +18,42 @@ example_questions:
   - How much did we spend with each vendor last quarter?
   - What is in the sales pipeline by stage?
 sql_examples:
+  - question: which customers haven't ordered in the last 3 months?
+    note: >-
+      a customer can be a person or a company: use the customer term
+      (confirmed order or customer_rank), never is_company; orders may be
+      addressed to a contact person, so match on commercial_partner_id
+    sql: >-
+      SELECT c.name AS customer
+      FROM res_partner c
+      WHERE (EXISTS (SELECT 1 FROM sale_order so
+                     JOIN res_partner op ON op.id = so.partner_id
+                     WHERE op.commercial_partner_id = c.id AND so.state = 'sale')
+             OR (c.customer_rank > 0 AND c.commercial_partner_id = c.id))
+        AND NOT EXISTS (SELECT 1 FROM res_company rc WHERE rc.partner_id = c.id)
+        AND NOT EXISTS (SELECT 1 FROM sale_order so
+                        JOIN res_partner op ON op.id = so.partner_id
+                        WHERE op.commercial_partner_id = c.id AND so.state = 'sale'
+                          AND so.date_order >= CURRENT_DATE - INTERVAL '3 months')
+      ORDER BY c.name
+  - question: which customers have no phone number?
+    note: >-
+      contact details may be on the customer or on its contact people
+      (parent_id = the customer): a customer is missing one only when none
+      of them has it
+    sql: >-
+      SELECT c.name AS customer
+      FROM res_partner c
+      WHERE (EXISTS (SELECT 1 FROM sale_order so
+                     JOIN res_partner op ON op.id = so.partner_id
+                     WHERE op.commercial_partner_id = c.id AND so.state = 'sale')
+             OR (c.customer_rank > 0 AND c.commercial_partner_id = c.id))
+        AND NOT EXISTS (SELECT 1 FROM res_company rc WHERE rc.partner_id = c.id)
+        AND COALESCE(c.phone, '') = ''
+        AND NOT EXISTS (SELECT 1 FROM res_partner ct
+                        WHERE ct.parent_id = c.id AND ct.active
+                          AND COALESCE(ct.phone, '') <> '')
+      ORDER BY c.name
   - question: what products do we sell?
     note: product names are JSONB, keyed by language
     sql: >-
@@ -29,24 +65,29 @@ sql_examples:
     note: >-
       the financial year ends on res_company.fiscalyear_last_month /
       fiscalyear_last_day (30 June in Australia), not 31 December; it starts
-      the day after the most recent year-end
+      the day after the most recent year-end. Work the year-end out in a
+      subquery in the WHERE clause, as here; a query has one FROM clause,
+      and WITH (CTEs) and subqueries in FROM are not allowed. The same
+      pattern works for purchases (purchase_order, state = 'purchase')
     sql: >-
-      SELECT SUM(so.amount_untaxed) AS revenue
+      SELECT SUM(so.amount_total) AS revenue
       FROM sale_order so
-      JOIN res_company rc ON rc.id = so.company_id
       WHERE so.state = 'sale'
-        AND so.date_order::date > CASE
-          WHEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
-                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day) < CURRENT_DATE
-          THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
-                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
-          ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int - 1,
-                         rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
-        END
+        AND so.date_order::date > (
+          SELECT CASE
+                   WHEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                  rc.fiscalyear_last_month::int, rc.fiscalyear_last_day) < CURRENT_DATE
+                   THEN make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                  rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
+                   ELSE make_date(EXTRACT(YEAR FROM CURRENT_DATE)::int - 1,
+                                  rc.fiscalyear_last_month::int, rc.fiscalyear_last_day)
+                 END
+          FROM res_company rc
+          WHERE rc.id = so.company_id)
   - question: who are our top 5 customers by revenue?
     note: orders can be addressed to a contact person, so group on the company
     sql: >-
-      SELECT c.name AS customer, SUM(so.amount_untaxed) AS revenue
+      SELECT c.name AS customer, SUM(so.amount_total) AS revenue
       FROM sale_order so
       JOIN res_partner p ON p.id = so.partner_id
       JOIN res_partner c ON c.id = p.commercial_partner_id
@@ -76,7 +117,7 @@ sql_examples:
   - question: sales by salesperson this year
     note: a user's name is on its partner
     sql: >-
-      SELECT up.name AS salesperson, SUM(so.amount_untaxed) AS revenue
+      SELECT up.name AS salesperson, SUM(so.amount_total) AS revenue
       FROM sale_order so
       JOIN res_users u ON u.id = so.user_id
       JOIN res_partner up ON up.id = u.partner_id
@@ -102,9 +143,11 @@ sql_examples:
       WHERE l.usage = 'internal'
       GROUP BY 1 ORDER BY 1
   - question: what is our gross margin by product category this year?
-    note: margin is stored on the order line; category names are JSONB
+    note: >-
+      margin is stored on the order line and is ex-GST, so compare it with
+      price_subtotal (not price_total); category names are JSONB
     sql: >-
-      SELECT pc.name->>'en_US' AS category, SUM(l.price_subtotal) AS revenue,
+      SELECT pc.name->>'en_US' AS category, SUM(l.price_subtotal) AS net_revenue,
              SUM(l.margin) AS margin
       FROM sale_order_line l
       JOIN sale_order so ON so.id = l.order_id

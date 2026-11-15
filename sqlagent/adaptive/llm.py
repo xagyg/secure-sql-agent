@@ -107,12 +107,105 @@ _RETRYABLE_ERRORS = (
 # Ollama
 # ---------------------------------------------------------------------------
 
+def _ollama_options():
+    """llm.temperature / seed / num_ctx as Ollama request options; unset
+    ones are left out so the model's defaults apply."""
+    options = {"temperature": _LLM.temperature, "seed": _LLM.seed,
+               "num_ctx": _LLM.num_ctx}
+    return {name: value for name, value in options.items() if value is not None}
+
+
+OLLAMA_OPTIONS = _ollama_options()
+
+# A prompt using this share of num_ctx gets a warning: Ollama cuts a
+# prompt that doesn't fit, without an error.
+CONTEXT_WARNING_SHARE = 0.9
+
+# Characters per token, to estimate a prompt's size before it is sent.
+# Measured on qwen3-coder with the Odoo prompts: about 4 (17,100 characters
+# were counted as 12,900 tokens).
+CHARS_PER_TOKEN = 4.0
+
+# When a prompt doesn't fit, llama.cpp keeps only about half the context
+# (the start and the most recent part), so a cut prompt is counted at
+# num_ctx / 2 plus a token or two: 4,098 at 8K, 8,194 at 16K.
+CUT_COUNT_TOLERANCE = 16
+
+
+def estimated_tokens(messages):
+    """The approximate token count of the messages, from their length."""
+    chars = sum(len(str(m.get("content", ""))) for m in messages)
+    return round(chars / CHARS_PER_TOKEN)
+
+
+def prompt_was_cut(prompt, num_ctx, estimate):
+    """True when Ollama's count shows it dropped part of the prompt: the
+    count sits at half the context while more than that was sent, or the
+    prompt sent was larger than the whole context."""
+    if not num_ctx or not prompt:
+        return False
+    at_half = abs(prompt - num_ctx // 2) <= CUT_COUNT_TOLERANCE
+    if at_half and (not estimate or estimate > num_ctx // 2):
+        return True
+    return bool(estimate) and estimate > num_ctx
+
+
+def token_report(response, num_ctx=None, estimate=None):
+    """
+    One line of token counts and times from an Ollama reply, e.g.
+    "6,850 prompt tokens (9.8s), 120 out (3.1s)", plus a warning when the
+    prompt was cut (Ollama counted far fewer tokens than were sent) or
+    used most of num_ctx. None when the reply has no counts. estimate is
+    estimated_tokens() of what was sent.
+    """
+    prompt = getattr(response, "prompt_eval_count", None)
+    output = getattr(response, "eval_count", None)
+    if prompt is None and output is None:
+        return None
+
+    def seconds(name):
+        value = getattr(response, name, None)
+        return f" ({value / 1e9:.1f}s)" if value else ""
+
+    text = (f"{prompt or 0:,} prompt tokens{seconds('prompt_eval_duration')}, "
+            f"{output or 0:,} out{seconds('eval_duration')}")
+    if estimate:
+        text += f"; ~{estimate:,} sent"
+    if prompt_was_cut(prompt, num_ctx, estimate):
+        text += (f" - WARNING: the prompt was cut to fit the context "
+                 f"(num_ctx {num_ctx:,}); the model didn't see all of it")
+    elif num_ctx and prompt and prompt >= CONTEXT_WARNING_SHARE * num_ctx:
+        text += (f" - WARNING: {prompt / num_ctx:.0%} of num_ctx {num_ctx:,}; "
+                 "the prompt may have been cut")
+    return text
+
+
+def prompt_breakdown(prompt, **parts):
+    """
+    "[llm] SQL prompt ~12,800 tokens: schema ~9,100, examples ~1,200,
+    history ~400, rules and question ~2,100" - where a prompt's size
+    goes, estimated from each part's length.
+    """
+    sizes = {name: round(len(text or "") / CHARS_PER_TOKEN)
+             for name, text in parts.items()}
+    total = round(len(prompt) / CHARS_PER_TOKEN)
+    rest = max(total - sum(sizes.values()), 0)
+    shown = ", ".join(f"{name} ~{size:,}" for name, size in sizes.items())
+    return f"[llm] SQL prompt ~{total:,} tokens: {shown}, rules ~{rest:,}"
+
+
 def ask_ollama(messages):
     try:
-        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages)
+        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
+                                      options=OLLAMA_OPTIONS or None)
     except _RETRYABLE_ERRORS as ex:
         print(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
-        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages)
+        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
+                                      options=OLLAMA_OPTIONS or None)
+    if _LLM.log_tokens:
+        report = token_report(response, _LLM.num_ctx, estimated_tokens(messages))
+        if report:
+            print(f"[llm] {report}")
     return response.message.content
 
 
@@ -292,6 +385,10 @@ always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
        not SELECT po.id, po.partner_id, ...
 * Only return id columns when the user asks for ids.
 """
+
+    if _LLM.log_tokens:
+        print(prompt_breakdown(system_prompt, schema=schema,
+                               examples=sql_examples, history=history_text))
 
     return clean_sql(ask_ollama([
         {"role": "system", "content": system_prompt},
@@ -526,8 +623,17 @@ def explain_results(question, sql, results, withheld=(), row_cap=None):
         count_text = str(row_count)
     if shown < row_count:
         results_label = f"RESULTS (the first {shown} of {row_count} rows, one per line)"
+        # Only when rows were actually left out: stated unconditionally,
+        # the model called complete results "examples" too.
+        shown_rule = (
+            f"* Only {shown} of the {row_count} rows are shown. Give the total\n"
+            "  from ROW COUNT and describe the shown rows as examples; don't\n"
+            "  present them as the full list.\n")
     else:
         results_label = "RESULTS (one row per line)"
+        shown_rule = (
+            "* Every row is shown: this is the complete result. Don't call\n"
+            "  the rows examples or suggest there may be more.\n")
 
     columns = []
     for row in results:
@@ -571,11 +677,11 @@ ROW COUNT (again): {count_text}
 Rules:
 * ROW COUNT is the exact number of rows. Use it for any count; never
   count rows yourself and never treat an ID value as a count.
-* If only some rows are shown, give the total from ROW COUNT and
-  describe the shown rows as examples; don't present them as the full
-  list.
-* Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
+{shown_rule}* Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
   name other columns; ignore them.
+* Describe the data in plain business words ("customers", "total
+  sales"). Don't name tables or columns, don't quote SQL, and don't
+  explain how the query works or its LIMIT.
 * If ROW COUNT is 0, say no matching records were found and suggest
   checking the spelling of any names or rephrasing the question. Do not
   say the record does not exist, and do not mention access or

@@ -156,6 +156,24 @@ class NamedOutsideDomain(unittest.TestCase):
     def test_shipped_default_is_add(self):
         self.assertEqual(RelationshipWalk().named_outside_domain, "add")
 
+    def test_column_words_alone_do_not_name_a_table(self):
+        # A wide table whose column names repeat a question word scores as
+        # high as a named table (Odoo's res_company on "sales"), but the
+        # question doesn't name it, so it isn't added.
+        catalog = make_catalog(extra_tables={
+            "public.audit_log": [f"category_note_{i}" for i in range(10)]})
+        catalog.domain_resolver.blend = False
+        with_retrieval(catalog, {"named_outside_domain": "add"})
+        ctx, decision = route(catalog, self.QUESTION)
+        scope = catalog.domain_resolver.scope(decision)
+        terms = catalog.question_terms(ctx.question)
+        wide = catalog.tables["public.audit_log"]
+        self.assertGreaterEqual(catalog.score_table(wide, terms), 20)
+        self.assertEqual(catalog.name_score(wide, terms), 0)
+        tables = tables_in(catalog.discover_schema(ctx.question, scope=scope))
+        self.assertIn("categories", tables)
+        self.assertNotIn("audit_log", tables)
+
 
 class Blending(unittest.TestCase):
 
