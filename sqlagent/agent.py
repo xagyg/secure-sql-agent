@@ -346,6 +346,12 @@ def _check_columns(sql, catalog):
         raise UnknownColumnError(unknown)
 
 
+# The answer to a query that ran and matched nothing.
+NO_ROWS_ANSWER = ("No matching records were found. If you expected some, "
+                  "try rephrasing the question or checking the spelling "
+                  "of any names.")
+
+
 def _results_without_explanation(results, withheld):
     """The answer when the LLM explanation is skipped: the row count,
     anything withheld, and the first rows as a table."""
@@ -837,7 +843,13 @@ def _run_pipeline(question, catalog, history, security, schema, domain_key,
     # Postgres) is the engine's.
     explanation_sql = active_engine().strip_row_limit(sql, MAX_ROWS)
 
-    if explain:
+    if explain and not results:
+        # No rows: a fixed answer, not an LLM call. Asked to explain an
+        # empty result, the model padded it with troubleshooting advice
+        # ("check the country code") that didn't apply.
+        explanation = NO_ROWS_ANSWER
+        print("\n[answer]")
+    elif explain:
         explanation = explain_results(
             question, explanation_sql, results, withheld=sorted(set(withheld)),
             row_cap=MAX_ROWS,

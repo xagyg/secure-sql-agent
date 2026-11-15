@@ -69,6 +69,17 @@ class NoExplain(unittest.TestCase):
         self.assertNotIn("030-0074321", out)
 
 
+class NoRows(unittest.TestCase):
+    """An empty result gets a fixed answer: no LLM call."""
+
+    def test_empty_result_is_not_sent_to_the_llm(self):
+        result, explain_mock, out, history = run([], explain=True)
+        explain_mock.assert_not_called()
+        self.assertEqual(result["answer"], agent.NO_ROWS_ANSWER)
+        self.assertIn("No matching records were found", out)
+        self.assertEqual(history[0]["row_count"], 0)
+
+
 class Table(unittest.TestCase):
 
     def test_layout(self):

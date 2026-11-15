@@ -314,8 +314,6 @@ IMPORTANT:
 * If the current question does not refer to the conversation at all,
   ignore the conversation context and answer it on its own.
 * {engine} syntax.
-* Only SELECT queries.
-* Do not modify data.
 * If the current message explicitly asks to add, change, delete or
   otherwise modify data or the database (e.g. "delete all customers",
   "update the price", "drop the orders table"), do NOT write a query
@@ -326,12 +324,13 @@ IMPORTANT:
   chat), do NOT write a query. Return exactly this and nothing else:
   {NOT_A_DATA_QUESTION_SENTINEL}
 * If the current message IS a question about the data, but the
-  DATABASE SCHEMA above has no table or column that can answer it
-  (e.g. it asks for a phone number and no phone column is listed),
-  do NOT guess and do NOT use a different column. Return exactly this
-  and nothing else:
+  DATABASE SCHEMA above has no table that could hold the answer, do
+  NOT guess and do NOT use a different table. Return exactly this and
+  nothing else:
   {DATA_NOT_AVAILABLE_SENTINEL}
-  Use it ONLY when no listed table could hold the answer.
+  Use it ONLY when no listed table could hold the answer. A table
+  marked "... more columns, not listed" has other columns too: a
+  column you need may be one of them.
 * If the current message is about the data but too vague to answer
   with one query (it names no record, measure or kind of thing, e.g.
   "what does Northwind have?", "show me stuff", "what's going on?"),
@@ -363,18 +362,15 @@ EXAMPLES (message -> correct reply)
   "hello"                            -> {NOT_A_DATA_QUESTION_SENTINEL}
   "thanks!"                          -> {NOT_A_DATA_QUESTION_SENTINEL}
   "what's the weather today?"        -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "what is Nancy's home phone?"      -> {DATA_NOT_AVAILABLE_SENTINEL}
-    (only when no phone column is listed in the schema above)
   "what does North wind have"        -> {UNCLEAR_QUESTION_SENTINEL}
   "show me some data"                -> {UNCLEAR_QUESTION_SENTINEL}
 {sql_examples}Insults, complaints and comments about you are NEVER data questions:
 always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
-* Do not use WITH clauses (CTEs); use joins or subqueries instead.
+* No WITH clauses (CTEs) and no subqueries in FROM or JOIN: they are
+  rejected. Use joins, subqueries in WHERE or SELECT, or conditional
+  aggregation (SUM(CASE WHEN ... THEN ... END)) instead.
 {engine_rules}
-* Return ONLY the SQL statement.
-* Do not return markdown.
-* Do not return JSON.
-* Do not explain the SQL.
+* Reply with the SQL only.
 * Show names, not internal IDs. For every column you SELECT that holds
   another record's id (partner_id, user_id, product_id, employee_id,
   company_id, ...), join that record's table and select its name
@@ -382,8 +378,8 @@ always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
   name or number (an order's S00023 or P00015), not by its id.
   e.g. purchase orders awaiting approval:
        SELECT po.name, p.name AS vendor, po.date_order, po.amount_total
-       not SELECT po.id, po.partner_id, ...
-* Only return id columns when the user asks for ids.
+       not SELECT po.id, po.partner_id, ... - unless the user asks
+       for ids.
 """
 
     if _LLM.log_tokens:
@@ -420,21 +416,13 @@ TASK
 Correct the SQL query using the actual database schema.
 
 IMPORTANT:
-* Return ONE corrected SELECT statement.
+* Return ONE corrected SELECT statement, and only the SQL.
+* Follow any hint above the TASK; never send back what it says is
+  wrong.
 * Use only columns that exist in the schema.
-* Do not use WITH clauses (CTEs); use joins or subqueries instead.
-* If a KNOWN COLUMN MAPPING is supplied, use its physical column.
-* If JSON COLUMNS are listed, read each one the way its note says and
-  keep any ->> already applied to it.
-* If COLUMN NOT FOUND is listed, use one of its closest columns, or a
-  column of another table it names. Never send back the same column.
+* No WITH clauses (CTEs) and no subqueries in FROM or JOIN.
 * If no column in the schema holds what the question asks for, return
   exactly {DATA_NOT_AVAILABLE_SENTINEL} instead of SQL.
-* Do not use a mapped column if it is not authorised.
-* Do not modify data.
-* Return ONLY SQL.
-* Do not use markdown.
-* Do not explain the correction.
 """
 
     return clean_sql(ask_ollama([
@@ -682,10 +670,7 @@ Rules:
 * Describe the data in plain business words ("customers", "total
   sales"). Don't name tables or columns, don't quote SQL, and don't
   explain how the query works or its LIMIT.
-* If ROW COUNT is 0, say no matching records were found and suggest
-  checking the spelling of any names or rephrasing the question. Do not
-  say the record does not exist, and do not mention access or
-  permissions.
+* Do not mention access or permissions.
 * Explain the result clearly and concisely.
 * Do not invent information that isn't present in the results.
 """
