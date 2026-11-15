@@ -130,7 +130,8 @@ relationships:
   # A table the question names in full that sits outside the chosen
   # domain ("list the shippers" asked from the HR desk):
   #   walk - add it and walk its relationships
-  #   add  - add it, without walking its relationships
+  #   add  - add it, without walking its relationships, plus any link
+  #          table needed to join it (employee_territories for territories)
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
 
@@ -142,8 +143,9 @@ schema_text:
   # name, label, alias or term (those reached through a relationship and
   # those matched only on a column word) - with more columns than this
   # list only the ones that matter: relationship keys, documented
-  # columns, columns a term uses, columns the question names, and
-  # name/code/state/active. 0 lists every column.
+  # columns, columns a term uses, columns the question names, json
+  # columns, and id/name/display_name/complete_name/code/state/active.
+  # 0 lists every column.
   supporting_table_columns: 10
   compact_types: true       # "varchar" for "character varying", etc.
   show_nullability: false   # NULL / NOT NULL after each column

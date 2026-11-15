@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Tests for the one retry given to SQL stopped for reading a table outside
-# the role's schema (agent._retry_unavailable_table). Runs the real
-# validator on Northwind with a role that can't see employees. No database
-# or LLM needed.
+# Tests for SQL stopped for reading a table outside the role's schema
+# (agent._retry_unavailable_table): an invented name gets one retry, a real
+# table the role can't see gets none. Runs the real validator on Northwind
+# with a role that can't see employees. No database or LLM needed.
 #
 #     python -m unittest tests.test_table_retry -v
 

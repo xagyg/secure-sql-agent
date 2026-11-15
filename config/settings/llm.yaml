@@ -49,8 +49,10 @@ explain_result_chars: 8000    # ~2,000 tokens of rows; wide rows show fewer
 # Ollama options sent with every request (omit one to use the model's
 # default). temperature 0 and a fixed seed make the same prompt give the
 # same answer, so two batch runs can be compared. num_ctx is the context
-# window in tokens and overrides the Ollama app's setting: a prompt longer
-# than it is silently cut from the start, losing schema and rules.
+# window in tokens. The Ollama app's own context-length setting takes
+# precedence over it, so set both to the same value. A prompt longer than
+# the context is cut without an error, losing part of the schema and
+# rules (log_tokens warns when that happens).
 temperature: 0
 seed: 42
 num_ctx: 16384

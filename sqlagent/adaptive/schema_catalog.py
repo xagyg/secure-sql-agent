@@ -1058,10 +1058,11 @@ class SchemaCatalog:
 
     def _format_context(self, selected, focus=None, question=None):
         """
-        The schema text for the selected tables. Tables in focus (matched
-        by the question, or named in it) list every column. Other tables
-        - supporting tables reached through a relationship - list only
-        the columns that matter when they have more than
+        The schema text for the selected tables. Tables in focus (named
+        in the question by table name, label, alias or term; the best
+        match always) list every column. Other tables - supporting tables
+        reached through a relationship or matched only on a column word -
+        list only the columns that matter when they have more than
         schema_text.supporting_table_columns (see _supporting_columns).
         focus None lists every column of every table.
         """

@@ -10,8 +10,9 @@
 # connections after the visitor has gone.
 statement_timeout_seconds: 10
 
-# LIMIT added to every query that doesn't have one (sql_policy.py), and
-# the most rows the result policy will return.
+# LIMIT added to every query that doesn't have one, and a larger limit
+# lowered to it (sql_policy.py); also the most rows the result policy
+# will return.
 max_rows: 100
 
 # Most result bytes returned (result_policy.py).

@@ -263,7 +263,8 @@ class SemanticModel:
 
     def not_recorded_match(self, question_terms):
         """(name, phrase, description) for the first not_recorded entry
-        whose phrase is in the question (tokenize()d), else None."""
+        with a phrase whose words are all in the question (tokenize()d,
+        any order - see phrase_matches), else None."""
         from sqlagent.adaptive.text_match import phrase_matches
         for name, (phrases, description) in self.not_recorded.items():
             for phrase in phrases:

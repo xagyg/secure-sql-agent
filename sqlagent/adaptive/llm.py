@@ -183,8 +183,8 @@ def token_report(response, num_ctx=None, estimate=None):
 def prompt_breakdown(prompt, **parts):
     """
     "[llm] SQL prompt ~12,800 tokens: schema ~9,100, examples ~1,200,
-    history ~400, rules and question ~2,100" - where a prompt's size
-    goes, estimated from each part's length.
+    history ~400, rules ~2,100" - where a prompt's size goes, estimated
+    from each part's length. rules is everything else in the prompt.
     """
     sizes = {name: round(len(text or "") / CHARS_PER_TOKEN)
              for name, text in parts.items()}
@@ -597,8 +597,9 @@ def explain_results(question, sql, results, withheld=(), row_cap=None):
     and described columns from the SQL that weren't in the results.
     withheld lists result columns removed by the security policy. At most
     llm.explain_rows rows (and explain_result_chars characters of them)
-    are shown; the full count is stated twice, before and after them. row_cap is the query's row limit: a result that
-    reached it is reported as "at least" that many.
+    are shown; the full count is stated twice, before and after them.
+    row_cap is the query's row limit: a result that reached it is
+    reported as "at least" that many.
     """
     row_count = len(results)
     rows_text, shown = _results_for_prompt(

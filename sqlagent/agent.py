@@ -237,9 +237,11 @@ def _unauthorised_table(reason):
 
 def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
     """
-    One rewrite of a query stopped for reading a table outside the role's
-    schema. Returns (sql, withheld, failure) from _prepare_sql() on the
-    rewrite, or a finished result dict (blocked / not available / error).
+    A query stopped for reading a table outside the role's schema. A real
+    table the role can't see ends it as "not available", with no retry;
+    an invented name gets one rewrite. Returns (sql, withheld, failure)
+    from _prepare_sql() on the rewrite, or a finished result dict
+    (blocked / not available / error).
     """
     table = failure["retry_table"]
     reason = failure["reason"]
@@ -480,11 +482,11 @@ def run_agent(question, catalog, history, security, explain=True):
           ↓
         Re-validation
           ↓
-        Database (PostgreSQL)
+        Database (PostgreSQL or SQL Server)
           ↓
         Results
           ↓
-        Ollama
+        Ollama (none for 0 rows, or with --no-explain)
           ↓
         Explanation
           ↓
@@ -746,7 +748,7 @@ def _answer_without_sql(question, sql, security, catalog):
 
 # ---------------------------------------------------------------------------
 # Step 2: strip, validate, rewrite, re-validate (see _prepare_sql), with
-# one rewrite for an unavailable table and one for SQL that won't parse
+# one rewrite for an invented table name and one for SQL that won't parse
 # ---------------------------------------------------------------------------
 def _prepare_with_retries(question, schema, sql, security, catalog):
     """(sql, withheld) ready to run, or a finished result dict."""
@@ -826,7 +828,7 @@ def _execute_with_correction(question, schema, sql, generated_sql, withheld,
             return _not_available(question, security, sql, corrected=True)
 
         # Compare with what the model first wrote, not the prepared
-        # SQL: that has LIMIT 1000 (and maybe rewrites) added, so the
+        # SQL: that has the row limit (and maybe rewrites) added, so the
         # two never matched and the failing query was run again.
         if _normalise_sql(corrected_sql) in {
             _normalise_sql(generated_sql), _normalise_sql(sql)
