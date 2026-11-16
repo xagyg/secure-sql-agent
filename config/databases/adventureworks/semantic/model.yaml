@@ -518,6 +518,11 @@ tables:
       retail customer), a store (storeid set, personid NULL), or a person
       buying for a store (both set). Names: person.person via personid,
       sales.store via storeid. Account number = 'AW' || lpad(customerid, 8, '0').
+      Address: an individual customer's is person.businessentityaddress
+      (businessentityid = customer.personid) -> person.address; a store's
+      is businessentityaddress (businessentityid = customer.storeid) ->
+      address. customerid is not an addressid. An order's own addresses
+      are salesorderheader.billtoaddressid and shiptoaddressid.
     columns:
       personid:    {label: person id}
       storeid:     {label: store id}
@@ -693,6 +698,22 @@ relationships:
     cardinality: one_to_one
   - from: purchasing.vvendorwithaddresses(businessentityid)
     to:   purchasing.vendor(businessentityid)
+
+# ---------------------------------------------------------------------------
+# Things this database doesn't record. A question naming one is answered
+# "not available" before any SQL is written - asked where products are
+# made, the model answered from makeflag (made in-house or bought in),
+# which says nothing about a country. Each phrase matches when all its
+# words are in the question.
+# ---------------------------------------------------------------------------
+not_recorded:
+  country_of_manufacture:
+    aliases: [country of manufacture, manufacturing country, country of origin,
+              manufactured in a different country, made in a different country,
+              where products are manufactured]
+    description: >-
+      where a product is manufactured isn't recorded (makeflag only says
+      whether it is made in-house)
 
 # ---------------------------------------------------------------------------
 # Terms: words that pick ROWS.

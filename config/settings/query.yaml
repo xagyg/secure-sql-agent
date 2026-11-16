@@ -10,8 +10,9 @@
 # connections after the visitor has gone.
 statement_timeout_seconds: 10
 
-# LIMIT added to every query that doesn't have one (sql_policy.py), and
-# the most rows the result policy will return.
+# LIMIT added to every query that doesn't have one, and a larger limit
+# lowered to it (sql_policy.py); also the most rows the result policy
+# will return.
 max_rows: 100
 
 # Most result bytes returned (result_policy.py).
@@ -26,3 +27,11 @@ max_result_bytes: 1000000
 # carries one value (README "Large scopes"). It never falls back to running
 # the long list, or to no filter.
 max_scope_values: 1000
+
+# Before a query runs, check every column it names against the catalog
+# (the role's tables and columns). A column that isn't there - usually one
+# the model remembered from another Odoo version - goes straight to the
+# correction step with the closest real columns, without a database round
+# trip. Only tables in the catalog are checked; anything else is left to
+# the database.
+check_columns: true

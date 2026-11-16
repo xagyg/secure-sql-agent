@@ -34,6 +34,9 @@ HISTORY_VALUE_CHARS = _LLM.history_value_chars
 HISTORY_SQL_TURNS = _LLM.history_sql_turns
 HISTORY_SUMMARY_CHARS = _LLM.history_summary_chars
 CORRECTION_SQL_CHARS = _LLM.correction_sql_chars
+EXPLAIN_ROWS = _LLM.explain_rows
+EXPLAIN_VALUE_CHARS = _LLM.explain_value_chars
+EXPLAIN_RESULT_CHARS = _LLM.explain_result_chars
 
 # Timeouts for calls to Ollama, in seconds. The ollama client's default is
 # no timeout at all, so a call sent on a connection that was silently
@@ -104,12 +107,124 @@ _RETRYABLE_ERRORS = (
 # Ollama
 # ---------------------------------------------------------------------------
 
+def _ollama_options():
+    """llm.temperature / seed / num_ctx as Ollama request options; unset
+    ones are left out so the model's defaults apply."""
+    options = {"temperature": _LLM.temperature, "seed": _LLM.seed,
+               "num_ctx": _LLM.num_ctx}
+    return {name: value for name, value in options.items() if value is not None}
+
+
+OLLAMA_OPTIONS = _ollama_options()
+
+# A prompt using this share of num_ctx gets a warning: Ollama cuts a
+# prompt that doesn't fit, without an error.
+CONTEXT_WARNING_SHARE = 0.9
+
+# Characters per token, to estimate a prompt's size before it is sent.
+# Measured on qwen3-coder with the Odoo prompts: about 4 (17,100 characters
+# were counted as 12,900 tokens).
+CHARS_PER_TOKEN = 4.0
+
+# When a prompt doesn't fit, llama.cpp keeps only about half the context
+# (the start and the most recent part), so a cut prompt is counted at
+# num_ctx / 2 plus a token or two: 4,098 at 8K, 8,194 at 16K.
+CUT_COUNT_TOLERANCE = 16
+
+# Without num_ctx (Ollama's own context setting is used), a cut is seen
+# when Ollama counts well under what was sent: below this share of the
+# estimate. Uncut prompts count at about the estimate or above (2,589 for
+# ~2,564 sent); a cut one at about half the context (2,050 for ~4,915 at
+# 4K). Prompts estimated under CUT_MIN_ESTIMATE tokens aren't judged.
+CUT_SHARE = 0.6
+CUT_MIN_ESTIMATE = 1000
+
+
+def estimated_tokens(messages):
+    """The approximate token count of the messages, from their length."""
+    chars = sum(len(str(m.get("content", ""))) for m in messages)
+    return round(chars / CHARS_PER_TOKEN)
+
+
+def prompt_was_cut(prompt, num_ctx, estimate):
+    """True when Ollama's count shows it dropped part of the prompt: the
+    count sits at half the context while more than that was sent, or the
+    prompt sent was larger than the whole context. Without num_ctx: the
+    count is well under what was sent (CUT_SHARE)."""
+    if not prompt:
+        return False
+    if not num_ctx:
+        return bool(estimate) and estimate >= CUT_MIN_ESTIMATE \
+            and prompt < CUT_SHARE * estimate
+    at_half = abs(prompt - num_ctx // 2) <= CUT_COUNT_TOLERANCE
+    if at_half and (not estimate or estimate > num_ctx // 2):
+        return True
+    return bool(estimate) and estimate > num_ctx
+
+
+def token_report(response, num_ctx=None, estimate=None):
+    """
+    One line of token counts and times from an Ollama reply, e.g.
+    "6,850 prompt tokens (9.8s), 120 out (3.1s)", plus a warning when the
+    prompt was cut (Ollama counted far fewer tokens than were sent) or
+    used most of num_ctx. None when the reply has no counts. estimate is
+    estimated_tokens() of what was sent.
+    """
+    prompt = getattr(response, "prompt_eval_count", None)
+    output = getattr(response, "eval_count", None)
+    if prompt is None and output is None:
+        return None
+
+    def seconds(name):
+        value = getattr(response, name, None)
+        return f" ({value / 1e9:.1f}s)" if value else ""
+
+    text = (f"{prompt or 0:,} prompt tokens{seconds('prompt_eval_duration')}, "
+            f"{output or 0:,} out{seconds('eval_duration')}")
+    if estimate:
+        text += f"; ~{estimate:,} sent"
+    if prompt_was_cut(prompt, num_ctx, estimate):
+        if num_ctx:
+            text += (f" - WARNING: the prompt was cut to fit the context "
+                     f"(num_ctx {num_ctx:,}); the model didn't see all of it")
+        else:
+            # A cut prompt is counted at about half the context.
+            text += (f" - WARNING: the prompt was cut to fit Ollama's context "
+                     f"(about {prompt * 2:,} tokens, from the Ollama app's "
+                     "setting); the model didn't see all of it. Set num_ctx "
+                     "in llm.yaml, or raise the app's context length")
+    elif num_ctx and prompt and prompt >= CONTEXT_WARNING_SHARE * num_ctx:
+        text += (f" - WARNING: {prompt / num_ctx:.0%} of num_ctx {num_ctx:,}; "
+                 "the prompt may have been cut")
+    return text
+
+
+def prompt_breakdown(prompt, **parts):
+    """
+    "[llm] SQL prompt ~12,800 tokens: schema ~9,100, examples ~1,200,
+    history ~400, rules ~2,100" - where a prompt's size goes, estimated
+    from each part's length. rules is everything else in the prompt.
+    """
+    sizes = {name: round(len(text or "") / CHARS_PER_TOKEN)
+             for name, text in parts.items()}
+    total = round(len(prompt) / CHARS_PER_TOKEN)
+    rest = max(total - sum(sizes.values()), 0)
+    shown = ", ".join(f"{name} ~{size:,}" for name, size in sizes.items())
+    return f"[llm] SQL prompt ~{total:,} tokens: {shown}, rules ~{rest:,}"
+
+
 def ask_ollama(messages):
     try:
-        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages)
+        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
+                                      options=OLLAMA_OPTIONS or None)
     except _RETRYABLE_ERRORS as ex:
         print(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
-        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages)
+        response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
+                                      options=OLLAMA_OPTIONS or None)
+    if _LLM.log_tokens:
+        report = token_report(response, _LLM.num_ctx, estimated_tokens(messages))
+        if report:
+            print(f"[llm] {report}")
     return response.message.content
 
 
@@ -187,6 +302,7 @@ def generate_sql(question, schema, history, allowed_tables=None):
     db = active_database()
     db_names = " (or ".join(f'"{n}"' for n in db.names[:2]) + (")" if len(db.names) > 1 else "")
     db_values = " or ".join(f"'{n}'" for n in db.names)
+    db_name = db.names[0] if db.names else "the database"
 
     engine = active_engine().label
     engine_rules = active_engine().prompt_rules
@@ -218,8 +334,6 @@ IMPORTANT:
 * If the current question does not refer to the conversation at all,
   ignore the conversation context and answer it on its own.
 * {engine} syntax.
-* Only SELECT queries.
-* Do not modify data.
 * If the current message explicitly asks to add, change, delete or
   otherwise modify data or the database (e.g. "delete all customers",
   "update the price", "drop the orders table"), do NOT write a query
@@ -230,15 +344,16 @@ IMPORTANT:
   chat), do NOT write a query. Return exactly this and nothing else:
   {NOT_A_DATA_QUESTION_SENTINEL}
 * If the current message IS a question about the data, but the
-  DATABASE SCHEMA above has no table or column that can answer it
-  (e.g. it asks for a phone number and no phone column is listed),
-  do NOT guess and do NOT use a different column. Return exactly this
-  and nothing else:
+  DATABASE SCHEMA above has no table that could hold the answer, do
+  NOT guess and do NOT use a different table. Return exactly this and
+  nothing else:
   {DATA_NOT_AVAILABLE_SENTINEL}
-  Use it ONLY when no listed table could hold the answer.
+  Use it ONLY when no listed table could hold the answer. A table
+  marked "... more columns, not listed" has other columns too: a
+  column you need may be one of them.
 * If the current message is about the data but too vague to answer
   with one query (it names no record, measure or kind of thing, e.g.
-  "what does Northwind have?", "show me stuff", "what's going on?"),
+  "what does {db_name} have?", "show me stuff", "what's going on?"),
   do NOT guess a table or a filter. Return exactly this and nothing
   else:
   {UNCLEAR_QUESTION_SENTINEL}
@@ -267,24 +382,29 @@ EXAMPLES (message -> correct reply)
   "hello"                            -> {NOT_A_DATA_QUESTION_SENTINEL}
   "thanks!"                          -> {NOT_A_DATA_QUESTION_SENTINEL}
   "what's the weather today?"        -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "what is Nancy's home phone?"      -> {DATA_NOT_AVAILABLE_SENTINEL}
-    (only when no phone column is listed in the schema above)
   "what does North wind have"        -> {UNCLEAR_QUESTION_SENTINEL}
   "show me some data"                -> {UNCLEAR_QUESTION_SENTINEL}
 {sql_examples}Insults, complaints and comments about you are NEVER data questions:
 always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
-* Do not use WITH clauses (CTEs); use joins or subqueries instead.
+* No WITH clauses (CTEs) and no subqueries in FROM or JOIN: they are
+  rejected. Use joins, subqueries in WHERE or SELECT, or conditional
+  aggregation (SUM(CASE WHEN ... THEN ... END)) instead.
 {engine_rules}
-* Return ONLY the SQL statement.
-* Do not return markdown.
-* Do not return JSON.
-* Do not explain the SQL.
-* When the user asks for a person, customer, employee, product, etc.,
-  return identifying information such as the person's name, not just
-  an internal ID, where the relevant table is available.
-* Join to the relevant entity table when necessary to provide the
-  requested identifying information.
+* Reply with the SQL only.
+* Show names, not internal IDs. For every column you SELECT that holds
+  another record's id (partner_id, user_id, product_id, employee_id,
+  company_id, ...), join that record's table and select its name
+  instead, where the table is in the schema. Identify a row by its own
+  name or number (an order's S00023 or P00015), not by its id.
+  e.g. purchase orders awaiting approval:
+       SELECT po.name, p.name AS vendor, po.date_order, po.amount_total
+       not SELECT po.id, po.partner_id, ... - unless the user asks
+       for ids.
 """
+
+    if _LLM.log_tokens:
+        print(prompt_breakdown(system_prompt, schema=schema,
+                               examples=sql_examples, history=history_text))
 
     return clean_sql(ask_ollama([
         {"role": "system", "content": system_prompt},
@@ -316,17 +436,13 @@ TASK
 Correct the SQL query using the actual database schema.
 
 IMPORTANT:
-* Return ONE corrected SELECT statement.
+* Return ONE corrected SELECT statement, and only the SQL.
+* Follow any hint above the TASK; never send back what it says is
+  wrong.
 * Use only columns that exist in the schema.
-* Do not use WITH clauses (CTEs); use joins or subqueries instead.
-* If a KNOWN COLUMN MAPPING is supplied, use its physical column.
-* If JSON COLUMNS are listed, read each one the way its note says and
-  keep any ->> already applied to it.
-* Do not use a mapped column if it is not authorised.
-* Do not modify data.
-* Return ONLY SQL.
-* Do not use markdown.
-* Do not explain the correction.
+* No WITH clauses (CTEs) and no subqueries in FROM or JOIN.
+* If no column in the schema holds what the question asks for, return
+  exactly {DATA_NOT_AVAILABLE_SENTINEL} instead of SQL.
 """
 
     return clean_sql(ask_ollama([
@@ -466,7 +582,31 @@ def looks_like_write_request(question):
     return bool(_WRITE_INTENT.search(question))
 
 
-def explain_results(question, sql, results, withheld=()):
+def _results_for_prompt(results, max_rows, max_value_chars, max_chars):
+    """
+    (text, rows shown): the rows to show the model, one compact JSON
+    object per line with long values cut, adding rows until max_rows or
+    max_chars is reached (always at least one). Indented JSON of a large
+    result could fill the model's context, which then drops the start of
+    the prompt - the question and the row count.
+    """
+    def short(value):
+        if isinstance(value, str) and len(value) > max_value_chars:
+            return value[:max_value_chars - 3] + "..."
+        return value
+
+    lines, used = [], 0
+    for row in results[:max_rows]:
+        line = json.dumps({key: short(value) for key, value in row.items()},
+                          default=str, ensure_ascii=False)
+        if lines and used + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines), len(lines)
+
+
+def explain_results(question, sql, results, withheld=(), row_cap=None):
     """
     Send SQL results back to Ollama and ask for a natural-language answer.
 
@@ -474,9 +614,35 @@ def explain_results(question, sql, results, withheld=()):
     stated in the prompt, rather than left for the model to infer: it
     previously miscounted (reading a supplier_id of 27 as "27 suppliers")
     and described columns from the SQL that weren't in the results.
-    withheld lists result columns removed by the security policy.
+    withheld lists result columns removed by the security policy. At most
+    llm.explain_rows rows (and explain_result_chars characters of them)
+    are shown; the full count is stated twice, before and after them.
+    row_cap is the query's row limit: a result that reached it is
+    reported as "at least" that many.
     """
     row_count = len(results)
+    rows_text, shown = _results_for_prompt(
+        results, EXPLAIN_ROWS, EXPLAIN_VALUE_CHARS, EXPLAIN_RESULT_CHARS)
+    capped = bool(row_cap) and row_count >= row_cap
+
+    if capped:
+        count_text = (f"{row_count} (the row limit: there may be more; say "
+                      f"\"at least {row_count}\")")
+    else:
+        count_text = str(row_count)
+    if shown < row_count:
+        results_label = f"RESULTS (the first {shown} of {row_count} rows, one per line)"
+        # Only when rows were actually left out: stated unconditionally,
+        # the model called complete results "examples" too.
+        shown_rule = (
+            f"* Only {shown} of the {row_count} rows are shown. Give the total\n"
+            "  from ROW COUNT and describe the shown rows as examples; don't\n"
+            "  present them as the full list.\n")
+    else:
+        results_label = "RESULTS (one row per line)"
+        shown_rule = (
+            "* Every row is shown: this is the complete result. Don't call\n"
+            "  the rows examples or suggest there may be more.\n")
 
     columns = []
     for row in results:
@@ -504,7 +670,7 @@ SQL QUERY
 {sql}
 
 ROW COUNT
-{row_count}
+{count_text}
 
 COLUMNS IN THE RESULTS
 {", ".join(columns) if columns else "(no rows)"}
@@ -512,18 +678,20 @@ COLUMNS IN THE RESULTS
 WITHHELD COLUMNS
 {withheld_text}
 
-RESULTS
-{json.dumps(results, default=str, indent=2)}
+{results_label}
+{rows_text or "(no rows)"}
+
+ROW COUNT (again): {count_text}
 
 Rules:
 * ROW COUNT is the exact number of rows. Use it for any count; never
   count rows yourself and never treat an ID value as a count.
-* Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
+{shown_rule}* Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
   name other columns; ignore them.
-* If ROW COUNT is 0, say no matching records were found and suggest
-  checking the spelling of any names or rephrasing the question. Do not
-  say the record does not exist, and do not mention access or
-  permissions.
+* Describe the data in plain business words ("customers", "total
+  sales"). Don't name tables or columns, don't quote SQL, and don't
+  explain how the query works or its LIMIT.
+* Do not mention access or permissions.
 * Explain the result clearly and concisely.
 * Do not invent information that isn't present in the results.
 """
@@ -536,4 +704,4 @@ Rules:
             },
             {"role": "user", "content": prompt},
         ]
-    )
+    )

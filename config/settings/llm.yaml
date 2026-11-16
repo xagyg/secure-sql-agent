@@ -38,6 +38,30 @@ history_sql_turns: 1          # most recent turns that also carry their SQL (0 =
 # the model's own SQL is shown instead, so the correction stays quick.
 correction_sql_chars: 4000
 
+# Explaining a result: at most this many rows are shown to the model (one
+# compact line each), and values longer than explain_value_chars are cut.
+# The exact row count is always stated, so the answer can say "100 rows,
+# for example ..." without miscounting.
+explain_rows: 50
+explain_value_chars: 300
+explain_result_chars: 8000    # ~2,000 tokens of rows; wide rows show fewer
+
+# Ollama options sent with every request (leave one empty to use Ollama's
+# default). temperature 0 and a fixed seed make the same prompt give the
+# same answer, so two batch runs can be compared.
+#
+# num_ctx is the context window in tokens. Set, it takes precedence over
+# the Ollama app's context-length setting; empty, nothing is sent and the
+# app's setting is used. A prompt longer than the context is cut without
+# an error, losing part of the schema and rules - log_tokens warns when
+# Ollama counts far fewer tokens than were sent.
+temperature: 0
+seed: 42
+num_ctx:
+# Print prompt/output token counts and times for each call, with a
+# warning when a prompt was cut or nears num_ctx.
+log_tokens: true
+
 # Sent with every request. Skips ngrok's browser warning page; harmless
 # without ngrok.
 headers:

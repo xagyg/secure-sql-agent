@@ -211,5 +211,41 @@ class Shipped(unittest.TestCase):
         self.assertEqual(profile.repl_roles, {"sales"})
 
 
+
+class Explorer(unittest.TestCase):
+    """The explorer role: every table, only a few sensitive columns hidden."""
+
+    def resolve(self, db, tables):
+        import contextlib, io
+        from sqlagent.controls.security_policy import load_security_policy
+        with contextlib.redirect_stdout(io.StringIO()):
+            policy = load_security_policy(load_database_profile(db).security_file)
+            return policy.resolve_role("explorer", tables)
+
+    def test_northwind(self):
+        tables = {"public.customers", "public.orders", "public.employees", "public.us_states"}
+        visible, hidden = self.resolve("northwind", tables)
+        self.assertEqual(visible, tables)
+        self.assertEqual(hidden["public.employees"], {"home_phone", "birth_date"})
+        self.assertEqual(hidden["public.customers"], set())
+
+    def test_northwind_mssql(self):
+        tables = {"dbo.Customers", "dbo.Employees"}
+        visible, hidden = self.resolve("northwind_mssql", tables)
+        self.assertEqual(visible, tables)
+        self.assertEqual(hidden["dbo.Employees"], {"homephone", "birthdate"})
+
+    def test_adventureworks(self):
+        tables = {"sales.salesorderheader", "sales.creditcard", "person.person",
+                  "person.password", "humanresources.employee",
+                  "humanresources.employeepayhistory", "production.product",
+                  "purchasing.vendor"}
+        visible, hidden = self.resolve("adventureworks", tables)
+        self.assertEqual(visible, tables - {"person.password"})
+        self.assertEqual(hidden["sales.creditcard"], {"cardnumber"})
+        self.assertEqual(hidden["sales.salesorderheader"], {"creditcardapprovalcode"})
+        self.assertEqual(hidden["humanresources.employee"], {"nationalidnumber"})
+        self.assertEqual(hidden["humanresources.employeepayhistory"], set())
+
 if __name__ == "__main__":
     unittest.main()

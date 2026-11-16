@@ -96,6 +96,13 @@ class Engine:
         """The bare column name from a "no such column" error, or None."""
         raise NotImplementedError
 
+    def missing_column_message(self, column, qualifier=None):
+        """A "no such column" error in this engine's own words, for a
+        column the agent found missing before running the query
+        (sql_diagnostics.find_unknown_column). missing_column() reads it
+        back, so the correction step treats it like the database's own."""
+        raise NotImplementedError
+
     def sanitize_error(self, error_text):
         """The error with any schema detail removed."""
         raise NotImplementedError

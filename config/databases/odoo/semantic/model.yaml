@@ -33,7 +33,8 @@
 #     A contact person's parent_id is its company; commercial_partner_id
 #     is the top-level company. customer_rank / supplier_rank only rise
 #     when invoices / bills are posted, so they are often 0 - a customer is
-#     a partner with a confirmed sales order (see the customer term). A user (res_users) has its
+#     any active top-level partner that isn't one of our own companies
+#     (see the customer term). A user (res_users) has its
 #     name on its partner (partner_id).
 #   - Invoices, bills, credit notes and journal entries are all
 #     account_move, told apart by move_type.
@@ -130,7 +131,10 @@ tables:
               account, buyer, address_book]
     description: >-
       Every customer, vendor, company and contact person. is_company
-      separates companies from people. A contact person points UP to its
+      separates companies from people, but a customer or vendor can be a
+      person (is_company = false, e.g. Joel Willis): never filter on
+      is_company to find customers or vendors - use the customer and
+      vendor terms. A contact person points UP to its
       company: the contacts at a company are the partners whose parent_id
       is the company's id (child.parent_id = company.id), never the
       company's own parent_id. commercial_partner_id is the top-level
@@ -145,18 +149,19 @@ tables:
     columns:
       name:          {aliases: [customer_name, vendor_name, company_name]}
       complete_name: {label: full name, description: "Company, Contact name"}
-      is_company:    {label: is company}
+      is_company:    {label: is company, description: "true for a company, false for a person; customers can be either, so don't use it to find customers"}
       parent_id:     {label: parent company, aliases: [employer, organisation], description: "on a contact person, the company they work for"}
       commercial_partner_id: {label: commercial entity, aliases: [top_level_company], description: "the company a partner belongs to (itself for a company); group company totals on this"}
-      customer_rank: {label: customer rank, description: "only increased when customer invoices are posted - often 0 for real customers; don't filter on it"}
+      customer_rank: {label: customer rank, description: "increased when customer invoices are posted - often 0 for real customers; don't use it to find customers, use the customer term"}
       supplier_rank: {label: supplier rank, description: "only increased when vendor bills are posted - often 0 for real vendors; don't filter on it"}
       user_id:       {label: salesperson, aliases: [account_manager, sales_rep]}
       buyer_id:      {label: purchasing representative, aliases: [buyer, purchaser]}
       function:      {label: job position, aliases: [job_title, position]}
       vat:           {label: tax id, aliases: [abn, vat_number, tax_number]}
       zip:           {aliases: [postcode, postal_code, zip_code]}
-      state_id:      {label: state}
-      country_id:    {label: country}
+      city:          {aliases: [town, suburb], description: "plain text, e.g. city = 'Brisbane' or city ILIKE '%brisbane%'; a city is never a state"}
+      state_id:      {label: state, aliases: [province, region], description: "the state or province (res_country_state, e.g. Queensland, code QLD) - never a city: a city is res_partner.city"}
+      country_id:    {label: country, description: "show the country's name, not this id: join res_country and select res_country.name->>'en_US' AS country (or code = 'AU' to filter)"}
       industry_id:   {label: industry, aliases: [sector]}
       ref:           {label: reference, aliases: [customer_code, account_number]}
       type:          {label: address type, description: "contact, invoice, delivery, other"}
@@ -185,6 +190,14 @@ tables:
     description: >-
       The companies this Odoo database runs (multi-company). Almost every
       business table has company_id. partner_id holds the company's address.
+      FINANCIAL YEAR: fiscalyear_last_month (text '1'-'12') and
+      fiscalyear_last_day are the year-end. "This financial year" runs from
+      the day after the most recent year-end, NOT from 1 January unless
+      the year-end month is '12' (in Australia it is 30 June, so the year
+      runs 1 July - 30 June).
+    columns:
+      fiscalyear_last_month: {label: financial year end month, aliases: [fiscal_year_end, fy_end, year_end_month]}
+      fiscalyear_last_day:   {label: financial year end day}
 
   res_users:
     label: user
@@ -314,7 +327,10 @@ tables:
       Quotations and sales orders. state: draft = quotation, sent =
       quotation sent, sale = confirmed sales order, cancel = cancelled.
       Revenue questions count state = 'sale' only. amount_untaxed is
-      before GST, amount_total includes it. margin is revenue less cost.
+      ex-GST, amount_tax the GST, amount_total GST-inclusive. Sales,
+      revenue, sales value and order value mean amount_total
+      (GST-inclusive) unless the question says ex-GST, net, untaxed or
+      before tax: then amount_untaxed. margin is revenue less cost.
       This version has no sales analysis view: sum sale_order_line.
     columns:
       name:            {label: order number, aliases: [order_no, so_number, reference]}
@@ -322,13 +338,14 @@ tables:
       partner_id:      {label: customer, aliases: [client]}
       user_id:         {label: salesperson, aliases: [sales_rep, account_manager]}
       team_id:         {label: sales team}
-      amount_untaxed:  {label: untaxed amount, aliases: [net, subtotal, revenue]}
-      amount_total:    {label: total, aliases: [order_value, gross]}
+      amount_untaxed:  {label: subtotal before taxes (ex-GST), aliases: [net, subtotal, untaxed, ex_gst]}
+      amount_tax:      {label: tax amount (GST), aliases: [gst, tax]}
+      amount_total:    {label: total including taxes (GST-inclusive), aliases: [revenue, sales, sales_value, order_value, gross, inc_gst]}
       amount_unpaid:   {label: amount unpaid, aliases: [balance_owing]}
       margin:          {aliases: [gross_profit, profit]}
       invoice_status:
         label: invoice status
-        description: "upselling, invoiced, to invoice, no = nothing to invoice"
+        description: "to invoice = confirmed, waiting to be invoiced; invoiced = fully invoiced; upselling; no = nothing to invoice. Use this for 'not invoiced' questions, not account_move"
       delivery_status:
         label: delivery status
         description: "pending, started, partial, full; null for services"
@@ -341,7 +358,7 @@ tables:
     aliases: [order_line, line_item, sale_line]
     description: >-
       Lines of a sales order (order_id). price_subtotal is the line before
-      GST, price_total after. display_type is not null for section and
+      GST, price_total after; line sales and revenue mean price_total. display_type is not null for section and
       note lines, which carry no product - exclude them when summing.
       salesman_id is the order's salesperson, order_partner_id its
       customer. margin = price_subtotal - purchase_price * quantity.
@@ -351,8 +368,8 @@ tables:
       qty_invoiced:    {label: invoiced quantity, aliases: [billed_qty]}
       price_unit:      {label: unit price}
       discount:        {description: percent}
-      price_subtotal:  {label: subtotal, aliases: [line_total, revenue, net]}
-      price_total:     {label: total including tax}
+      price_subtotal:  {label: subtotal before taxes (ex-GST), aliases: [net, untaxed, ex_gst]}
+      price_total:     {label: total including taxes (GST-inclusive), aliases: [line_total, revenue, sales, gross, inc_gst]}
       purchase_price:  {label: cost, aliases: [unit_cost]}
       margin:          {aliases: [gross_profit, profit]}
       salesman_id:     {label: salesperson}
@@ -414,18 +431,25 @@ tables:
       RFQs and purchase orders. state: draft = RFQ, sent = RFQ sent,
       to approve, purchase = confirmed PO, cancel. locked = true once
       closed. Spend questions count state = 'purchase'. receipt_status:
-      pending, partial, full.
+      pending, partial, full. Spend, purchases and purchase value mean
+      amount_total (GST-inclusive) unless the question says ex-GST, net,
+      untaxed or before tax: then amount_untaxed. There is no
+      scheduled_date or effective_date here: date_planned is the expected
+      arrival. When goods actually arrived is stock_picking.date_done (the
+      receipt's origin = purchase_order.name). Late receipts, on-time rates
+      and delivery times per vendor: use vendor_delay_report.
     columns:
       name:           {label: po number, aliases: [po_no, reference]}
       partner_id:     {label: vendor, aliases: [supplier]}
       partner_ref:    {label: vendor reference, aliases: [supplier_quote]}
       date_order:     {label: order deadline}
       date_approve:   {label: confirmation date, aliases: [approved_date]}
-      date_planned:   {label: expected arrival, aliases: [eta, receipt_date]}
+      date_planned:   {label: expected arrival, aliases: [eta, receipt_date, expected_date]}
       date_promised:  {label: promised date}
       user_id:        {label: buyer, aliases: [purchaser, purchasing_officer]}
-      amount_untaxed: {label: untaxed amount, aliases: [spend, net]}
-      amount_total:   {label: total}
+      amount_untaxed: {label: subtotal before taxes (ex-GST), aliases: [net, untaxed, ex_gst]}
+      amount_tax:     {label: tax amount (GST), aliases: [gst, tax]}
+      amount_total:   {label: total including taxes (GST-inclusive), aliases: [spend, purchases, purchase_value, gross, inc_gst]}
       receipt_status: {label: receipt status}
       invoice_status: {label: billing status, description: "no, to invoice, invoiced"}
 
@@ -438,7 +462,8 @@ tables:
       qty_received:   {label: received quantity}
       qty_invoiced:   {label: billed quantity}
       price_unit:     {label: unit price, aliases: [cost]}
-      price_subtotal: {label: subtotal, aliases: [line_total, spend]}
+      price_subtotal: {label: subtotal before taxes (ex-GST), aliases: [net, untaxed, ex_gst]}
+      price_total:    {label: total including taxes (GST-inclusive), aliases: [line_total, spend, gross, inc_gst]}
 
   vendor_delay_report:
     label: vendor on-time delivery
@@ -484,6 +509,12 @@ tables:
       stock_picking_type.code (incoming, outgoing, internal). state:
       draft, waiting, confirmed, assigned = ready, done, cancel. sale_id is
       the sales order a delivery is for; origin is the source document.
+      There is NO purchase_id: a receipt's purchase order is found through
+      its moves (stock_move.picking_id = stock_picking.id, then
+      stock_move.purchase_line_id -> purchase_order_line.order_id), or
+      origin = purchase_order.name. Supplier delivery time for a receipt:
+      date_done - purchase_order.date_approve; for on-time delivery use
+      vendor_delay_report.
     columns:
       scheduled_date: {label: scheduled date, aliases: [planned_date]}
       date_deadline:  {label: deadline}
@@ -507,7 +538,9 @@ tables:
       A product movement from location_id to location_dest_id, usually
       part of a transfer (picking_id). Done moves (state = 'done') are
       the stock history. sale_line_id / purchase_line_id / production_id
-      link it to its order. value is its stock valuation.
+      link it to its order. value is its stock valuation. state: draft,
+      waiting, confirmed, partially_available, assigned, done, cancel
+      (there is no 'partial'; quantity is what has been moved so far).
     columns:
       product_uom_qty: {label: demand, aliases: [planned_qty]}
       quantity:        {aliases: [done_qty, moved_qty]}
@@ -552,7 +585,11 @@ tables:
       posted, cancel - only posted counts. amount_total is in the
       document currency; amount_total_signed is in AUD and negative for
       refunds. amount_residual is what is still owed. This version has no
-      invoice analysis view: sum account_move or account_move_line.
+      invoice analysis view: sum account_move or account_move_line. There
+      is no sale_id, sale_order_id or purchase_id: invoice_origin holds the
+      source order number(s) as text; whether an order has been invoiced
+      is sale_order.invoice_status. A customer never invoiced has no
+      posted out_invoice with commercial_partner_id = the customer.
     columns:
       name:                {label: number, aliases: [invoice_number, bill_number]}
       ref:                 {label: reference, aliases: [vendor_reference]}
@@ -562,9 +599,9 @@ tables:
       invoice_date_due:    {label: due date, aliases: [payment_due]}
       partner_id:          {label: partner, aliases: [customer, vendor]}
       invoice_user_id:     {label: salesperson}
-      amount_untaxed:      {label: untaxed amount, aliases: [net]}
-      amount_tax:          {label: tax, aliases: [gst]}
-      amount_total:        {label: total}
+      amount_untaxed:      {label: subtotal before taxes (ex-GST), aliases: [net, ex_gst]}
+      amount_tax:          {label: tax amount (GST), aliases: [gst]}
+      amount_total:        {label: total including taxes (GST-inclusive), aliases: [gross, inc_gst]}
       amount_residual:     {label: amount due, aliases: [outstanding, balance_due, owing, unpaid_amount]}
       payment_state:
         label: payment status
@@ -579,7 +616,13 @@ tables:
       display_type: product = invoice line, tax, payment_term (the
       receivable / payable line), cogs, rounding; line_section and
       line_note carry no amount. For the general ledger use lines whose
-      entry is posted (parent_state = 'posted').
+      entry is posted (parent_state = 'posted'). Income accounts carry
+      credits, so their balance is negative: income = -SUM(balance);
+      expenses are positive. There is no sale_line_ids, sale_order_id or
+      purchase_line_id column here: to tell whether an order was invoiced
+      use sale_order.invoice_status, and to find invoices for a customer
+      use account_move (move_type = 'out_invoice', state = 'posted',
+      commercial_partner_id = the customer).
     columns:
       account_id:     {label: account, aliases: [gl_account]}
       price_subtotal: {label: subtotal, aliases: [line_total]}
@@ -599,7 +642,7 @@ tables:
       liability_current, equity, equity_unaffected and others.
     columns:
       code_store: {label: account code, aliases: [code, account_number], description: "JSONB by company: use code_store->>'1' (company 1's account code), never code_store = value"}
-      account_type: {label: account type}
+      account_type: {label: account type, description: "one of asset_receivable, asset_cash, asset_current, asset_non_current, asset_prepayments, asset_fixed, liability_payable, liability_credit_card, liability_current, liability_non_current, equity, equity_unaffected, income, income_other, expense, expense_depreciation, expense_direct_cost, off_balance - use only these values; operating expenses are expense (plus expense_depreciation), cost of sales is expense_direct_cost"}
       name: {description: "JSONB by language: use name->>'en_US' (e.g. name->>'en_US' ILIKE '%chair%'), never name = 'text'"}
       description: {description: "JSONB by language: use description->>'en_US', never description = 'text'"}
 
@@ -648,7 +691,11 @@ tables:
 
   account_analytic_line:
     label: analytic line
-    aliases: [cost_allocation, timesheet_cost]
+    aliases: [cost_allocation]
+    description: >-
+      Analytic (cost-centre) amounts from invoices and bills. NOT
+      timesheets: the timesheet app isn't installed, so there is no
+      project_id, task_id or employee_id here and no hours worked.
 
   # -- HR --------------------------------------------------------------------
 
@@ -660,10 +707,12 @@ tables:
       user_id the Odoo user (if any). active = false is archived
       (departed). Job title, job position and department are NOT here in
       Odoo 19: join hr_version v ON v.id = hr_employee.current_version_id.
+      Personal and contract details (country_id, sex, marital, children,
+      private address, contract dates) are on hr_version too.
     columns:
       parent_id:  {label: manager, aliases: [supervisor, reports_to, boss]}
       coach_id:   {label: coach, aliases: [mentor]}
-      work_email: {label: work email, aliases: [email]}
+      work_email: {label: work email, aliases: [email, company_email, work_email_address]}
       work_phone: {label: work phone, aliases: [phone, extension]}
       mobile_phone: {label: work mobile}
       first_contract_date: {label: start date, aliases: [hire_date, joined, join_date, date_joined, joining_date, start_date, date_start, employment_start, commencement_date, date_contract_start, first_contract], description: "the date the employee joined - the ONLY joining / start date on hr_employee (there is no date_joined, hire_date or date_start column)"}
@@ -684,7 +733,7 @@ tables:
       employee_type_id: {label: employee type}
       work_location_id: {label: work location, aliases: [office, site]}
       contract_date_start: {label: contract start, aliases: [date_contract_start, contract_start_date], description: "start of this contract / version; for when someone joined use hr_employee.first_contract_date"}
-      contract_date_end:   {label: contract end, aliases: [end_date, finish_date]}
+      contract_date_end:   {label: contract end, aliases: [end_date, finish_date, contract_end_date, contract_end]}
 
   hr_department:
     label: department
@@ -803,10 +852,20 @@ tables:
       stage_id is the column on the project's board (project_task_type).
       Assignees are in project_task_user_rel (task_id, user_id). state:
       01_in_progress, 02_changes_requested, 03_approved, 04_waiting_normal,
-      1_done, 1_canceled.
+      1_done, 1_canceled. Hours WORKED are not recorded in this database
+      (the timesheet app isn't installed): there is no hours,
+      effective_hours, planned_hours or remaining_hours column, here or on
+      project_project. allocated_hours is the planned estimate only; a
+      project's planned hours are SUM(allocated_hours) of its tasks.
+      date_assign is when the task was first assigned, date_end when it
+      was closed, date_last_stage_update its last stage change.
     columns:
       date_deadline: {label: deadline, aliases: [due_date]}
-      allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours]}
+      allocated_hours: {label: allocated hours, aliases: [estimate, budget_hours, planned_hours, estimated_hours], description: "the planned estimate only; hours actually worked need timesheets, which aren't installed - a question comparing them (over budget, exceeded, actual vs estimated) can't be answered: reply DATA_NOT_AVAILABLE"}
+      working_hours_open:  {label: working hours to assign, description: "elapsed working time from creation until assigned - not hours worked"}
+      working_hours_close: {label: working hours to close, description: "elapsed working time from creation until closed - not hours worked; never use it as actual or spent hours"}
+      date_end:        {label: closed date, aliases: [date_done, completed_date, completion_date]}
+      date_assign:     {label: assigned date}
 
   project_task_type:
     label: task stage
@@ -855,6 +914,19 @@ relationships:
 # ---------------------------------------------------------------------------
 # Terms: words that pick ROWS.
 # ---------------------------------------------------------------------------
+# Things this database doesn't record. A question naming one is answered
+# "not available" before any SQL is written - the model kept answering
+# timesheet questions from columns that only look similar
+# (working_hours_close, report_project_task_user). Each phrase matches when
+# all its words are in the question.
+not_recorded:
+  timesheets:
+    aliases: [timesheet, billable hours, hours worked, worked hours,
+              logged hours, hours logged, hours recorded, time spent,
+              spent hours, actual hours, exceeded allocated hours,
+              over allocated hours]
+    description: the timesheet app isn't installed, so hours worked aren't recorded
+
 terms:
   confirmed_sale:
     table: sale_order
@@ -880,24 +952,28 @@ terms:
     aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
     description: confirmed but not fully delivered
 
-  # Orders may be addressed to a contact person, so a partner is a
-  # customer when any partner under it (commercial_partner_id) has a
-  # confirmed order. Our own companies (res_company.partner_id, e.g. "AU
-  # Company") are never customers or vendors.
+  # A customer is any active top-level partner - a company, or a person
+  # who isn't a contact at a company (commercial_partner_id = itself) -
+  # whether or not they have ordered yet. Contact people aren't listed
+  # separately from their company. Our own companies
+  # (res_company.partner_id, e.g. "AU Company") are never customers or
+  # vendors. This includes vendors and prospects: Odoo has no reliable
+  # "is a customer" flag (customer_rank is often 0).
   customer:
     table: res_partner
     predicate: >-
-      EXISTS (SELECT 1 FROM sale_order so
-              JOIN res_partner op ON op.id = so.partner_id
-              WHERE op.commercial_partner_id = res_partner.id
-                AND so.state = 'sale')
+      res_partner.commercial_partner_id = res_partner.id
+      AND res_partner.active
       AND NOT EXISTS (SELECT 1 FROM res_company rc
                       WHERE rc.partner_id = res_partner.id)
     aliases: [client]
     description: >-
-      a partner with a confirmed sales order, not one of our own companies
-      (customer_rank is often 0, so don't use it). Only needed to LIST
-      customers - to look one up by name, filter on the name alone
+      any active top-level partner (a company, or a person who isn't a
+      contact at a company), not one of our own companies - whether or not
+      they have ordered. Only needed to LIST customers - to look one up by
+      name, filter on the name alone. Customers who have ordered: add
+      EXISTS a confirmed sale_order (state = 'sale') whose partner's
+      commercial_partner_id is the customer
 
   vendor:
     table: res_partner

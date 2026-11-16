@@ -1,0 +1,46 @@
+# Questions that failed or returned 0 rows in the 03:09 odoo-full run
+# (numbers are their place in odoo-full.txt). Each is its own conversation.
+
+2. Find customers located in Australia.
+---
+3. Which customers are based in Brisbane?
+---
+7. Find customers whose email addresses are missing.
+---
+17. Show me orders that contain more than five different products.
+---
+19. Which customers have cancelled the most orders?
+---
+27. Which products are below their reorder thresholds?
+---
+37. Which products do we purchase from each supplier?
+---
+40. Which purchase orders were received late?
+---
+43. Which customer invoices are overdue by more than 30 days?
+---
+47. What are our largest operating expenses?
+---
+48. Show me invoices that have been partially paid.
+---
+56. List employees who do not have a company email address.
+---
+58. Which employees report to a particular manager?
+---
+64. Which employees have recorded the most billable hours?
+---
+66. Which projects have exceeded their allocated hours?
+---
+68. Show me projects with no timesheets recorded.
+---
+71. Which customers have purchased products that are currently out of stock?
+---
+73. Which salespeople have generated the most revenue from customers in Australia?
+---
+76. Show me customers whose purchases have increased by more than 20% compared with last year.
+---
+77. Which customers have placed orders but have never been invoiced?
+---
+80. Find customers who have not purchased anything in the last six months but previously accounted for more than $50,000 in annual sales.
+---
+86. Show me everything about customer ABC.

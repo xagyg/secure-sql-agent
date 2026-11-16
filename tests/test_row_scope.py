@@ -616,7 +616,7 @@ class Shipped(unittest.TestCase):
                                             read_hierarchy=lambda *_: [(2, None), (1, 2), (5, 2), (6, 5), (7, 5), (9, 5)],
                                             read_foreign_keys=lambda db=db: northwind_keys(db),
                                             log=False)
-                    if name == "andrew":
+                    if name in ("andrew", "explorer"):   # all rows
                         self.assertEqual(ctx.row_filters, {})
                     else:
                         self.assertIn(orders, ctx.row_filters)

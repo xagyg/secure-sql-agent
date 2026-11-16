@@ -88,6 +88,14 @@ class ShippedOdooExamples(unittest.TestCase):
         self.assertNotIn("list our customers in Australia", asked)
         self.assertNotIn("which products are currently out of stock?", asked)
 
+    def test_no_example_uses_with(self):
+        # The SQL prompt forbids CTEs and the policy rejects them (a CTE's
+        # name reads as an unknown table), so an example must not teach one.
+        for name in ("odoo", "northwind", "adventureworks"):
+            for e in load_database_profile(name).sql_examples:
+                with self.subTest(database=name, question=e.question):
+                    self.assertNotRegex(e.sql.upper(), r"^\s*WITH\b")
+
     def test_every_example_parses(self):
         profile = load_database_profile("odoo")
         for e in profile.sql_examples:

@@ -229,6 +229,26 @@ roles:
       sales.salesorderheader: [creditcardid, creditcardapprovalcode]
       person.person: [additionalcontactinfo, demographics]
 
+  # Broad, exploratory access for trying the agent across the whole
+  # database: every table and view in the five AdventureWorks schemas
+  # (wildcards, so a table added later is visible after a restart), with
+  # only secrets and identity numbers kept out. Pay, leave and sales
+  # figures stay visible. Not for the public demo.
+  explorer:
+    description: Explorer - all of AdventureWorks except passwords, card numbers and national IDs
+    allow:
+      - humanresources.*
+      - person.*
+      - production.*
+      - purchasing.*
+      - sales.*
+    deny:
+      - person.password                  # password hashes and salts only
+    deny_columns:
+      sales.creditcard: [cardnumber]
+      sales.salesorderheader: [creditcardapprovalcode]
+      humanresources.employee: [nationalidnumber]
+
 # Identity-provider group -> roles. Who is in each group comes from
 # sign-in. DEMO ONLY: for local testing, config/idp/adventureworks.yaml
 # stands in for it.
@@ -238,4 +258,5 @@ group_roles:
   AW-Production: [production]
   AW-HR: [hr]
   AW-Finance: [finance]
+  AW-Explorer: [explorer]
   Public-Demo: [demo]

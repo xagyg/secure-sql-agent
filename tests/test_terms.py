@@ -101,7 +101,7 @@ class ExistsPredicates(unittest.TestCase):
 
 
 ODOO_TABLES = {
-    "public.res_partner": ["id", "name", "commercial_partner_id", "is_company"],
+    "public.res_partner": ["id", "name", "commercial_partner_id", "is_company", "customer_rank", "active"],
     "public.res_company": ["id", "partner_id"],
     "public.sale_order": ["id", "partner_id", "state"],
     "public.purchase_order": ["id", "partner_id", "state"],
@@ -133,6 +133,18 @@ class ShippedOdooTerms(unittest.TestCase):
                     if t["name"] == "customer")
         self.assertIn("NOT EXISTS(SELECT 1 FROM res_company", term["definition"])
         self.assertIn("commercial_partner_id", term["definition"])
+
+    def test_customer_needs_no_order(self):
+        # Any active top-level partner is a customer, ordered or not;
+        # contact people aren't listed separately, and no order, invoice
+        # or rank is required.
+        catalog = odoo_catalog()
+        term = next(t for t in catalog.tables["public.res_partner"]["terms"]
+                    if t["name"] == "customer")
+        self.assertIn("commercial_partner_id = res_partner.id", term["definition"])
+        self.assertIn("res_partner.active", term["definition"])
+        for required in ("sale_order", "customer_rank", "account_move"):
+            self.assertNotIn(required, term["definition"])
 
     def test_role_without_purchasing_gets_no_vendor_term(self):
         catalog = odoo_catalog(hide={"purchase_order"})

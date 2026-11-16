@@ -36,6 +36,8 @@ domains:
       - sales.vsalespersonsalesbyfiscalyearsdata
       - production.product
       - person.person
+      - person.businessentityaddress
+      - person.address
     roles: {sales: 1.0, sales_rep: 1.0, sales_manager: 1.0, finance: 0.4}
     where: [sales_order_entry, order_entry, sales_workbench, customer_enquiry,
             customer_maintenance, store_maintenance, territory_review]

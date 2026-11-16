@@ -9,6 +9,7 @@
 #     python -m unittest tests.test_result_policy -v
 
 import unittest
+from unittest import mock
 
 from sqlagent.controls.question_policy import follow_up_asks_restricted
 from sqlagent.controls.result_policy import apply_result_policy
@@ -79,6 +80,28 @@ class ResultPolicyTests(unittest.TestCase):
 
     def test_empty_rows(self):
         self.assertEqual(apply_result_policy([], SECURITY, {}), ([], []))
+
+
+class BinaryValues(unittest.TestCase):
+    """bytea photos and files: shown as a label, counted at real size."""
+
+    def test_replaced_with_a_label(self):
+        rows = [{"name": "Nancy", "photo": memoryview(b"x" * 10240)},
+                {"name": "Andrew", "photo": b"y" * 500}]
+        out, _ = apply_result_policy(rows, SECURITY, {})
+        self.assertEqual(out[0]["photo"], "(binary, 10.0 KB)")
+        self.assertEqual(out[1]["photo"], "(binary, 500 bytes)")
+        self.assertEqual(out[0]["name"], "Nancy")
+
+    def test_counted_at_real_size(self):
+        # Each row's photo is 2 MB: as text it looked like 35 characters,
+        # so the byte cap never noticed. Now only what fits is returned.
+        from sqlagent.controls import result_policy
+        rows = [{"photo": bytes(2 * 1024 * 1024)} for _ in range(5)]
+        with mock.patch.object(result_policy, "MAX_RESULT_BYTES", 5 * 1024 * 1024):
+            out, _ = result_policy.apply_result_policy(rows, SECURITY, {})
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["photo"], "(binary, 2.0 MB)")
 
 
 class FollowUpRestricted(unittest.TestCase):

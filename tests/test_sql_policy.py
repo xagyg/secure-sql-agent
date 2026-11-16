@@ -86,6 +86,39 @@ class PrepareSql(unittest.TestCase):
 
 
 
+class RowLimit(unittest.TestCase):
+    """A limit above max_rows is lowered to it; a smaller one is kept."""
+
+    def limited(self, sql, dialect="postgres"):
+        import sqlglot
+        tree = sqlglot.parse_one(sql, read=dialect)
+        sql_policy.apply_query_limits_tree(tree)
+        return tree.sql(dialect=dialect)
+
+    def test_no_limit_gets_max_rows(self):
+        self.assertIn(f"LIMIT {MAX_ROWS}", self.limited("SELECT a FROM t"))
+
+    def test_larger_limit_is_lowered(self):
+        sql = self.limited(f"SELECT a FROM t LIMIT {MAX_ROWS * 10}")
+        self.assertIn(f"LIMIT {MAX_ROWS}", sql)
+        self.assertNotIn(str(MAX_ROWS * 10), sql)
+
+    def test_smaller_limit_is_kept(self):
+        self.assertIn("LIMIT 10", self.limited("SELECT a FROM t LIMIT 10"))
+
+    def test_offset_is_kept(self):
+        sql = self.limited(f"SELECT a FROM t LIMIT {MAX_ROWS * 10} OFFSET 5")
+        self.assertIn(f"LIMIT {MAX_ROWS}", sql)
+        self.assertIn("OFFSET 5", sql)
+
+    def test_sql_server_top_and_fetch(self):
+        top = self.limited(f"SELECT TOP {MAX_ROWS * 10} a FROM t", "tsql")
+        self.assertIn(f"TOP {MAX_ROWS}", top)
+        fetch = self.limited(f"SELECT a FROM t ORDER BY a OFFSET 0 ROWS "
+                             f"FETCH NEXT {MAX_ROWS * 10} ROWS ONLY", "tsql")
+        self.assertIn(f"FETCH NEXT {MAX_ROWS} ROWS ONLY", fetch)
+
+
 class SelectStarSources(unittest.TestCase):
     """SELECT * expands to the columns of the tables the SELECT reads
     directly (FROM and JOINs), never those of tables in its subqueries."""

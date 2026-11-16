@@ -84,6 +84,8 @@ def make_catalog(exclude=(), semantic=None, extra_tables=None):
             "name": name,
             "columns": [{"name": c, "type": "text", "nullable": True} for c in cols],
         }
+    catalog.database_table_names = set(NORTHWIND) | {
+        full_name.split(".", 1)[1] for full_name in extra_tables or {}}
     catalog._attach_semantics()
     catalog.foreign_keys = catalog._build_relationships([
         {"from_table": f"public.{a}", "from_columns": (b,),

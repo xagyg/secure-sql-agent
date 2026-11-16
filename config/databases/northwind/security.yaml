@@ -82,6 +82,17 @@ roles:
     description: Sales manager - rows limited by the grant's scope
     scope: required
 
+  # Broad, exploratory access for trying the agent across the whole
+  # database: every table in public (a wildcard, so a table added later is
+  # visible after a restart - see the rules above), with only personal
+  # details hidden. Not for the public demo.
+  explorer:
+    description: Explorer - every Northwind table; only personal phone numbers and birth dates hidden
+    allow:
+      - public.*
+    deny_columns:
+      public.employees: [home_phone, birth_date]
+
   # Example of wildcards on an ERP schema (not used by the demo):
   #
   # hr_analyst:
@@ -95,6 +106,7 @@ roles:
 # turns them into roles.
 group_roles:
   Northwind-Sales: [sales]
+  Northwind-Explorer: [explorer]
   Public-Demo: [demo]
 
 # ---------------------------------------------------------------------------

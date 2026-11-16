@@ -119,6 +119,26 @@ class LlmSettings(_Strict):
     # the model's own, shorter SQL is shown instead, so one long rewrite
     # can't push the correction past the read timeout.
     correction_sql_chars: int = Field(4000, ge=500)
+    # Rows shown to the model when it explains a result, and the longest
+    # value shown. The full row count is always stated. 100 rows x 16
+    # columns of indented JSON (~12,500 tokens) once crowded the question
+    # and the row count out of the prompt.
+    explain_rows: int = Field(50, ge=1, le=1000)
+    explain_value_chars: int = Field(300, ge=20)
+    # ... and the most characters of rows (~4 characters a token); rows
+    # are added until either limit is reached, always at least one.
+    explain_result_chars: int = Field(8000, ge=500)
+    # Sent to Ollama with every request (its "options"); None leaves the
+    # model's own default. temperature 0 and a fixed seed make the same
+    # prompt give the same SQL, so two runs can be compared. num_ctx is
+    # the context window in tokens and takes precedence over the Ollama
+    # app's setting (used only when this is None); a longer prompt is
+    # cut without an error, so set it here.
+    temperature: float | None = Field(None, ge=0, le=2)
+    seed: int | None = None
+    num_ctx: int | None = Field(None, ge=512, le=1_048_576)
+    # Print each call's token counts and times ([llm] lines).
+    log_tokens: bool = True
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
@@ -189,6 +209,10 @@ class QuerySettings(_Strict):
     # Most values one row-scope dimension may resolve to for one user
     # (security_policy.py). Above it the user's context isn't built.
     max_scope_values: int = Field(1000, ge=1, le=10_000)
+    # Check every column the SQL names against the role's catalog before
+    # running it; a column that isn't there goes straight to correction
+    # (sql_diagnostics.find_unknown_columns).
+    check_columns: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +282,31 @@ class RelationshipWalk(_Strict):
     named_outside_domain: Literal["walk", "add", "note"] = "add"
 
 
+class SchemaText(_Strict):
+    # How the schema is written into the SQL prompt. Every line is sent on
+    # every question, so it decides most of the prompt's size.
+    # Supporting tables - every table the question doesn't name (by table
+    # name, label, alias or term): those reached through a relationship
+    # and those matched only on a column word - with more columns than
+    # this show only the columns
+    # that matter: keys used by the shown relationships, columns with a
+    # label/description/alias, columns a term uses, columns the question
+    # names, and name/code/state/active. 0 shows every column.
+    supporting_table_columns: int = Field(10, ge=0)
+    # Short type names ("varchar", "timestamp") instead of PostgreSQL's
+    # long ones ("character varying", "timestamp without time zone").
+    compact_types: bool = True
+    # NULL / NOT NULL after each column. Rarely matters for a query and
+    # costs a few tokens on every line.
+    show_nullability: bool = False
+
+
 class RetrievalSettings(_Strict):
     domains: DomainRouting = Field(default_factory=DomainRouting)
     table_match: TableMatch = Field(default_factory=TableMatch)
     typo_correction: TypoCorrection = Field(default_factory=TypoCorrection)
     relationships: RelationshipWalk = Field(default_factory=RelationshipWalk)
+    schema_text: SchemaText = Field(default_factory=SchemaText)
 
 
 # ---------------------------------------------------------------------------

@@ -20,11 +20,11 @@ Question
   → Structural safety     single statement, read-only SELECT, no nested writes (AST-based, via sqlglot)
   → Authorisation         every table and column checked against the SecurityContext
   → Rewrite               SELECT * expanded to authorised columns; restricted columns stripped
-  → Query limit           LIMIT added if missing (max 1,000 rows)
+  → Query limit           LIMIT added if missing, or lowered (max_rows: 100 as shipped)
   → Re-validation
-  → PostgreSQL            read-only role, read-only transaction, statement timeout
+  → Database              read-only login; PostgreSQL: read-only transaction; statement timeout
   → Result policy         restricted columns removed again, row and byte caps
-  → Ollama (explain results)
+  → Ollama (explain results; a fixed answer for 0 rows)
   → Answer
 ```
 
@@ -46,7 +46,7 @@ Each layer, and the file that implements it:
 | Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
 | Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
 | Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
-| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps at 1,000 rows / 5 MB                                                                                                   |
+| Result policy        | `controls/result_policy.py`              | Strips denied columns from results; caps rows and bytes (100 / 1 MB as shipped)                                                                                                  |
 | Public API           | `api.py`                                 | Rate limits, concurrency gate, timeouts, input-length cap, audit log                                                                                            |
 
 ---
@@ -648,7 +648,7 @@ terms:                             # words that pick rows
 
 * **Labels** are shown to the model next to the physical name (`TABLE erp.cust_mst  -- customers`); the model still has to write the real name, which the SQL policy checks.
 * **Relationships** from the database and from the file are merged. Composite keys are supported, and declared ones show their cardinality to the model. A relationship is used only when both tables and all its columns are visible to the role.
-* **Terms** are shown to the model in a `TERMS` section and point routing at their table. A predicate may use only the table's own columns (no subqueries) and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
+* **Terms** are shown to the model in a `TERMS` section and point routing at their table. A predicate may use the table's own columns and `EXISTS` / `NOT EXISTS` subqueries on tables the role can see (no other subqueries), and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
 * **Loading.** A structural error (unknown key, wrong type, a name defined twice) stops startup. A name that isn't in the database is skipped with a log line. No folder at all means an empty model: everything is discovered and there is no vocabulary.
 
 ### Domains of Discourse (`config/databases/<database>/semantic/domains.yaml`)

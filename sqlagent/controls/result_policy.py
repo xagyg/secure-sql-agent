@@ -81,6 +81,15 @@ def restricted_result_columns(columns, security, sources=None):
     return removed
 
 
+def binary_label(size):
+    """What a binary value is shown as: "(binary, 10.2 KB)"."""
+    if size < 1024:
+        return f"(binary, {size} bytes)"
+    if size < 1024 * 1024:
+        return f"(binary, {size / 1024:.1f} KB)"
+    return f"(binary, {size / (1024 * 1024):.1f} MB)"
+
+
 def apply_result_policy(rows, security, sources=None):
     """
     Apply result-level security before results are passed to Ollama.
@@ -109,7 +118,18 @@ def apply_result_policy(rows, security, sources=None):
     for row in rows:
         new_row = {k: v for k, v in row.items() if k not in removed}
 
-        row_bytes = len(
+        # Binary values (bytea photos, files) are counted at their real
+        # size - as text they were "<memory at 0x...>", 35 characters, so
+        # images slipped past max_result_bytes - and replaced with a label
+        # before anything (explanation, history, table, API) sees them.
+        binary_bytes = 0
+        for key, value in new_row.items():
+            if isinstance(value, (bytes, bytearray, memoryview)):
+                size = value.nbytes if isinstance(value, memoryview) else len(value)
+                binary_bytes += size
+                new_row[key] = binary_label(size)
+
+        row_bytes = binary_bytes + len(
             json.dumps(
                 new_row,
                 default=str,

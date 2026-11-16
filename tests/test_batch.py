@@ -176,6 +176,54 @@ class RunBatch(unittest.TestCase):
         self.assertIn("1 failed with an error", out)
 
 
+class Summary(unittest.TestCase):
+    """The totals printed at the end of a batch."""
+
+    def test_outcome_of_each_kind_of_result(self):
+        self.assertEqual(main.batch_outcome({"row_count": 3}), ("rows", None))
+        self.assertEqual(main.batch_outcome({"row_count": 0}), ("no rows", None))
+        self.assertEqual(main.batch_outcome(
+            {"blocked": True, "rule": "not_available", "rule_label": "not available"}),
+            ("refused", "not available"))
+        self.assertEqual(main.batch_outcome({"outcome": "unclear"}),
+                         ("not run", "unclear question"))
+        self.assertEqual(main.batch_outcome(
+            {"reason": "error", "answer": "I couldn't correct that query."}),
+            ("failed", "I couldn't correct that query."))
+        # Rows returned with restricted columns left out still count as rows.
+        self.assertEqual(main.batch_outcome(
+            {"row_count": 2, "reason": "policy", "rule": "fields_withheld"}),
+            ("rows", None))
+
+    def test_summary_counts_and_breaks_down(self):
+        results = {
+            "q1": {"row_count": 5}, "q2": {"row_count": 0},
+            "q3": {"blocked": True, "rule_label": "not available"},
+            "q4": {"blocked": True, "rule_label": "not available"},
+            "q5": {"blocked": True, "rule_label": "restricted data"},
+            "q6": {"outcome": "unclear"},
+            "q7": {"reason": "error", "answer": "I couldn't correct that query."},
+        }
+
+        def fake_run_agent(question, catalog, history, security, explain=True):
+            if question == "q8":
+                raise TimeoutError("slow")
+            return results[question]
+
+        out = io.StringIO()
+        with mock.patch.object(main, "run_agent", fake_run_agent), redirect_stdout(out):
+            main.run_batch([*results, "q8"], catalog=None, security=None)
+        text = out.getvalue()
+        self.assertIn("Summary: 8 question(s)", text)
+        self.assertRegex(text, r"Returned rows +1\n")
+        self.assertRegex(text, r"Returned 0 rows +1\n")
+        self.assertRegex(text, r"Refused +3\n +2  not available\n +1  restricted data\n")
+        self.assertRegex(text, r"Not run +1\n +1  unclear question\n")
+        self.assertRegex(text, r"Failed +2\n")
+        self.assertIn("1  I couldn't correct that query.", text)
+        self.assertIn("1  error: TimeoutError", text)
+
+
 class Tee(unittest.TestCase):
 
     def test_writes_to_both(self):
