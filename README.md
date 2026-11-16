@@ -140,6 +140,14 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+Check the installation by running the unit tests (no database or model needed):
+
+```powershell
+.\run_tests.ps1
+```
+
+Every test should pass. A failure here usually means a missing or wrong-version package, not a configuration problem. See [Unit tests](#unit-tests).
+
 Install and start Ollama, then make sure the configured model is available:
 
 ```powershell
@@ -241,7 +249,7 @@ The important property is that the model does **not** enforce the security bound
 
 ### Unit tests
 
-Run every test in the project (no database or model needed):
+Run every test in the project from the project folder (no database or model needed):
 
 ```bash
 python -m unittest discover tests -v
