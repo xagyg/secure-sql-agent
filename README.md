@@ -146,7 +146,7 @@ Check the installation by running the unit tests (no database or model needed):
 .\run_tests.ps1
 ```
 
-Every test should pass. A failure here usually means a missing or wrong-version package, not a configuration problem. See [Unit tests](#unit-tests).
+Every test should pass. A failure here usually means a missing or wrong-version package, not a configuration problem.
 
 Install and start Ollama, then make sure the configured model is available:
 
