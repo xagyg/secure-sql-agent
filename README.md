@@ -42,7 +42,7 @@ Each layer, and the file that implements it:
 | Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
 | Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
 | Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
-| Row scope            | `controls/row_scope.py`                  | Which rows: each scoped table is replaced by a filtered version of itself just before execution, then verified; the LLM never sees the filters |
+| Row scope            | `controls/row_scope.py`                  | Which rows: each scoped table is replaced by a filtered version of itself just before execution, then verified; the LLM never s the filters |
 | Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
 | Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
 | Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
@@ -64,18 +64,18 @@ config/
     llm.yaml, api.yaml, query.yaml, retrieval.yaml, repl.yaml
   databases/                 one folder per database, named as in databases.yaml
     northwind/               PostgreSQL Northwind (also northwind_mssql/, adventureworks/)
-      security.yaml          who may see what (roles, tables, columns, row scopes, grants)
+      security.yaml          who may  what (roles, tables, columns, row scopes, grants)
       identity.yaml          how the agent talks about it (name, examples)
       semantic/
         model.yaml           what the data means (sources, labels, aliases, relationships, terms)
         domains.yaml         Domains of Discourse, role aliases, function codes
   idp/                       demo only: local stand-ins for sign-in, one file per organisation
     northwind.yaml           Northwind's people, used by northwind and northwind_mssql
-    adventureworks.yaml      AdventureWorks' people (who sees which tables; no row scope yet)
+    adventureworks.yaml      AdventureWorks' people (who s which tables; no row scope yet)
 sqlagent/
   agent.py                   run_agent(): orchestrates the question -> answer pipeline
   settings.py, databases.py  load and validate the configuration
-  adaptive/                  Adaptive layer: the LLM, what it sees and where it starts
+  adaptive/                  Adaptive layer: the LLM, what it s and where it starts
   controls/                  Control layer: the Agent Behavioural Controls (ABCs)
   execution/                 Execution layer: controlled, read-only execution
     engines/                 what is specific to PostgreSQL / SQL Server
@@ -90,7 +90,7 @@ tests/                       unit tests (no database or model needed)
 | `main.py` | Interactive command-line REPL for local use |
 | `run.ps1` | Starts the API or local REPL on Windows (assumes Ollama is already running) |
 | `run_with_ollama.ps1` | Restarts Ollama with the recommended server settings, then runs `run.ps1` |
-| `demo_enabled.flag` | Turns the public demo on (see below) |
+| `demo_enabled.flag` | Turns the public demo on ( below) |
 | `config/settings/databases.yaml` | Database profiles: engine, connection, roles, and where each database's files are |
 | `config/settings/*.yaml` | Runtime settings: LLM, API limits, query limits, retrieval, REPL |
 | `config/databases/<database>/security.yaml` | Security policy: roles, allowed tables, denied columns, group-to-role mapping |
@@ -146,7 +146,7 @@ Check the installation by running the unit tests (no database or model needed):
 .\run_tests.ps1
 ```
 
-Every test should pass. A failure here usually means a missing or wrong-version package, not a configuration problem. See [Unit tests](#unit-tests).
+Every test should pass. A failure here usually means a missing or wrong-version package, not a configuration problem.
 
 Install and start Ollama, then make sure the configured model is available:
 
