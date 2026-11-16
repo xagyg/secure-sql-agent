@@ -127,11 +127,13 @@ relationships:
   # not_hub_tables: add or remove tables by name.
   hub_threshold: 15
 
-  # A table the question names in full that sits outside the chosen
-  # domain ("list the shippers" asked from the HR desk):
+  # A table the question names (its name, label, alias or a term - not
+  # a column word) that sits outside the chosen domain ("list the
+  # shippers" asked from the HR desk):
   #   walk - add it and walk its relationships
-  #   add  - add it, without walking its relationships, plus any link
-  #          table needed to join it (employee_territories for territories)
+  #   add  - add it without a walk, plus any table with foreign keys to
+  #          both it and the schema, so they can be joined
+  #          (employee_territories for territories)
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
 
