@@ -55,7 +55,8 @@ explain_result_chars: 8000    # ~2,000 tokens of rows; wide rows show fewer
 # rules (log_tokens warns when that happens).
 temperature: 0
 seed: 42
-num_ctx: 16384
+# if num_ctx empty, uses Ollama app settings
+num_ctx:
 # Print prompt/output token counts and times for each call, with a
 # warning when a prompt nears num_ctx.
 log_tokens: true
