@@ -732,6 +732,44 @@ class SchemaCatalog:
     # Context
     # ------------------------------------------------------------------
 
+    def tables_missing_from(self, schema, sql, question=None):
+        """
+        (schema, added) for a correction: the schema text the failed SQL
+        was written against, plus a block for each catalog table the SQL
+        reads that the text doesn't show, and the full names added.
+        The model can take a table from the conversation history, or
+        remember one, that this question's schema doesn't include; the
+        correction is then told to use "only columns that the schema
+        lists" for a table the schema doesn't list at all. Only tables in
+        this (security-filtered) catalog are added, without denied
+        columns, so nothing is shown that the role can't already query.
+        Wide tables list the columns that matter, as supporting tables
+        do, plus any whose words the SQL's column names or the question
+        use (GENERAL_REL for GENERAL_RELEASE_IND).
+        """
+        import sqlglot
+        from sqlglot import exp
+
+        used = self.tables_in_sql(sql)
+        missing = {
+            full_name for full_name in used
+            if not re.search(
+                rf"^TABLE {re.escape(self.engine.display_table(full_name))}(?:\s|$)",
+                schema or "", re.M)
+        }
+        if not missing:
+            return schema, set()
+
+        try:
+            tree = sqlglot.parse_one(sql, read=active_dialect())
+            columns = {c.name for c in tree.find_all(exp.Column) if c.name}
+        except Exception:
+            columns = set()
+        words = " ".join(sorted(columns) + [question or ""])
+
+        block = self._format_context(missing, focus=set(), question=words)
+        return f"{schema.rstrip()}\n\n{block}" if schema else block, missing
+
     def tables_in_sql(self, sql):
         """
         The catalog tables a SQL statement reads from, as full names.

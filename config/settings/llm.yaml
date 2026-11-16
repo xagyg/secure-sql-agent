@@ -46,19 +46,20 @@ explain_rows: 50
 explain_value_chars: 300
 explain_result_chars: 8000    # ~2,000 tokens of rows; wide rows show fewer
 
-# Ollama options sent with every request (omit one to use the model's
+# Ollama options sent with every request (leave one empty to use Ollama's
 # default). temperature 0 and a fixed seed make the same prompt give the
-# same answer, so two batch runs can be compared. num_ctx is the context
-# window in tokens. The Ollama app's own context-length setting takes
-# precedence over it, so set both to the same value. A prompt longer than
-# the context is cut without an error, losing part of the schema and
-# rules (log_tokens warns when that happens).
+# same answer, so two batch runs can be compared.
+#
+# num_ctx is the context window in tokens. Set, it takes precedence over
+# the Ollama app's context-length setting; empty, nothing is sent and the
+# app's setting is used. A prompt longer than the context is cut without
+# an error, losing part of the schema and rules - log_tokens warns when
+# Ollama counts far fewer tokens than were sent.
 temperature: 0
 seed: 42
-# if num_ctx empty, uses Ollama app settings
 num_ctx:
 # Print prompt/output token counts and times for each call, with a
-# warning when a prompt nears num_ctx.
+# warning when a prompt was cut or nears num_ctx.
 log_tokens: true
 
 # Sent with every request. Skips ngrok's browser warning page; harmless

@@ -131,8 +131,9 @@ class LlmSettings(_Strict):
     # Sent to Ollama with every request (its "options"); None leaves the
     # model's own default. temperature 0 and a fixed seed make the same
     # prompt give the same SQL, so two runs can be compared. num_ctx is
-    # the context window in tokens: a longer prompt is silently cut from
-    # the start, so set it here rather than relying on the Ollama app.
+    # the context window in tokens and takes precedence over the Ollama
+    # app's setting (used only when this is None); a longer prompt is
+    # cut without an error, so set it here.
     temperature: float | None = Field(None, ge=0, le=2)
     seed: int | None = None
     num_ctx: int | None = Field(None, ge=512, le=1_048_576)

@@ -131,6 +131,14 @@ CHARS_PER_TOKEN = 4.0
 # num_ctx / 2 plus a token or two: 4,098 at 8K, 8,194 at 16K.
 CUT_COUNT_TOLERANCE = 16
 
+# Without num_ctx (Ollama's own context setting is used), a cut is seen
+# when Ollama counts well under what was sent: below this share of the
+# estimate. Uncut prompts count at about the estimate or above (2,589 for
+# ~2,564 sent); a cut one at about half the context (2,050 for ~4,915 at
+# 4K). Prompts estimated under CUT_MIN_ESTIMATE tokens aren't judged.
+CUT_SHARE = 0.6
+CUT_MIN_ESTIMATE = 1000
+
 
 def estimated_tokens(messages):
     """The approximate token count of the messages, from their length."""
@@ -141,9 +149,13 @@ def estimated_tokens(messages):
 def prompt_was_cut(prompt, num_ctx, estimate):
     """True when Ollama's count shows it dropped part of the prompt: the
     count sits at half the context while more than that was sent, or the
-    prompt sent was larger than the whole context."""
-    if not num_ctx or not prompt:
+    prompt sent was larger than the whole context. Without num_ctx: the
+    count is well under what was sent (CUT_SHARE)."""
+    if not prompt:
         return False
+    if not num_ctx:
+        return bool(estimate) and estimate >= CUT_MIN_ESTIMATE \
+            and prompt < CUT_SHARE * estimate
     at_half = abs(prompt - num_ctx // 2) <= CUT_COUNT_TOLERANCE
     if at_half and (not estimate or estimate > num_ctx // 2):
         return True
@@ -172,8 +184,15 @@ def token_report(response, num_ctx=None, estimate=None):
     if estimate:
         text += f"; ~{estimate:,} sent"
     if prompt_was_cut(prompt, num_ctx, estimate):
-        text += (f" - WARNING: the prompt was cut to fit the context "
-                 f"(num_ctx {num_ctx:,}); the model didn't see all of it")
+        if num_ctx:
+            text += (f" - WARNING: the prompt was cut to fit the context "
+                     f"(num_ctx {num_ctx:,}); the model didn't see all of it")
+        else:
+            # A cut prompt is counted at about half the context.
+            text += (f" - WARNING: the prompt was cut to fit Ollama's context "
+                     f"(about {prompt * 2:,} tokens, from the Ollama app's "
+                     "setting); the model didn't see all of it. Set num_ctx "
+                     "in llm.yaml, or raise the app's context length")
     elif num_ctx and prompt and prompt >= CONTEXT_WARNING_SHARE * num_ctx:
         text += (f" - WARNING: {prompt / num_ctx:.0%} of num_ctx {num_ctx:,}; "
                  "the prompt may have been cut")

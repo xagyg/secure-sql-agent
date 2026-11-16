@@ -808,6 +808,14 @@ def _execute_with_correction(question, schema, sql, generated_sql, withheld,
     if isinstance(correction_hint, dict):
         return correction_hint
 
+    # A table the SQL reads that the question's schema didn't show (taken
+    # from the history, or remembered): the correction sees it too, so a
+    # hint such as "Closest columns: GENERAL_REL" has a table to point at.
+    schema, added = catalog.tables_missing_from(schema, sql, question)
+    if added:
+        print("\n[schema] Added to the correction (used by the SQL, not in "
+              f"the question's schema): {', '.join(sorted(added))}")
+
     print("\n[agent] Asking Ollama to correct SQL...")
 
     try:

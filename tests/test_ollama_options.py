@@ -55,7 +55,8 @@ class Options(unittest.TestCase):
         settings = get_settings().llm
         self.assertEqual(settings.temperature, 0)
         self.assertIsNotNone(settings.seed)
-        self.assertIsNotNone(settings.num_ctx)
+        # num_ctx may be empty (the Ollama app's setting is used), or a size.
+        self.assertTrue(settings.num_ctx is None or settings.num_ctx >= 512)
 
 
 class TokenReport(unittest.TestCase):
@@ -70,6 +71,18 @@ class TokenReport(unittest.TestCase):
 
     def test_no_warning_well_under_the_limit(self):
         self.assertNotIn("WARNING", llm.token_report(reply(4000, 50), num_ctx=16384))
+
+    def test_cut_prompt_is_flagged_without_num_ctx(self):
+        # The beta-feature run: ~4,915 sent, 2,050 counted at a 4K context.
+        text = llm.token_report(reply(2050, 53), num_ctx=None, estimate=4915)
+        self.assertIn("WARNING: the prompt was cut to fit Ollama's context", text)
+        self.assertIn("about 4,100 tokens", text)
+
+    def test_uncut_prompt_without_num_ctx(self):
+        self.assertFalse(llm.prompt_was_cut(2589, None, 2564))
+        self.assertFalse(llm.prompt_was_cut(11521, None, 11605))
+        self.assertFalse(llm.prompt_was_cut(300, None, 900))     # too small to judge
+        self.assertNotIn("WARNING", llm.token_report(reply(2589, 54), estimate=2564))
 
     def test_cut_prompt_is_flagged(self):
         # ~9,000 tokens sent, Ollama counted 4,098: half an 8K context.
