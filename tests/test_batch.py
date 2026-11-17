@@ -91,7 +91,7 @@ class OutputsFolder(unittest.TestCase):
         folder = Path(tempfile.mkdtemp())
         questions = folder / "odoo.txt"
         questions.write_text("q1\n", encoding="utf-8")
-        with mock.patch.object(main, "start", lambda items, explain: print("ran", items)), \
+        with mock.patch.object(main, "start", lambda items, explain, numbers=None: print("ran", items)), \
              mock.patch("sys.argv", ["main.py", "--questions", str(questions)]), \
              redirect_stdout(io.StringIO()):
             main.main()
@@ -112,7 +112,7 @@ class NoExplainOption(unittest.TestCase):
         questions.write_text("q1\n", encoding="utf-8")
         seen = []
         with mock.patch.object(main, "start",
-                               lambda items, explain: seen.append(explain)), \
+                               lambda items, explain, numbers=None: seen.append(explain)), \
              mock.patch("sys.argv", ["main.py", "--questions", str(questions),
                                      "--no-explain"]), \
              redirect_stdout(io.StringIO()):
@@ -174,6 +174,110 @@ class RunBatch(unittest.TestCase):
         self.assertEqual([q for q, _ in seen], ["q1", "q2"])
         self.assertIn("[error] TimeoutError: Ollama took too long", out)
         self.assertIn("1 failed with an error", out)
+
+    def test_selected_questions_show_their_number_in_the_file(self):
+        out = io.StringIO()
+        with mock.patch.object(main, "run_agent", lambda *a, **k: None), \
+             redirect_stdout(out):
+            main.run_batch(["q10", "q25"], None, None, numbers=[10, 25])
+        self.assertIn("Question 10 (1 of 2)", out.getvalue())
+        self.assertIn("Question 25 (2 of 2)", out.getvalue())
+
+
+class QuestionNumbers(unittest.TestCase):
+
+    def test_range(self):
+        self.assertEqual(main.parse_question_numbers("1-10"), set(range(1, 11)))
+        self.assertEqual(main.parse_question_numbers("20-30"), set(range(20, 31)))
+
+    def test_list(self):
+        self.assertEqual(main.parse_question_numbers("3,10,25"), {3, 10, 25})
+
+    def test_mixed_and_spaces(self):
+        # PowerShell passes -qn 3,10,25 as "3 10 25".
+        self.assertEqual(main.parse_question_numbers("1-3, 8"), {1, 2, 3, 8})
+        self.assertEqual(main.parse_question_numbers("3 10 25"), {3, 10, 25})
+
+    def test_bad_values(self):
+        for spec in ("", "a", "0", "5-2", "1-", "-3", "1..5"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                main.parse_question_numbers(spec)
+
+    def test_ranges_for_messages(self):
+        self.assertEqual(main.number_ranges([1, 2, 3, 7, 9, 10]), "1-3, 7, 9-10")
+
+
+class SelectQuestions(unittest.TestCase):
+
+    ITEMS = ["q1", "q2", main.NEW_CONVERSATION, "q3", "q4", "q5"]
+
+    def test_only_the_numbered_questions(self):
+        items, numbers, total = main.select_questions(self.ITEMS, {2, 4})
+        self.assertEqual(items, ["q2", main.NEW_CONVERSATION, "q4"])
+        self.assertEqual(numbers, [2, 4])
+        self.assertEqual(total, 5)
+
+    def test_no_break_when_the_file_has_none_between(self):
+        items, numbers, _ = main.select_questions(self.ITEMS, {3, 5})
+        self.assertEqual(items, ["q3", "q5"])
+        self.assertEqual(numbers, [3, 5])
+
+    def test_no_leading_break(self):
+        items, _, _ = main.select_questions(self.ITEMS, {3})
+        self.assertEqual(items, ["q3"])
+
+    def test_numbers_past_the_end(self):
+        items, numbers, total = main.select_questions(self.ITEMS, {5, 6, 7})
+        self.assertEqual((items, numbers, total), (["q5"], [5], 5))
+
+
+class QnOption(unittest.TestCase):
+
+    def test_default_runs_everything(self):
+        self.assertIsNone(main.parse_args(["--questions", "q.txt"]).qn)
+
+    def test_flag(self):
+        args = main.parse_args(["--questions", "q.txt", "--qn", "3,10,25"])
+        self.assertEqual(args.qn, "3,10,25")
+
+    def run_main(self, text, qn):
+        path = questions_file(text)
+        out = io.StringIO()
+        ran = {}
+
+        def fake_start(items, explain=True, numbers=None):
+            ran.update(items=items, numbers=numbers)
+
+        args = main.parse_args(["--questions", path, "--qn", qn, "--no-out"])
+        with mock.patch.object(main, "start", fake_start), \
+             mock.patch.object(main, "parse_args", lambda: args), \
+             redirect_stdout(out):
+            try:
+                main.main()
+            except SystemExit:
+                ran["exited"] = True
+        return ran, out.getvalue()
+
+    def test_runs_only_the_selected_questions(self):
+        ran, out = self.run_main("a\nb\nc\nd\n", "2-3")
+        self.assertEqual(ran["items"], ["b", "c"])
+        self.assertEqual(ran["numbers"], [2, 3])
+        self.assertIn("questions 2-3 of 4", out)
+
+    def test_numbers_not_in_the_file_are_reported(self):
+        ran, out = self.run_main("a\nb\n", "2,5")
+        self.assertEqual(ran["items"], ["b"])
+        self.assertIn("(no question 5)", out)
+
+    def test_nothing_to_run_stops(self):
+        ran, out = self.run_main("a\nb\n", "7-9")
+        self.assertTrue(ran.get("exited"))
+        self.assertIn("has only 2 question(s)", out)
+
+    def test_bad_value_stops(self):
+        ran, out = self.run_main("a\n", "x")
+        self.assertTrue(ran.get("exited"))
+        self.assertIn("not a number or a range", out)
 
 
 class Summary(unittest.TestCase):

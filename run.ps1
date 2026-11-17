@@ -45,6 +45,12 @@
 # conversation. -db and -identity apply as usual.
 #     .\run.ps1 -questions tests\questions\odoo.txt -db odoo -identity sam
 #     .\run.ps1 -questions q.txt -out q-results.txt
+# -qn runs only some of the questions, by their number in the file
+# (questions only; comments and --- lines aren't counted). Leave it out to
+# run them all. A follow-up whose earlier question isn't run loses that
+# context.
+#     .\run.ps1 -questions q.txt -qn 1-10
+#     .\run.ps1 -questions q.txt -qn 3,10,25
 # -noExplain skips the LLM's explanation of each result and shows the rows
 # instead: faster, for checking the SQL (batch or -local REPL).
 #     .\run.ps1 -questions q.txt -db odoo -noExplain
@@ -55,6 +61,7 @@ param(
     [string]$identity,
     [string]$questions,
     [string]$out,
+    [string[]]$qn,
     [switch]$noExplain
 )
 
@@ -143,6 +150,8 @@ if ($questions) {
     Write-Host "Running the questions in $questions..."
     $batchArgs = @("main.py", "--questions", $questions)
     if ($out) { $batchArgs += @("--out", $out) }
+    # -qn 3,10,25 arrives as an array; main.py takes "3,10,25".
+    if ($qn) { $batchArgs += @("--qn", ($qn -join ",")) }
     if ($noExplain) { $batchArgs += "--no-explain" }
     & .\.venv\Scripts\python.exe @batchArgs
 }

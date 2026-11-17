@@ -15,6 +15,7 @@
 # can copy everything printed to a file to check later:
 #     python main.py --questions questions.txt --out results.txt
 #     .\run.ps1 -questions questions.txt          (results go to .\outputs\)
+#     python main.py --questions questions.txt --qn 1-10   (only some)
 # See read_questions() for the file format.
 
 import argparse
@@ -144,6 +145,74 @@ def read_questions(path):
     return items
 
 
+# ---------------------------------------------------------------------------
+# --qn: run only some of a file's questions, by their number in the file
+# (questions only: comments, blank lines and --- lines aren't counted).
+# ---------------------------------------------------------------------------
+
+QN_PART = re.compile(r"(\d+)(?:-(\d+))?")
+
+
+def parse_question_numbers(spec):
+    """
+    The question numbers in a --qn value: "1-10" is 1 to 10, "3,10,25" is
+    3, 10 and 25, and the two mix ("1-5,8"). Commas or spaces separate the
+    parts (PowerShell passes -qn 3,10,25 as "3 10 25"). Raises ValueError
+    for anything else.
+    """
+    parts = [p for p in re.split(r"[,\s]+", spec.strip()) if p]
+    if not parts:
+        raise ValueError("no question numbers given")
+    numbers = set()
+    for part in parts:
+        match = QN_PART.fullmatch(part)
+        if not match:
+            raise ValueError(f"'{part}' is not a number or a range such as 1-10")
+        first = int(match.group(1))
+        last = int(match.group(2) or first)
+        if first < 1 or last < first:
+            raise ValueError(f"'{part}' is not a valid range")
+        numbers.update(range(first, last + 1))
+    return numbers
+
+
+def number_ranges(numbers):
+    """[1, 2, 3, 7, 9, 10] -> "1-3, 7, 9-10"."""
+    ranges = []
+    for n in sorted(numbers):
+        if ranges and n == ranges[-1][1] + 1:
+            ranges[-1][1] = n
+        else:
+            ranges.append([n, n])
+    return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in ranges)
+
+
+def select_questions(items, numbers):
+    """
+    Only the questions whose numbers are in numbers (1 = the first question
+    in the file), with a NEW_CONVERSATION between two of them when the file
+    has a --- anywhere between them, so conversations still break where the
+    file says. Returns (items, the kept questions' numbers, the questions
+    in the file).
+    """
+    kept, kept_numbers = [], []
+    number = 0
+    new_conversation = False
+    for item in items:
+        if item == NEW_CONVERSATION:
+            new_conversation = True
+            continue
+        number += 1
+        if number not in numbers:
+            continue
+        if new_conversation and kept:
+            kept.append(NEW_CONVERSATION)
+        new_conversation = False
+        kept.append(item)
+        kept_numbers.append(number)
+    return kept, kept_numbers, number
+
+
 def default_results_path(questions_path, now=None):
     """questions.txt -> outputs/questions-results-20261114-1502.txt, in an
     outputs folder next to the questions file (created when needed)."""
@@ -212,9 +281,10 @@ def print_batch_summary(outcomes, seconds):
             print(f"    {count:>4}  {detail}")
 
 
-def run_batch(items, catalog, security, explain=True):
+def run_batch(items, catalog, security, explain=True, numbers=None):
     """Run each question as the REPL would, printing a header and timing
-    for each, then a summary."""
+    for each, then a summary. numbers are the questions' numbers in the
+    file when only some are run (--qn); the header shows them."""
     history = []
     questions = [i for i in items if i != NEW_CONVERSATION]
     failed = 0
@@ -228,7 +298,12 @@ def run_batch(items, catalog, security, explain=True):
             print("\n[batch] --- new conversation ---")
             continue
         number += 1
-        print(f"\n{'=' * 70}\n[batch] Question {number} of {len(questions)}")
+        if numbers:
+            header = (f"Question {numbers[number - 1]} "
+                      f"({number} of {len(questions)})")
+        else:
+            header = f"Question {number} of {len(questions)}"
+        print(f"\n{'=' * 70}\n[batch] {header}")
         print(f"\n> {item}")
         begin = time.monotonic()
         try:
@@ -261,6 +336,11 @@ def parse_args(argv=None):
                              "next to the questions file)")
     parser.add_argument("--no-out", action="store_true",
                         help="with --questions: print to the console only")
+    parser.add_argument("--qn", metavar="NUMBERS",
+                        help="with --questions: run only these questions, by "
+                             "their number in the file: 1-10, 3,10,25 or "
+                             "1-5,8 (default: all). A follow-up whose earlier "
+                             "question isn't run loses that context")
     parser.add_argument("--no-explain", action="store_true",
                         help="skip the LLM's explanation of each result and "
                              "show the rows instead (faster; for checking "
@@ -304,9 +384,27 @@ def main():
         if not items:
             print(f"No questions in {args.questions}.")
             sys.exit(1)
+        numbers, selection = None, ""
+        if args.qn:
+            try:
+                wanted = parse_question_numbers(args.qn)
+            except ValueError as ex:
+                print(f"--qn {args.qn}: {ex}")
+                sys.exit(1)
+            items, numbers, total = select_questions(items, wanted)
+            missing = sorted(n for n in wanted if n > total)
+            if not items:
+                print(f"--qn {args.qn}: {args.questions} has only "
+                      f"{total} question(s).")
+                sys.exit(1)
+            selection = f" - questions {number_ranges(numbers)} of {total}"
+            if missing:
+                selection += f" (no question {number_ranges(missing)})"
         explain = not args.no_explain
         if args.no_out:
-            return start(items, explain)
+            if selection:
+                print(f"[batch]{selection}")
+            return start(items, explain, numbers)
         out_path = Path(args.out) if args.out else default_results_path(args.questions)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as out:
@@ -314,16 +412,20 @@ def main():
             sys.stdout = Tee(console, out)
             try:
                 print(f"[batch] {args.questions} - {datetime.now():%Y-%m-%d %H:%M}"
+                      + selection
                       + ("" if explain else " - explanations skipped (--no-explain)"))
-                start(items, explain)
+                start(items, explain, numbers)
             finally:
                 sys.stdout = console
         print(f"\n[batch] Results written to {out_path}")
         return
+    if args.qn:
+        print("--qn only applies with --questions.")
+        sys.exit(1)
     start(None, not args.no_explain)
 
 
-def start(batch_items, explain=True):
+def start(batch_items, explain=True, numbers=None):
     """Load everything, then run the REPL, or the batch when given one.
     explain=False skips the LLM's explanation of each result."""
     # Configuration errors stop here, before the database is touched.
@@ -379,7 +481,8 @@ def start(batch_items, explain=True):
     )
 
     if batch_items is not None:
-        run_batch(batch_items, catalog, security, explain=explain)
+        run_batch(batch_items, catalog, security, explain=explain,
+                  numbers=numbers)
         return
 
     while True:
