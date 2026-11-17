@@ -392,6 +392,11 @@ NO_ROWS_ANSWER = ("No matching records were found. If you expected some, "
                   "try rephrasing the question or checking the spelling "
                   "of any names.")
 
+# The table shown instead of the explanation (--no-explain): repl.yaml
+# table_rows and table_value_chars.
+TABLE_ROWS = get_settings().repl.table_rows
+TABLE_VALUE_CHARS = get_settings().repl.table_value_chars
+
 
 def _results_without_explanation(results, withheld):
     """The answer when the LLM explanation is skipped: the row count,
@@ -402,7 +407,8 @@ def _results_without_explanation(results, withheld):
                 if count >= MAX_ROWS else "") + "."]
     if withheld:
         lines.append(f"Withheld by policy: {', '.join(sorted(set(withheld)))}.")
-    lines += ["", format_results_table(results)]
+    lines += ["", format_results_table(results, max_rows=TABLE_ROWS,
+                                       max_value_chars=TABLE_VALUE_CHARS)]
     return "\n".join(lines)
 
 
