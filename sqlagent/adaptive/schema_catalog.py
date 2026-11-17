@@ -300,32 +300,33 @@ class SchemaCatalog:
         attached = 0
         for term in self.semantic.terms.values():
             table = self.get_table(term.table)
+            # The same name can be on several tables, so the log names both.
+            label = f"'{term.name}' on {term.table}"
             if table is None:
-                print(f"[schema] Term '{term.name}': table '{term.table}' "
-                      "not available - skipped")
+                print(f"[schema] Term {label}: table not available - skipped")
                 continue
 
             if term.column:
                 column = self._find_column(table, term.column)
                 if column is None:
-                    print(f"[schema] Term '{term.name}': column "
-                          f"'{term.table}.{term.column}' not available - skipped")
+                    print(f"[schema] Term {label}: column "
+                          f"'{term.column}' not available - skipped")
                     continue
                 definition = f"{column['name']} is true"
             else:
                 try:
                     condition = sqlglot.parse_one(term.predicate, read=active_dialect())
                 except Exception:
-                    print(f"[schema] Term '{term.name}': predicate can't be "
+                    print(f"[schema] Term {label}: predicate can't be "
                           "parsed - skipped")
                     continue
                 problem = self._predicate_problem(condition, table, exp)
                 if problem:
-                    print(f"[schema] Term '{term.name}': {problem} - skipped")
+                    print(f"[schema] Term {label}: {problem} - skipped")
                     continue
                 missing = self._predicate_missing_columns(condition, table, exp)
                 if missing:
-                    print(f"[schema] Term '{term.name}': column(s) "
+                    print(f"[schema] Term {label}: column(s) "
                           f"{', '.join(sorted(set(missing)))} not available - skipped")
                     continue
                 definition = condition.sql(dialect=active_dialect())
@@ -1183,6 +1184,12 @@ class SchemaCatalog:
             if relationships:
                 lines.append("")
             lines.append("TERMS (business words and the rows they mean)")
+            shared = self._shared_term_phrases(terms)
+            if shared:
+                lines.append(
+                    f"  ({', '.join(_words_of(p) for p in shared)} mean "
+                    "different rows on different tables: use the definition "
+                    "for the table you filter)")
             for full_name, term in terms:
                 words = ", ".join(_words_of(p) for p in term["phrases"])
                 line = (f"  - {words}: {self.engine.display_table(full_name)} "
@@ -1192,6 +1199,18 @@ class SchemaCatalog:
                 lines.append(line)
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _shared_term_phrases(terms):
+        """Phrases (names or aliases) that belong to terms on more than one
+        of the listed tables, e.g. "late" on orders and on stock_picking.
+        terms is [(full table name, term), ...]."""
+        tables_by_phrase = {}
+        for full_name, term in terms:
+            for phrase in term["phrases"]:
+                tables_by_phrase.setdefault(phrase, set()).add(full_name)
+        return sorted(p for p, tables in tables_by_phrase.items()
+                      if len(tables) > 1)
 
     def _supporting_columns(self, table, full_name, relationships, term_words,
                             question_words):

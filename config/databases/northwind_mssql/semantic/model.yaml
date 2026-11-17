@@ -77,6 +77,11 @@ tables:
     aliases: [sku, stock, inventory, goods]
     columns:
       UnitsInStock: {aliases: [stock_level, on_hand]}
+    terms:
+      low_stock:
+        predicate: UnitsInStock <= ReorderLevel
+        aliases: [reorder, needs_reordering, running_low]
+        description: at or below the reorder level
 
   dbo.Shippers:
     aliases: [carrier, courier]
@@ -86,20 +91,10 @@ tables:
       RequiredDate:   {aliases: [due_date]}
       Freight:        {aliases: [shipping_cost]}
       ShipPostalCode: {aliases: [postcode, zip, zip_code]}
+    terms:
+      shipped_late:
+        predicate: ShippedDate > RequiredDate
+        aliases: [late, late_shipment, late_delivery, delayed]
+        description: shipped after the date the customer required
 
 relationships: []
-
-# Terms: words that pick ROWS. Predicates are T-SQL on the table's own
-# columns.
-terms:
-  shipped_late:
-    table: dbo.Orders
-    predicate: ShippedDate > RequiredDate
-    aliases: [late, late_shipment, late_delivery, delayed]
-    description: shipped after the date the customer required
-
-  low_stock:
-    table: dbo.Products
-    predicate: UnitsInStock <= ReorderLevel
-    aliases: [reorder, needs_reordering, running_low]
-    description: at or below the reorder level

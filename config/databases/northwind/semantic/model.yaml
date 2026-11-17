@@ -48,6 +48,18 @@ fallback_tables:
 #                "_" ("sales_rep") and match only when every word is in the
 #                question. Plurals are handled, so the singular is enough.
 #   description  Optional; shown to the model.
+#   terms        Words that pick ROWS of this table ("shipped late"). Give
+#                either
+#                  column:    a boolean column (best - define the rule
+#                             once, in a view), or
+#                  predicate: a SQL condition on the table's own columns,
+#                plus aliases and a description. A term is shown to the
+#                model when its table is in the schema context. A predicate
+#                is guidance for the model, not injected into the SQL:
+#                "employees who are NOT terminated" must still work.
+#                A term name is unique per table, so the same word ("late")
+#                can mean different rows on different tables; the model is
+#                told which table each meaning belongs to.
 #
 # Keys are "schema.table" (a bare name is in public). Column keys are the
 # physical column names. Only list words the name doesn't already contain.
@@ -81,6 +93,11 @@ tables:
     aliases: [sku, stock, inventory, goods]
     columns:
       units_in_stock: {aliases: [stock_level, on_hand]}
+    terms:
+      low_stock:
+        predicate: units_in_stock <= reorder_level
+        aliases: [reorder, needs_reordering, running_low]
+        description: at or below the reorder level
 
   public.shippers:
     aliases: [carrier, courier]
@@ -90,6 +107,11 @@ tables:
       required_date:    {aliases: [due_date]}
       freight:          {aliases: [shipping_cost]}
       ship_postal_code: {aliases: [postcode, zip, zip_code]}
+    terms:
+      shipped_late:
+        predicate: shipped_date > required_date
+        aliases: [late, late_shipment, late_delivery, delayed]
+        description: shipped after the date the customer required
 
 # ---------------------------------------------------------------------------
 # Relationships the database doesn't declare. Northwind has real foreign
@@ -106,24 +128,3 @@ tables:
 # visible to the role.
 # ---------------------------------------------------------------------------
 relationships: []
-
-# ---------------------------------------------------------------------------
-# Terms: words that pick ROWS. Give either
-#   column:    a boolean column (best - define the rule once, in a view), or
-#   predicate: a SQL condition on the table's own columns.
-# The definition is shown to the model when the table is in the schema
-# context. A predicate is guidance for the model, not injected into the
-# SQL: "employees who are NOT terminated" must still work.
-# ---------------------------------------------------------------------------
-terms:
-  shipped_late:
-    table: public.orders
-    predicate: shipped_date > required_date
-    aliases: [late, late_shipment, late_delivery, delayed]
-    description: shipped after the date the customer required
-
-  low_stock:
-    table: public.products
-    predicate: units_in_stock <= reorder_level
-    aliases: [reorder, needs_reordering, running_low]
-    description: at or below the reorder level
