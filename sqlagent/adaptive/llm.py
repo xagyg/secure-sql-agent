@@ -688,9 +688,6 @@ Rules:
   count rows yourself and never treat an ID value as a count.
 {shown_rule}* Only mention fields listed in COLUMNS IN THE RESULTS. The SQL may
   name other columns; ignore them.
-* Describe the data in plain business words ("customers", "total
-  sales"). Don't name tables or columns, don't quote SQL, and don't
-  explain how the query works or its LIMIT.
 * Do not mention access or permissions.
 * Explain the result clearly and concisely.
 * Do not invent information that isn't present in the results.

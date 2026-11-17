@@ -52,8 +52,10 @@ class ExplainPrompt(unittest.TestCase):
         self.assertIn("Every row is shown: this is the complete result", text)
         self.assertNotIn("describe the shown rows as examples", text)
 
-    def test_no_table_or_column_names_rule(self):
-        self.assertIn("Don't name tables or columns", prompt_for(rows(3)))
+    def test_explanation_may_describe_the_query(self):
+        # The model may say how the result was found (tables, joins,
+        # filters), so the user can check its logic.
+        self.assertNotIn("Don't name tables or columns", prompt_for(rows(3)))
 
     def test_capped_result_says_at_least(self):
         text = prompt_for(rows(100), row_cap=100)
