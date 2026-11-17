@@ -58,11 +58,25 @@ ERP_MODEL = """
         columns:
           cm_cr_lim: {label: credit_limit, aliases: [credit]}
           cm_name:   {label: customer_name}
+        terms:
+          uses_hidden_column:
+            predicate: cm_secret > 0
       erp.so_hdr:
         label: sales_orders
       erp.so_line:
         label: sales_order_lines
         aliases: [line_item]
+        terms:
+          big_order:
+            predicate: qty >= 100
+          sneaky:
+            predicate: qty > (SELECT max(cm_cr_lim) FROM erp.cust_mst)
+      semantic.employees_v:
+        terms:
+          terminated:
+            column: is_terminated
+            aliases: [former_employee, ex_employee]
+            description: left the company or account disabled
 
     relationships:
       - from: erp.so_line(company_id, order_no)
@@ -74,22 +88,6 @@ ERP_MODEL = """
         to:   semantic.employees_v(employee_id)
       - from: erp.so_hdr(no_such_column)
         to:   erp.cust_mst(cm_id)
-
-    terms:
-      terminated:
-        table: semantic.employees_v
-        column: is_terminated
-        aliases: [former_employee, ex_employee]
-        description: left the company or account disabled
-      big_order:
-        table: erp.so_line
-        predicate: qty >= 100
-      sneaky:
-        table: erp.so_line
-        predicate: qty > (SELECT max(cm_cr_lim) FROM erp.cust_mst)
-      uses_hidden_column:
-        table: erp.cust_mst
-        predicate: cm_secret > 0
 """
 
 
@@ -196,8 +194,10 @@ class Loading(unittest.TestCase):
     def test_term_needs_exactly_one_definition(self):
         with self.assertRaises(SemanticModelError):
             model_from(**{"a.yaml": """
-                terms:
-                  late: {table: orders, column: is_late, predicate: "a > b"}
+                tables:
+                  orders:
+                    terms:
+                      late: {column: is_late, predicate: "a > b"}
             """})
 
     def test_parse_endpoint(self):

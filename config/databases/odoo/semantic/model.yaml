@@ -165,6 +165,47 @@ tables:
       industry_id:   {label: industry, aliases: [sector]}
       ref:           {label: reference, aliases: [customer_code, account_number]}
       type:          {label: address type, description: "contact, invoice, delivery, other"}
+    terms:
+      # A customer is any active top-level partner - a company, or a person
+      # who isn't a contact at a company (commercial_partner_id = itself) -
+      # whether or not they have ordered yet. Contact people aren't listed
+      # separately from their company. Our own companies
+      # (res_company.partner_id, e.g. "AU Company") are never customers or
+      # vendors. This includes vendors and prospects: Odoo has no reliable
+      # "is a customer" flag (customer_rank is often 0).
+      customer:
+        predicate: >-
+          res_partner.commercial_partner_id = res_partner.id
+          AND res_partner.active
+          AND NOT EXISTS (SELECT 1 FROM res_company rc
+                          WHERE rc.partner_id = res_partner.id)
+        aliases: [client]
+        description: >-
+          any active top-level partner (a company, or a person who isn't a
+          contact at a company), not one of our own companies - whether or not
+          they have ordered. Only needed to LIST customers - to look one up by
+          name, filter on the name alone. Customers who have ordered: add
+          EXISTS a confirmed sale_order (state = 'sale') whose partner's
+          commercial_partner_id is the customer
+
+      vendor:
+        predicate: >-
+          EXISTS (SELECT 1 FROM purchase_order po
+                  JOIN res_partner op ON op.id = po.partner_id
+                  WHERE op.commercial_partner_id = res_partner.id
+                    AND po.state = 'purchase')
+          AND NOT EXISTS (SELECT 1 FROM res_company rc
+                          WHERE rc.partner_id = res_partner.id)
+        aliases: [supplier]
+        description: >-
+          a partner with a confirmed purchase order, not one of our own
+          companies (supplier_rank is often 0, so don't use it). Only needed to
+          LIST vendors - to look one up by name, filter on the name alone
+
+      archived:
+        predicate: active = false
+        aliases: [inactive, deleted]
+        description: archived (hidden in Odoo)
 
   res_partner_category:
     label: partner tag
@@ -286,6 +327,17 @@ tables:
       barcode:        {aliases: [ean, upc, gtin]}
       standard_price: {label: cost, aliases: [unit_cost, cost_price], description: "JSONB by company: use (standard_price->>'1')::numeric (company 1's cost), never standard_price = value"}
       qty_available: {description: "NOT stock on hand - a JSONB column Odoo doesn't keep up to date; never use it. For stock use SUM(stock_quant.quantity) in internal locations (stock_location.usage = 'internal')"}
+    terms:
+      out_of_stock:
+        predicate: >-
+          NOT EXISTS (SELECT 1 FROM stock_quant q
+                      JOIN stock_location l ON l.id = q.location_id
+                      WHERE q.product_id = product_product.id
+                        AND l.usage = 'internal' AND q.quantity > 0)
+        aliases: [no_stock, sold_out, nil_stock, zero_stock, stock_out]
+        description: >-
+          no positive quantity in any internal location. Only meaningful for
+          products that track inventory (product_template.is_storable)
 
   product_category:
     label: product category
@@ -352,6 +404,26 @@ tables:
       commitment_date: {label: delivery date, aliases: [promised_date, due_date]}
       client_order_ref: {label: customer reference, aliases: [customer_po, po_number]}
       opportunity_id:  {label: opportunity}
+    terms:
+      confirmed_sale:
+        predicate: state = 'sale'
+        aliases: [confirmed_order, booked, won_order]
+        description: a confirmed sales order (not a quotation, not cancelled)
+
+      quotation:
+        predicate: state IN ('draft', 'sent')
+        aliases: [open_quote, pending_quote, unconfirmed_order]
+        description: a quotation not yet confirmed
+
+      to_invoice:
+        predicate: invoice_status = 'to invoice'
+        aliases: [uninvoiced, not_invoiced, awaiting_invoice]
+        description: delivered or ordered but not yet invoiced
+
+      not_delivered:
+        predicate: state = 'sale' AND delivery_status IN ('pending', 'started', 'partial')
+        aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
+        description: confirmed but not fully delivered
 
   sale_order_line:
     label: sales order line
@@ -408,6 +480,21 @@ tables:
       partner_id:       {label: customer}
       partner_name:     {label: company name}
       lost_reason_id:   {label: lost reason}
+    terms:
+      opportunity:
+        predicate: type = 'opportunity'
+        aliases: [deal, pipeline]
+        description: a qualified opportunity (not a raw lead)
+
+      won:
+        predicate: won_status = 'won'
+        aliases: [won_deal, closed_won]
+        description: an opportunity marked won
+
+      lost:
+        predicate: won_status = 'lost'
+        aliases: [lost_deal, lost_opportunity, closed_lost]
+        description: an opportunity marked lost (usually archived)
 
   crm_stage:
     label: pipeline stage
@@ -452,6 +539,21 @@ tables:
       amount_total:   {label: total including taxes (GST-inclusive), aliases: [spend, purchases, purchase_value, gross, inc_gst]}
       receipt_status: {label: receipt status}
       invoice_status: {label: billing status, description: "no, to invoice, invoiced"}
+    terms:
+      confirmed_purchase:
+        predicate: state = 'purchase'
+        aliases: [confirmed_po, approved_po]
+        description: a confirmed purchase order
+
+      open_rfq:
+        predicate: state IN ('draft', 'sent', 'to approve')
+        aliases: [rfq, pending_po, awaiting_approval]
+        description: a request for quotation not yet confirmed
+
+      not_received:
+        predicate: state = 'purchase' AND receipt_status IN ('pending', 'partial')
+        aliases: [awaiting_receipt, outstanding_po, on_order]
+        description: confirmed but not fully received
 
   purchase_order_line:
     label: purchase order line
@@ -494,6 +596,11 @@ tables:
       (adjustments), production, transit, view (folders only).
       complete_name is the full path ("WH/Stock/Shelf 1"); warehouse_id
       is its warehouse.
+    terms:
+      internal_stock:
+        predicate: usage = 'internal'
+        aliases: [in_stock, on_hand, warehouse_stock]
+        description: a location that holds our own stock
 
   stock_warehouse:
     label: warehouse
@@ -521,6 +628,12 @@ tables:
       date_done:      {label: date done, aliases: [shipped_date, received_date, effective_date]}
       origin:         {label: source document, aliases: [so_number, po_number]}
       sale_id:        {label: sales order}
+    terms:
+      late_delivery:
+        predicate: >-
+          state NOT IN ('done', 'cancel') AND scheduled_date < CURRENT_TIMESTAMP
+        aliases: [late, overdue_delivery, behind_schedule, delayed]
+        description: a transfer not done by its scheduled date
 
   stock_picking_type:
     label: operation type
@@ -607,6 +720,33 @@ tables:
         label: payment status
         description: "not_paid, partial, in_payment, paid, reversed"
       invoice_origin:      {label: source document, aliases: [so_number, po_number]}
+    terms:
+      customer_invoice:
+        predicate: move_type = 'out_invoice' AND state = 'posted'
+        aliases: [sales_invoice, invoice_issued]
+        description: a posted invoice to a customer
+
+      vendor_bill:
+        predicate: move_type = 'in_invoice' AND state = 'posted'
+        aliases: [supplier_invoice, purchase_invoice, bill]
+        description: a posted bill from a vendor
+
+      credit_note:
+        predicate: move_type IN ('out_refund', 'in_refund') AND state = 'posted'
+        aliases: [refund, credit_memo]
+        description: a posted credit note
+
+      overdue:
+        predicate: >-
+          state = 'posted' AND payment_state IN ('not_paid', 'partial')
+          AND invoice_date_due < CURRENT_DATE
+        aliases: [past_due, late_payment, overdue_invoice, debtor]
+        description: posted, not fully paid, and past its due date
+
+      unpaid:
+        predicate: state = 'posted' AND payment_state IN ('not_paid', 'partial')
+        aliases: [outstanding, open_invoice, receivable, payable]
+        description: posted and not fully paid
 
   account_move_line:
     label: journal item
@@ -717,6 +857,11 @@ tables:
       mobile_phone: {label: work mobile}
       first_contract_date: {label: start date, aliases: [hire_date, joined, join_date, date_joined, joining_date, start_date, date_start, employment_start, commencement_date, date_contract_start, first_contract], description: "the date the employee joined - the ONLY joining / start date on hr_employee (there is no date_joined, hire_date or date_start column)"}
       current_version_id: {label: current employment details}
+    terms:
+      current_employee:
+        column: active
+        aliases: [active_employee, current_staff]
+        description: not archived
 
   hr_version:
     label: employment record
@@ -766,6 +911,11 @@ tables:
     columns:
       request_date_from: {label: from, aliases: [start_date]}
       request_date_to:   {label: to, aliases: [end_date, return_date]}
+    terms:
+      approved_leave:
+        predicate: state = 'validate'
+        aliases: [approved_time_off, booked_leave]
+        description: time off that has been approved
 
   hr_work_entry_type:
     label: time off type
@@ -866,6 +1016,11 @@ tables:
       working_hours_close: {label: working hours to close, description: "elapsed working time from creation until closed - not hours worked; never use it as actual or spent hours"}
       date_end:        {label: closed date, aliases: [date_done, completed_date, completion_date]}
       date_assign:     {label: assigned date}
+    terms:
+      task_done:
+        predicate: state = '1_done'
+        aliases: [completed_task, closed_task, finished]
+        description: a task marked done
 
   project_task_type:
     label: task stage
@@ -912,13 +1067,12 @@ relationships:
     to:   project_project(id)
 
 # ---------------------------------------------------------------------------
-# Terms: words that pick ROWS.
-# ---------------------------------------------------------------------------
 # Things this database doesn't record. A question naming one is answered
 # "not available" before any SQL is written - the model kept answering
 # timesheet questions from columns that only look similar
 # (working_hours_close, report_project_task_user). Each phrase matches when
 # all its words are in the question.
+# ---------------------------------------------------------------------------
 not_recorded:
   timesheets:
     aliases: [timesheet, billable hours, hours worked, worked hours,
@@ -926,183 +1080,3 @@ not_recorded:
               spent hours, actual hours, exceeded allocated hours,
               over allocated hours]
     description: the timesheet app isn't installed, so hours worked aren't recorded
-
-terms:
-  confirmed_sale:
-    table: sale_order
-    predicate: state = 'sale'
-    aliases: [confirmed_order, booked, won_order]
-    description: a confirmed sales order (not a quotation, not cancelled)
-
-  quotation:
-    table: sale_order
-    predicate: state IN ('draft', 'sent')
-    aliases: [open_quote, pending_quote, unconfirmed_order]
-    description: a quotation not yet confirmed
-
-  to_invoice:
-    table: sale_order
-    predicate: invoice_status = 'to invoice'
-    aliases: [uninvoiced, not_invoiced, awaiting_invoice]
-    description: delivered or ordered but not yet invoiced
-
-  not_delivered:
-    table: sale_order
-    predicate: state = 'sale' AND delivery_status IN ('pending', 'started', 'partial')
-    aliases: [undelivered, backorder, open_delivery, awaiting_delivery]
-    description: confirmed but not fully delivered
-
-  # A customer is any active top-level partner - a company, or a person
-  # who isn't a contact at a company (commercial_partner_id = itself) -
-  # whether or not they have ordered yet. Contact people aren't listed
-  # separately from their company. Our own companies
-  # (res_company.partner_id, e.g. "AU Company") are never customers or
-  # vendors. This includes vendors and prospects: Odoo has no reliable
-  # "is a customer" flag (customer_rank is often 0).
-  customer:
-    table: res_partner
-    predicate: >-
-      res_partner.commercial_partner_id = res_partner.id
-      AND res_partner.active
-      AND NOT EXISTS (SELECT 1 FROM res_company rc
-                      WHERE rc.partner_id = res_partner.id)
-    aliases: [client]
-    description: >-
-      any active top-level partner (a company, or a person who isn't a
-      contact at a company), not one of our own companies - whether or not
-      they have ordered. Only needed to LIST customers - to look one up by
-      name, filter on the name alone. Customers who have ordered: add
-      EXISTS a confirmed sale_order (state = 'sale') whose partner's
-      commercial_partner_id is the customer
-
-  vendor:
-    table: res_partner
-    predicate: >-
-      EXISTS (SELECT 1 FROM purchase_order po
-              JOIN res_partner op ON op.id = po.partner_id
-              WHERE op.commercial_partner_id = res_partner.id
-                AND po.state = 'purchase')
-      AND NOT EXISTS (SELECT 1 FROM res_company rc
-                      WHERE rc.partner_id = res_partner.id)
-    aliases: [supplier]
-    description: >-
-      a partner with a confirmed purchase order, not one of our own
-      companies (supplier_rank is often 0, so don't use it). Only needed to
-      LIST vendors - to look one up by name, filter on the name alone
-
-  customer_invoice:
-    table: account_move
-    predicate: move_type = 'out_invoice' AND state = 'posted'
-    aliases: [sales_invoice, invoice_issued]
-    description: a posted invoice to a customer
-
-  vendor_bill:
-    table: account_move
-    predicate: move_type = 'in_invoice' AND state = 'posted'
-    aliases: [supplier_invoice, purchase_invoice, bill]
-    description: a posted bill from a vendor
-
-  credit_note:
-    table: account_move
-    predicate: move_type IN ('out_refund', 'in_refund') AND state = 'posted'
-    aliases: [refund, credit_memo]
-    description: a posted credit note
-
-  overdue:
-    table: account_move
-    predicate: >-
-      state = 'posted' AND payment_state IN ('not_paid', 'partial')
-      AND invoice_date_due < CURRENT_DATE
-    aliases: [past_due, late_payment, overdue_invoice, debtor]
-    description: posted, not fully paid, and past its due date
-
-  unpaid:
-    table: account_move
-    predicate: state = 'posted' AND payment_state IN ('not_paid', 'partial')
-    aliases: [outstanding, open_invoice, receivable, payable]
-    description: posted and not fully paid
-
-  confirmed_purchase:
-    table: purchase_order
-    predicate: state = 'purchase'
-    aliases: [confirmed_po, approved_po]
-    description: a confirmed purchase order
-
-  open_rfq:
-    table: purchase_order
-    predicate: state IN ('draft', 'sent', 'to approve')
-    aliases: [rfq, pending_po, awaiting_approval]
-    description: a request for quotation not yet confirmed
-
-  not_received:
-    table: purchase_order
-    predicate: state = 'purchase' AND receipt_status IN ('pending', 'partial')
-    aliases: [awaiting_receipt, outstanding_po, on_order]
-    description: confirmed but not fully received
-
-  out_of_stock:
-    table: product_product
-    predicate: >-
-      NOT EXISTS (SELECT 1 FROM stock_quant q
-                  JOIN stock_location l ON l.id = q.location_id
-                  WHERE q.product_id = product_product.id
-                    AND l.usage = 'internal' AND q.quantity > 0)
-    aliases: [no_stock, sold_out, nil_stock, zero_stock, stock_out]
-    description: >-
-      no positive quantity in any internal location. Only meaningful for
-      products that track inventory (product_template.is_storable)
-
-  internal_stock:
-    table: stock_location
-    predicate: usage = 'internal'
-    aliases: [in_stock, on_hand, warehouse_stock]
-    description: a location that holds our own stock
-
-  late_delivery:
-    table: stock_picking
-    predicate: >-
-      state NOT IN ('done', 'cancel') AND scheduled_date < CURRENT_TIMESTAMP
-    aliases: [late, overdue_delivery, behind_schedule, delayed]
-    description: a transfer not done by its scheduled date
-
-  opportunity:
-    table: crm_lead
-    predicate: type = 'opportunity'
-    aliases: [deal, pipeline]
-    description: a qualified opportunity (not a raw lead)
-
-  won:
-    table: crm_lead
-    predicate: won_status = 'won'
-    aliases: [won_deal, closed_won]
-    description: an opportunity marked won
-
-  lost:
-    table: crm_lead
-    predicate: won_status = 'lost'
-    aliases: [lost_deal, lost_opportunity, closed_lost]
-    description: an opportunity marked lost (usually archived)
-
-  current_employee:
-    table: hr_employee
-    column: active
-    aliases: [active_employee, current_staff]
-    description: not archived
-
-  approved_leave:
-    table: hr_leave
-    predicate: state = 'validate'
-    aliases: [approved_time_off, booked_leave]
-    description: time off that has been approved
-
-  task_done:
-    table: project_task
-    predicate: state = '1_done'
-    aliases: [completed_task, closed_task, finished]
-    description: a task marked done
-
-  archived:
-    table: res_partner
-    predicate: active = false
-    aliases: [inactive, deleted]
-    description: archived (hidden in Odoo)

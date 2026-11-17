@@ -18,7 +18,10 @@
 #                  composite keys and cardinality.
 #   terms          Words that pick ROWS rather than a table or a column
 #                  ("terminated", "shipped late"): a boolean column (best,
-#                  usually from a view) or a SQL condition.
+#                  usually from a view) or a SQL condition. Defined in the
+#                  table's own block (tables: x: terms:). A name is unique
+#                  per table, so "late" can mean different rows on
+#                  different tables.
 #   domains        Domains of Discourse (see domains.py), with their role
 #                  and function-code vocabularies.
 #   fallback_tables  Tables used when a question names no table.
@@ -89,11 +92,27 @@ class ColumnSpec(_Strict):
     description: str | None = None
 
 
+class TableTermSpec(_Strict):
+    """A term inside a table's block: it picks rows of that table, so it
+    names no table of its own."""
+    column: str | None = None       # a boolean column, e.g. from a view
+    predicate: str | None = None    # a SQL condition on the table's columns
+    aliases: Words = []
+    description: str | None = None
+
+    @model_validator(mode="after")
+    def _one_definition(self):
+        if bool(self.column) == bool(self.predicate):
+            raise ValueError("give exactly one of 'column' or 'predicate'")
+        return self
+
+
 class TableSpec(_Strict):
     label: str | None = None
     aliases: Words = []
     description: str | None = None
     columns: dict[str, ColumnSpec] = {}
+    terms: dict[str, TableTermSpec] = {}
 
 
 _ENDPOINT = re.compile(r"^\s*([A-Za-z0-9_.$]+)\s*\(\s*([^()]+?)\s*\)\s*$")
@@ -128,20 +147,6 @@ class RelationshipSpec(_Strict):
         if len(from_cols) != len(to_cols):
             raise ValueError(
                 f"'{self.from_}' and '{self.to}' have different numbers of columns")
-        return self
-
-
-class TermSpec(_Strict):
-    table: str
-    column: str | None = None       # a boolean column, e.g. from a view
-    predicate: str | None = None    # a SQL condition on the table's columns
-    aliases: Words = []
-    description: str | None = None
-
-    @model_validator(mode="after")
-    def _one_definition(self):
-        if bool(self.column) == bool(self.predicate):
-            raise ValueError("give exactly one of 'column' or 'predicate'")
         return self
 
 
@@ -185,11 +190,22 @@ class SemanticFile(_Strict):
     fallback_tables: list[str] | None = None
     tables: dict[str, TableSpec] = {}
     relationships: list[RelationshipSpec] = []
-    terms: dict[str, TermSpec] = {}
     not_recorded: dict[str, NotRecordedSpec] = {}
     domains: dict[str, DomainSpec] = {}
     role_aliases: dict[str, Words] = {}
     function_aliases: dict[str, Words] = {}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_top_level_terms(cls, data):
+        # Terms used to be a top-level section with a table: key each.
+        # Say how to move them rather than just "extra inputs".
+        if isinstance(data, dict) and "terms" in data:
+            raise ValueError(
+                "top-level 'terms' is no longer supported: move each term "
+                "into its table's block (tables: <table>: terms: <name>:) "
+                "and drop its 'table:' key")
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +250,10 @@ class SemanticModel:
     fallback_tables: tuple = ()
     tables: dict = field(default_factory=dict)          # full name (lower) -> TableSpec
     relationships: list = field(default_factory=list)   # Relationship
-    terms: dict = field(default_factory=dict)           # name -> Term
+    # (full table name lower, term name) -> Term. A name is unique per
+    # table, not per model: "late" can mean different rows on orders and
+    # on stock_picking.
+    terms: dict = field(default_factory=dict)
     # name -> (phrases, description): things the database doesn't hold.
     not_recorded: dict = field(default_factory=dict)
     domains: dict = field(default_factory=dict)         # key -> dict (see domains.py)
@@ -328,6 +347,26 @@ def _set_once(target, key, value, where, what):
     target[key] = value
 
 
+def _add_term(terms, name, table, spec, where):
+    """Add a term to terms, keyed by (table, name). The same name on two
+    tables is fine; twice on one table stops startup (a table block can
+    only be defined in one file, so this is a safeguard)."""
+    term = Term(
+        name=name.strip().lower(),
+        table=full_table_name(table),
+        column=spec.column,
+        predicate=spec.predicate,
+        aliases=tuple(spec.aliases),
+        description=spec.description,
+    )
+    key = (term.table.lower(), term.name)
+    if key in terms:
+        raise SemanticModelError(
+            f"{where}: term '{term.name}' on table '{term.table}' is defined "
+            "more than once")
+    terms[key] = term
+
+
 def load_semantic_model(path=None):
     """
     Load the semantic model from a YAML file or a folder of YAML files.
@@ -392,6 +431,8 @@ def load_semantic_model(path=None):
 
         for name, spec in parsed.tables.items():
             _set_once(tables, full_table_name(name).lower(), spec, file, "table")
+            for term_name, term_spec in spec.terms.items():
+                _add_term(terms, term_name, name, term_spec, file)
 
         for spec in parsed.relationships:
             from_table, from_cols = parse_endpoint(spec.from_)
@@ -399,17 +440,6 @@ def load_semantic_model(path=None):
             model.relationships.append(Relationship(
                 from_table, from_cols, to_table, to_cols,
                 spec.cardinality, spec.description))
-
-        for name, spec in parsed.terms.items():
-            term = Term(
-                name=name.strip().lower(),
-                table=full_table_name(spec.table),
-                column=spec.column,
-                predicate=spec.predicate,
-                aliases=tuple(spec.aliases),
-                description=spec.description,
-            )
-            _set_once(terms, term.name, term, file, "term")
 
         for name, spec in parsed.not_recorded.items():
             phrases = (name.strip().lower(),) + tuple(_words(spec.aliases))

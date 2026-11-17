@@ -196,6 +196,16 @@ tables:
       nationalidnumber: {label: national id number, aliases: [ssn, tax_file_number]}
       loginid:        {label: login id, aliases: [username, network_login]}
       organizationnode: {label: organization node, aliases: [org_chart, reports_to, manager]}
+    terms:
+      current_employee:
+        column: currentflag
+        aliases: [active_employee, current_staff]
+        description: still employed
+
+      salaried:
+        column: salariedflag
+        aliases: [salaried_staff, exempt]
+        description: salaried rather than hourly
 
   humanresources.department:
     label: department
@@ -212,6 +222,11 @@ tables:
     columns:
       startdate: {label: start date}
       enddate:   {label: end date}
+    terms:
+      current_department:
+        predicate: enddate IS NULL
+        aliases: [current_assignment, works_in]
+        description: the employee's present department and shift
 
   humanresources.employeepayhistory:
     label: employee pay history
@@ -266,6 +281,21 @@ tables:
       sellstartdate:     {label: sell start date, aliases: [launch_date]}
       sellenddate:       {label: sell end date}
       discontinueddate:  {label: discontinued date}
+    terms:
+      discontinued:
+        predicate: sellenddate IS NOT NULL
+        aliases: [no_longer_sold, retired_product, end_of_life]
+        description: no longer for sale
+
+      salable:
+        column: finishedgoodsflag
+        aliases: [saleable, finished_good, for_sale]
+        description: a finished product that is sold, not a part
+
+      manufactured:
+        column: makeflag
+        aliases: [made_in_house, make_item, built_in_house]
+        description: made by AdventureWorks rather than bought in
 
   production.productcategory:
     label: product category
@@ -361,6 +391,16 @@ tables:
       enddate:       {label: end date, aliases: [completed]}
       duedate:       {label: due date}
       scrapreasonid: {label: scrap reason id}
+    terms:
+      scrapped:
+        predicate: scrappedqty > 0
+        aliases: [scrap, rejected_units, quality_failure]
+        description: work orders where some units failed inspection
+
+      work_order_late:
+        predicate: enddate > duedate
+        aliases: [late_work_order, overdue_build, behind_schedule]
+        description: finished after its due date
 
   production.workorderrouting:
     label: work order routing
@@ -407,6 +447,16 @@ tables:
       preferredvendorstatus: {label: preferred vendor status}
       activeflag:     {label: active flag}
       purchasingwebserviceurl: {label: purchasing web service url, aliases: [website]}
+    terms:
+      preferred_vendor:
+        column: preferredvendorstatus
+        aliases: [preferred_supplier]
+        description: preferred over other vendors for the same product
+
+      active_vendor:
+        column: activeflag
+        aliases: [active_supplier, current_vendor]
+        description: still used
 
   purchasing.productvendor:
     label: product vendor
@@ -438,6 +488,16 @@ tables:
       vendorid:   {label: vendor id, aliases: [supplier]}
       employeeid: {label: employee id, aliases: [buyer, purchaser]}
       shipmethodid: {label: ship method id}
+    terms:
+      pending_purchase_order:
+        predicate: status = 1
+        aliases: [awaiting_approval, unapproved_po, pending_po]
+        description: not yet approved
+
+      rejected_purchase_order:
+        predicate: status = 3
+        aliases: [rejected_po]
+        description: rejected by the approver
 
   purchasing.purchaseorderdetail:
     label: purchase order line
@@ -496,6 +556,21 @@ tables:
       creditcardid: {label: credit card id}
       creditcardapprovalcode: {label: credit card approval code}
       currencyrateid: {label: currency rate id}
+    terms:
+      online_order:
+        column: onlineorderflag
+        aliases: [online, internet_sale, web_order, direct_to_consumer]
+        description: placed online by an individual customer
+
+      reseller_order:
+        predicate: onlineorderflag = false
+        aliases: [reseller_sale, store_order, wholesale, channel_sale]
+        description: placed by a salesperson on behalf of a store
+
+      shipped_late:
+        predicate: shipdate > duedate
+        aliases: [late, late_shipment, late_delivery, delayed]
+        description: shipped after the due date
 
   sales.salesorderdetail:
     label: sales order line
@@ -527,6 +602,11 @@ tables:
       personid:    {label: person id}
       storeid:     {label: store id}
       territoryid: {label: territory id}
+    terms:
+      individual_customer:
+        predicate: storeid IS NULL
+        aliases: [retail_customer, consumer, end_customer]
+        description: a person buying for themselves, not a store
 
   sales.store:
     label: store
@@ -714,103 +794,3 @@ not_recorded:
     description: >-
       where a product is manufactured isn't recorded (makeflag only says
       whether it is made in-house)
-
-# ---------------------------------------------------------------------------
-# Terms: words that pick ROWS.
-# ---------------------------------------------------------------------------
-terms:
-  online_order:
-    table: sales.salesorderheader
-    column: onlineorderflag
-    aliases: [online, internet_sale, web_order, direct_to_consumer]
-    description: placed online by an individual customer
-
-  reseller_order:
-    table: sales.salesorderheader
-    predicate: onlineorderflag = false
-    aliases: [reseller_sale, store_order, wholesale, channel_sale]
-    description: placed by a salesperson on behalf of a store
-
-  shipped_late:
-    table: sales.salesorderheader
-    predicate: shipdate > duedate
-    aliases: [late, late_shipment, late_delivery, delayed]
-    description: shipped after the due date
-
-  individual_customer:
-    table: sales.customer
-    predicate: storeid IS NULL
-    aliases: [retail_customer, consumer, end_customer]
-    description: a person buying for themselves, not a store
-
-  current_employee:
-    table: humanresources.employee
-    column: currentflag
-    aliases: [active_employee, current_staff]
-    description: still employed
-
-  salaried:
-    table: humanresources.employee
-    column: salariedflag
-    aliases: [salaried_staff, exempt]
-    description: salaried rather than hourly
-
-  current_department:
-    table: humanresources.employeedepartmenthistory
-    predicate: enddate IS NULL
-    aliases: [current_assignment, works_in]
-    description: the employee's present department and shift
-
-  discontinued:
-    table: production.product
-    predicate: sellenddate IS NOT NULL
-    aliases: [no_longer_sold, retired_product, end_of_life]
-    description: no longer for sale
-
-  salable:
-    table: production.product
-    column: finishedgoodsflag
-    aliases: [saleable, finished_good, for_sale]
-    description: a finished product that is sold, not a part
-
-  manufactured:
-    table: production.product
-    column: makeflag
-    aliases: [made_in_house, make_item, built_in_house]
-    description: made by AdventureWorks rather than bought in
-
-  scrapped:
-    table: production.workorder
-    predicate: scrappedqty > 0
-    aliases: [scrap, rejected_units, quality_failure]
-    description: work orders where some units failed inspection
-
-  work_order_late:
-    table: production.workorder
-    predicate: enddate > duedate
-    aliases: [late_work_order, overdue_build, behind_schedule]
-    description: finished after its due date
-
-  preferred_vendor:
-    table: purchasing.vendor
-    column: preferredvendorstatus
-    aliases: [preferred_supplier]
-    description: preferred over other vendors for the same product
-
-  active_vendor:
-    table: purchasing.vendor
-    column: activeflag
-    aliases: [active_supplier, current_vendor]
-    description: still used
-
-  pending_purchase_order:
-    table: purchasing.purchaseorderheader
-    predicate: status = 1
-    aliases: [awaiting_approval, unapproved_po, pending_po]
-    description: not yet approved
-
-  rejected_purchase_order:
-    table: purchasing.purchaseorderheader
-    predicate: status = 3
-    aliases: [rejected_po]
-    description: rejected by the approver
