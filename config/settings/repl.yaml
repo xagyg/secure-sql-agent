@@ -7,3 +7,10 @@
 # databases.yaml [SQLAGENT_ROLES, comma-separated].
 
 user: brad
+
+# With -noExplain / --no-explain the rows are shown as a table instead of
+# the LLM's explanation: at most table_rows rows (then "... N more
+# row(s)"), each value cut to table_value_chars characters. A query never
+# returns more than query.yaml max_rows rows.
+table_rows: 20
+table_value_chars: 40

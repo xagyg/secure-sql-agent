@@ -315,6 +315,10 @@ class RetrievalSettings(_Strict):
 
 class ReplSettings(_Strict):
     user: str = Field("local", min_length=1)
+    # The table shown instead of the LLM's explanation (--no-explain): at
+    # most table_rows rows, each value cut to table_value_chars.
+    table_rows: int = Field(20, ge=1, le=10_000)
+    table_value_chars: int = Field(40, ge=8, le=1000)
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from unittest import mock
 from sqlagent import agent
 from sqlagent.adaptive.history import format_results_table
 from sqlagent.controls.security_context import SecurityContext
+from sqlagent.settings import load_settings
 from tests.fixtures import make_catalog
 
 
@@ -98,6 +99,29 @@ class Table(unittest.TestCase):
 
     def test_empty(self):
         self.assertEqual(format_results_table([]), "(no rows)")
+
+
+class TableSettings(unittest.TestCase):
+
+    MANY = [{"company_name": f"Company {i}", "country": "Germany"}
+            for i in range(30)]
+
+    def test_shipped_defaults(self):
+        repl = load_settings(environ={}).repl
+        self.assertEqual((repl.table_rows, repl.table_value_chars), (20, 40))
+
+    def test_answer_shows_table_rows(self):
+        with mock.patch.object(agent, "TABLE_ROWS", 5):
+            result, *_ = run(self.MANY, explain=False)
+        self.assertIn("Company 4 ", result["answer"])
+        self.assertNotIn("Company 5 ", result["answer"])
+        self.assertIn("... 25 more row(s)", result["answer"])
+
+    def test_answer_cuts_values_at_table_value_chars(self):
+        rows = [{"company_name": "x" * 100, "country": "Germany"}]
+        with mock.patch.object(agent, "TABLE_VALUE_CHARS", 10):
+            result, *_ = run(rows, explain=False)
+        self.assertNotIn("x" * 11, result["answer"])
 
 
 if __name__ == "__main__":
