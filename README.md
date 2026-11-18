@@ -83,6 +83,7 @@ sqlagent/
 tools/                       check a database end to end; probe a SQL Server
 docs/
   row-level-security.md      row-level security and large scopes in full
+  setup/                     setting up the other sample databases (AdventureWorks)
   examples/closure-table/    large teams as one value: SQL and example policies
 tests/                       unit tests (no database or model needed)
   questions/                 question files for batch runs (run.ps1 -questions)
@@ -128,6 +129,7 @@ tests/                       unit tests (no database or model needed)
 | `tools/check_row_scope.py` | Shows each local identity's grants and visible rows; checks every query shape is filtered alike |
 | `tests/` | Unit tests; `tests/fixtures.py` holds a static Northwind schema |
 | `tests/questions/` | Question files for batch runs against each database (`run.ps1 -questions`) |
+| `docs/setup/` | Setup guides for the other sample databases (AdventureWorks) |
 | `docs/row-level-security.md` | Row-level security in full: scopes, grants, enforcement, local identities, large scopes |
 
 ---
@@ -167,23 +169,27 @@ ollama pull qwen3-coder
 
 The agent should run against a disposable copy of the Northwind sample database.
 
-Create a dedicated read-only role and grant it `SELECT` only on the tables the demo uses:
+The `northwind` configuration expects the snake_case PostgreSQL port of Northwind: [`northwind.sql`](https://github.com/pthom/northwind_psql/blob/master/northwind.sql) from pthom/northwind_psql (14 tables, with foreign keys and the original employees, which the local identities and row scopes rely on). Other Northwind ports rename tables, columns or people and won't match the configuration. The script doesn't create the database, so create it first:
+
+```powershell
+psql -U postgres -c "CREATE DATABASE northwind;"
+psql -U postgres -d northwind -f northwind.sql
+```
+
+Create a dedicated read-only role and grant it `SELECT` on the Northwind tables. The public demo's role uses eight of them; the REPL roles and the row-level security scopes also read the territory, region and demographics tables, so grant the whole schema:
 
 ```sql
 CREATE ROLE sqlagent_ro LOGIN PASSWORD '...';
 GRANT CONNECT ON DATABASE northwind TO sqlagent_ro;
 GRANT USAGE ON SCHEMA public TO sqlagent_ro;
-GRANT SELECT ON public.customers, public.orders, public.order_details,
-                public.products, public.categories, public.suppliers,
-                public.employees, public.shippers
-  TO sqlagent_ro;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO sqlagent_ro;
 ```
 
 **Do not run this against a database containing real people's information.**
 
 ### SQL Server
 
-The original SQL Server Northwind (`dbo` schema, PascalCase names, `[Order Details]`) is configured as `northwind_mssql`, with its own `config/databases/northwind_mssql/` security policy, semantic model and identity.
+The original SQL Server Northwind (`dbo` schema, PascalCase names, `[Order Details]`) is configured as `northwind_mssql`, with its own `config/databases/northwind_mssql/` security policy, semantic model and identity. Microsoft's script, [`instnwnd.sql`](https://github.com/microsoft/sql-server-samples/blob/master/samples/databases/northwind-pubs/instnwnd.sql), creates the `Northwind` database and loads its data; run it in SSMS or with `sqlcmd -S localhost -E -i instnwnd.sql`.
 
 SQL Server has no read-only session, so **the login's permissions are the database's own boundary**. Use a dedicated SQL login whose database user is in `db_datareader` only: no `db_datawriter`, no `EXECUTE`, no DDL, and never `db_owner` or `sysadmin`. A Windows login (`Trusted_Connection`) would run every generated query with your own rights. The server must allow SQL logins: in SSMS, server Properties → Security → *SQL Server and Windows Authentication mode*, then restart the service.
 
@@ -208,6 +214,14 @@ How it differs from PostgreSQL:
 * **Column tracing** for the result policy uses `sp_describe_first_result_set` (browse mode 2): aliases, joins and derived tables are traced to their table; a view is its own source, as on PostgreSQL.
 * **Extra structural blocks** (both engines): database- or server-qualified names (`OtherDb.dbo.Customers`), functions used as tables (`OPENROWSET`, `OPENQUERY`, `OPENDATASOURCE`, table-valued functions) and `NEXT VALUE FOR`. Keep *Ad Hoc Distributed Queries* and `xp_cmdshell` turned off on the server as well.
 * The model is told SQL Server's syntax (`TOP`, square brackets, `GETDATE()`), and names that need brackets are shown to it bracketed (`dbo.[Order Details]`).
+
+### Other databases
+
+| Database | Setup |
+| -------- | ----- |
+| AdventureWorks (PostgreSQL) | [docs/setup/adventureworks.md](docs/setup/adventureworks.md): loading it, its schemas, the read-only grants, roles and local identities |
+
+To add a database of your own, see [Switching databases](#switching-databases).
 
 ---
 
