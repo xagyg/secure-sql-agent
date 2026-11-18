@@ -4,7 +4,7 @@ A research prototype of a conversational AI that answers natural-language questi
 
 A local LLM (served by Ollama) turns each question into SQL. That SQL is then checked structurally, authorised against the user's identity-based access rules, rewritten and limited before it reaches the database, and filtered again before the results go back to the model to be explained. The model never decides what is allowed; deterministic code does.
 
-The demo runs against a PostgreSQL copy of the **Northwind** sample database.
+The demo runs against a PostgreSQL copy of the **Northwind** sample database. The same code is also configured for Northwind on SQL Server, AdventureWorks and an Odoo ERP database (see [Switching databases](#switching-databases)).
 
 > Copyright (c) 2026 Brad Long
 
@@ -42,7 +42,7 @@ Each layer, and the file that implements it:
 | Schema scoping       | `adaptive/schema_catalog.py`             | The model only sees authorised tables and non-denied columns; semantic labels, relationships and terms are applied only to what the role can see                |
 | Structural safety    | `controls/sql_policy.py`                 | Parses SQL into an AST; allows exactly one `SELECT`/`UNION`; rejects nested `INSERT`/`UPDATE`/`DELETE`/DDL, `SELECT INTO` and `FOR UPDATE` anywhere in the tree |
 | Authorisation        | `controls/sql_policy.py`, `controls/security_utils.py` | Table and column checks against the caller's `SecurityContext`                                                                                                  |
-| Row scope            | `controls/row_scope.py`                  | Which rows: each scoped table is replaced by a filtered version of itself just before execution, then verified; the LLM never sees the filters |
+| Row scope            | `controls/row_scope.py`                  | Which rows: each scoped table is replaced by a filtered version of itself just before execution, then verified; the LLM never sees the filters ([details](docs/row-level-security.md)) |
 | Rewriting and limits | `controls/sql_policy.py`                 | Expands `SELECT *`, strips denied columns, enforces a row limit                                                                                                 |
 | Final execution gate | `execution/sql_execution.py`             | Re-runs the structural check immediately before execution                                                                                                       |
 | Database             | PostgreSQL                               | Least-privilege `SELECT`-only role, `readonly` transaction, `statement_timeout` (10s default)                                                                   |
@@ -63,7 +63,7 @@ config/
     databases.yaml           which databases exist: engine, connection, roles
     llm.yaml, api.yaml, query.yaml, retrieval.yaml, repl.yaml
   databases/                 one folder per database, named as in databases.yaml
-    northwind/               PostgreSQL Northwind (also northwind_mssql/, adventureworks/)
+    northwind/               PostgreSQL Northwind (also northwind_mssql/, adventureworks/, odoo/)
       security.yaml          who may see what (roles, tables, columns, row scopes, grants)
       identity.yaml          how the agent talks about it (name, examples)
       semantic/
@@ -72,6 +72,7 @@ config/
   idp/                       demo only: local stand-ins for sign-in, one file per organisation
     northwind.yaml           Northwind's people, used by northwind and northwind_mssql
     adventureworks.yaml      AdventureWorks' people (who sees which tables; no row scope yet)
+    odoo.yaml                Odoo's people
 sqlagent/
   agent.py                   run_agent(): orchestrates the question -> answer pipeline
   settings.py, databases.py  load and validate the configuration
@@ -80,8 +81,11 @@ sqlagent/
   execution/                 Execution layer: controlled, read-only execution
     engines/                 what is specific to PostgreSQL / SQL Server
 tools/                       check a database end to end; probe a SQL Server
-docs/examples/closure-table/ large teams as one value: SQL and example policies
+docs/
+  row-level-security.md      row-level security and large scopes in full
+  examples/closure-table/    large teams as one value: SQL and example policies
 tests/                       unit tests (no database or model needed)
+  questions/                 question files for batch runs (run.ps1 -questions)
 ```
 
 | File | Purpose |
@@ -101,6 +105,7 @@ tests/                       unit tests (no database or model needed)
 | `sqlagent/settings.py` | Loads and validates `config/settings/*.yaml`, with environment overrides (fails closed) |
 | `sqlagent/databases.py` | Loads `config/settings/databases.yaml` and picks the active database (fails closed) |
 | `sqlagent/config_files.py` | Shared YAML loading (rejects duplicate keys) |
+| `sqlagent/adaptive/history.py` | Conversation history: the earlier turns sent with a follow-up question |
 | `sqlagent/adaptive/llm.py` | Ollama client, prompts for SQL generation, correction and explanation |
 | `sqlagent/adaptive/schema_catalog.py` | Reads the schema at startup and picks the relevant tables for each question |
 | `sqlagent/adaptive/semantic_model.py` | Loads and validates the semantic model |
@@ -117,11 +122,13 @@ tests/                       unit tests (no database or model needed)
 | `sqlagent/identities.py` | Loads the demo's local identities (stand-ins for sign-in) |
 | `sqlagent/execution/sql_execution.py` | Database connection and the final execution gate |
 | `sqlagent/execution/sql_diagnostics.py` | Diagnoses SQL errors to guide the correction attempt |
-| `sqlagent/execution/engines/` | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`postgres.py`, `sqlserver.py`) |
+| `sqlagent/execution/engines/` | Everything specific to a database product: driver, catalog queries, read-only and timeout guards, column tracing, error handling (`base.py`, `postgres.py`, `sqlserver.py`) |
 | `tools/check_engine.py` | Checks a configured database end to end without the LLM (PASS/FAIL per check) |
 | `tools/probe_sqlserver.py` | Read-only probe of a SQL Server: driver, login rights, catalog, column tracing, errors |
 | `tools/check_row_scope.py` | Shows each local identity's grants and visible rows; checks every query shape is filtered alike |
 | `tests/` | Unit tests; `tests/fixtures.py` holds a static Northwind schema |
+| `tests/questions/` | Question files for batch runs against each database (`run.ps1 -questions`) |
+| `docs/row-level-security.md` | Row-level security in full: scopes, grants, enforcement, local identities, large scopes |
 
 ---
 
@@ -206,9 +213,9 @@ How it differs from PostgreSQL:
 
 ## Running locally
 
-The `run.ps1` script sets up the local Ollama and PostgreSQL configuration and provides two ways to run the agent. It assumes Ollama is already running (for example, the Windows tray app).
+The `run.ps1` script picks the database (`-db`), supplies its password from the environment or a prompt, and runs the agent as the API, the interactive REPL (`-local`) or a batch of questions (`-questions`). All other settings come from `config/settings/`. It assumes Ollama is already running (for example, the Windows tray app).
 
-To have Ollama started for you with the recommended server settings, use `run_with_ollama.ps1` in place of `run.ps1`. It takes the same `-local` switch. It **shuts down any Ollama that is already running** first; see [Ollama server settings](#ollama-server-settings).
+To have Ollama started for you with the recommended server settings, use `run_with_ollama.ps1` in place of `run.ps1`. It takes the same `-local`, `-db` and `-identity` parameters. It **shuts down any Ollama that is already running** first; see [Ollama server settings](#ollama-server-settings).
 
 ### Interactive REPL
 
@@ -230,7 +237,16 @@ For example:
 > Show me the orders for customer ALFKI.
 ```
 
-The REPL builds its `SecurityContext` from the active database's `repl_roles` (the `sales` role in `config/databases/northwind/security.yaml` for Northwind; set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly.
+The REPL builds its `SecurityContext` from the active database's `repl_roles` (the `sales` role in `config/databases/northwind/security.yaml` for Northwind; set `SQLAGENT_ROLES` to use other roles) and is useful for testing the agent and its security controls directly. To run as one of the demo's local identities, with its groups and row scope, add `-identity` (for example `.\run.ps1 -local -identity steven`; see [Row-level security](docs/row-level-security.md#8-local-identities-demo-environment)). Add `-noExplain` to see the rows as a table instead of the model's explanation.
+
+### Batch questions
+
+`-questions` runs a file of questions (one per line) and exits, writing the results to an `outputs` folder next to the file, or to `-out`. Lines starting with `#` are skipped and a line of `---` starts a new conversation. `-qn` runs only some questions by number, and `-db`, `-identity` and `-noExplain` apply as usual:
+
+```powershell
+.\run.ps1 -questions tests\questions\northwind-full.txt
+.\run.ps1 -questions tests\questions\odoo.txt -db odoo -qn 1-10 -noExplain
+```
 
 ### Test the security controls
 
@@ -245,7 +261,7 @@ Update the customer names.
 Show me all columns for every customer.
 ```
 
-The important property is that the model does **not** enforce the security boundary. Generated SQL is parsed, authorised and rewritten by deterministic code before it can reach PostgreSQL.
+The important property is that the model does **not** enforce the security boundary. Generated SQL is parsed, authorised and rewritten by deterministic code before it can reach the database.
 
 ### Unit tests
 
@@ -361,11 +377,11 @@ Every anonymous visitor gets the same fixed, narrow context: the `demo` role in 
 config/
   settings/            how the agent runs
     databases.yaml       which databases exist and how to reach them
-    llm.yaml             Ollama host and model, timeouts, conversation history
+    llm.yaml             Ollama host and model, timeouts, conversation history, explanation limits, model options
     api.yaml             public demo API: CORS, proxy hops, rate limits, concurrency, timeouts
-    query.yaml           limits on every generated query: statement timeout, max rows, max result bytes, max row-scope values
-    retrieval.yaml       which authorised tables are shown to the LLM per question
-    repl.yaml            local REPL user
+    query.yaml           limits on every generated query: statement timeout, max rows, max result bytes, max row-scope values, column check
+    retrieval.yaml       which authorised tables are shown to the LLM per question: table matching, typo correction, domain routing, relationship walk, schema text
+    repl.yaml            local REPL user, -noExplain table size
   databases/           one folder per database, named as in databases.yaml
     northwind/
       security.yaml        who may see what
@@ -373,9 +389,11 @@ config/
       identity.yaml        how the agent talks about it
     northwind_mssql/
     adventureworks/
+    odoo/
   idp/                 demo only: local stand-ins for sign-in, one file per organisation
     northwind.yaml       Northwind's people (both Northwind databases use it)
     adventureworks.yaml  AdventureWorks' people
+    odoo.yaml            Odoo's people
 ```
 
 Each file documents its own keys. The settings files are loaded once at startup by `sqlagent/settings.py` and validated: an unknown key, a value out of range (e.g. `max_rows: 0`), weights that don't add up to 1, or a statement timeout that isn't below the API timeout stops startup. The `[settings]` startup line shows the folder in use and any environment overrides.
@@ -417,8 +435,8 @@ databases:
 
 By convention the name also finds the database's own files in `config/databases/<name>/`; set `security_file`, `semantic_path` or `identity_file` to use other locations:
 
-| File | |
-| ---- | - |
+| File | Contents |
+| ---- | -------- |
 | `security.yaml` (required) | who may see what |
 | `semantic/` (optional) | what the data means |
 | `identity.yaml` (optional) | how the agent talks about the database |
@@ -454,7 +472,7 @@ sql_examples:
     sql: SELECT COUNT(*) FROM customers
 ```
 
-Pick a database with `-db`, or set it once as a user variable:
+The shipped `databases.yaml` defines `northwind` (the default), `northwind_mssql`, `adventureworks` and `odoo`. Pick one with `-db`, or set it once as a user variable:
 
 ```powershell
 .\run.ps1 -local -db adventureworks
@@ -560,62 +578,26 @@ group_roles:                       # identity-provider group -> roles
 
 ### Row-level security (`scopes` and `group_grants`)
 
-Roles decide which tables and columns; **scopes** decide which rows. A **grant** pairs a role with a scope, and identity-provider groups hand out grants, so one `sales_manager` role serves a VP (all rows), a regional manager (a region) and a team lead (their team) without copies of the role. The design is written up in *Metadata-driven row-level authorisation for the Secure SQL Agent*.
+Roles decide which tables and columns; **scopes** decide which rows. A **grant** pairs a role with a scope, and identity-provider groups hand out grants, so one `sales_manager` role serves a VP (all rows), a regional manager (a region) and a team lead (their team) without copies of the role.
 
 ```yaml
-roles:
-  sales_manager:
-    extends: sales               # the same tables and hidden columns as sales
-    scope: required              # every grant must say which rows
-
 scopes:
   salesperson:
     user_attribute: employee_id  # from sign-in
     hierarchy: {table: employees, key: employee_id, parent: reports_to}
     tables:
       orders:        {column: employee_id}
-      order_details: {via: orders}         # join from the foreign key
-      customers:     {via: orders}
+      order_details: {via: orders}
       products:      unscoped
 
 group_grants:
   Sales-National: [{role: sales_manager, scope: unrestricted}]
-  Sales-Eastern:  [{role: sales_manager, scope: {region: [1]}}]
   Sales-Team:     [{role: sales_manager, scope: {salesperson: team}}]
 ```
 
-* **How a scope applies to each table:** `column` (the table carries it), `via` (in scope when a related row is: an order line follows its order, a customer is in scope when they have an order in scope; chains are followed) or `unscoped` (reference data). Every table a scoped role allows needs a rule; a missing one stops sign-in for anyone granted that scope, so a table added to a role later can't come back unfiltered. A scope can say `default: unscoped` instead, and then lists only the tables it filters: every other table gets all its rows, and sign-in prints which tables that covers (`[security] scope salesperson: unscoped by default for role sales_manager: public.categories, ...`). With the default, list a table that needs filtering before adding it to a role.
-* **Via joins:** by default a `via` rule joins on the database's foreign key between the two tables, in either direction, and startup prints each join it takes (`[security] scope region: public.orders via public.employees on employee_id = employee_id (foreign key)`). Where there's no foreign key, or more than one (an order with both `customer_id` and `billing_customer_id`), startup stops and asks for an explicit `join: {this_column: that_column}`; it never guesses. An explicit `join` always wins. The key is `join`, not `on`: YAML reads an unquoted `on` as `true`.
-* **Values:** a fixed list, `unrestricted`, or relative to the user: `self`, `team` (the user and everyone below them in the `hierarchy`) or `reports` (only those below). Relative values resolve at sign-in from the user's attribute, so a team follows the org chart.
-* **Several grants:** each is evaluated on its own and a row is visible under any of them; `unrestricted` must be said explicitly; a scope that resolves to nothing gives no rows. If grants see different rows of a table, a column on it is shown only if every one of them shows it.
-* **Enforcement:** just before execution every reference to a scoped table becomes `(SELECT * FROM <table> AS _t WHERE <filter>) AS <alias>`, so joins, outer joins, subqueries, CTEs and each branch of a `UNION` read only permitted rows. The final SQL is re-parsed and every scoped table must sit inside its exact filter, or the query is blocked. The correction and explanation steps, and the conversation history, keep the SQL as the model wrote it, so entitlements never reach a prompt.
-* **Startup log:** each user's grants and each table's row filter are printed, like the resolved tables.
-* **Local identities (demo only).** In a deployment the identity provider supplies each user's groups and attributes. The demo has no sign-in, so `config/idp/` holds one file per organisation, as an identity provider would, naming a few people to test as, and `.\run.ps1 -local -identity steven` signs in as one. A database picks its organisation's file with `idp:` in `databases.yaml` (default: its own name), so `northwind` and `northwind_mssql` share `config/idp/northwind.yaml`. A leftover `identities.yaml` beside a security policy stops startup, so a stale copy can't be edited by mistake. The API never reads any of it. Northwind's identities are its own employees: `andrew` (VP Sales, all rows), `steven` (his team), `nancy` (her own orders), `eastern` (a region), `steven_and_eastern` (two grants) and `no_employee` (sees no team rows).
-* **Checking it:** `tools\check_row_scope.py --db <name>` shows, per identity, the grants and how many rows of each table are visible, and checks that every query shape (subquery, CTE, `UNION`, scalar subquery, self-join) gives the same count. The rewrite was also proved against hand-written ground-truth views on PostgreSQL: 6 identities × 23 query shapes, identical results, and deliberately removing one filter was caught.
+The filters are applied to the SQL just before execution and verified, never left to the model, and a table with no rule fails closed. Large hierarchies can be resolved by the database through a closure table instead of long value lists.
 
-#### Large scopes
-
-Scope values are written into the query: `team` for a manager of four becomes `employee_id IN (5, 6, 7, 9)`, once per scoped table the query reads. That's fine for a team, but not for a senior manager whose team is thousands of people: long lists are slow to plan, fill SQL Server's plan cache with one-off plans, and very long ones fail outright (error 8623). So `max_scope_values` in `config/settings/query.yaml` (default 1000) caps how many values one dimension may resolve to for one user. Over it, that user's access isn't built and the error names the user, role and scope. It never falls back to the long list, or to no filter.
-
-For a large hierarchy, have the database resolve the list instead of the query text: a **closure table** with one row per manager and each person below them, at any depth (including each person as their own manager, so `self` covers the team). It's maintained by the HR feed or a nightly job, and the grant uses `self`, so the query carries one value however big the team:
-
-```yaml
-salesperson:
-  user_attribute: employee_id
-  tables:
-    hr.employee_hierarchy: {column: manager_id}                            # self -> one value
-    hr.employees:          {via: hr.employee_hierarchy, join: {employee_id: employee_id}}
-    sales.orders:          {via: hr.employees}
-```
-
-```sql
--- the filter on sales.orders for employee 5
-EXISTS (SELECT 1 FROM hr.employees AS _s1 WHERE _s1.employee_id = _t.employee_id
-        AND EXISTS (SELECT 1 FROM hr.employee_hierarchy AS _s2
-                    WHERE _s2.employee_id = _s1.employee_id AND _s2.manager_id IN (5)))
-```
-
-The closure table has two foreign keys to the employees table (`manager_id` and `employee_id`), so the `join` must be given; without it startup stops rather than guess. A complete, runnable Northwind example - the SQL to create and refresh the table on PostgreSQL and SQL Server, and a full policy for each - is in [`docs/examples/closure-table/`](docs/examples/closure-table/README.md). On a copy of Northwind, this version gave the same rows as the `team` version for every identity and all 23 query shapes. The same pattern works for anything that isn't a hierarchy: an **entitlements table** (`user_regions(user_id, region_id)`, maintained by the access-management process), granted as `self` via that table, turns access changes into data changes rather than YAML edits.
+See **[Row-level security](docs/row-level-security.md)** for the full guide: scope rules, `via` joins, scope values, multiple grants, enforcement, the demo's local identities (`.\run.ps1 -local -identity steven`), testing with `tools/check_row_scope.py`, and large scopes.
 
 ### Semantic model (`config/databases/<database>/semantic/`)
 
@@ -634,18 +616,24 @@ tables:
     columns:
       cm_cr_lim: {label: credit_limit, aliases: [credit]}
 
+  semantic.employees_v:
+    terms:                         # words that pick rows of this table
+      terminated:
+        column: is_terminated      # best: the rule lives in a view
+
+  public.orders:
+    terms:
+      shipped_late:
+        predicate: shipped_date > required_date
+        aliases: [late, delayed]
+        description: shipped after the date the customer required
+
 relationships:                     # joins the database doesn't declare
   - from: erp.so_line(company_id, order_no)
     to:   erp.so_hdr(company_id, order_no)
     cardinality: many_to_one
 
-terms:                             # words that pick rows
-  terminated:
-    table: semantic.employees_v
-    column: is_terminated          # best: the rule lives in a view
-  shipped_late:
-    table: public.orders
-    predicate: shipped_date > required_date
+fallback_tables: [customers, orders, products]   # when a question names no table
 ```
 
 | Concept | Picks | Example |
@@ -656,7 +644,8 @@ terms:                             # words that pick rows
 
 * **Labels** are shown to the model next to the physical name (`TABLE erp.cust_mst  -- customers`); the model still has to write the real name, which the SQL policy checks.
 * **Relationships** from the database and from the file are merged. Composite keys are supported, and declared ones show their cardinality to the model. A relationship is used only when both tables and all its columns are visible to the role.
-* **Terms** are shown to the model in a `TERMS` section and point routing at their table. A predicate may use the table's own columns and `EXISTS` / `NOT EXISTS` subqueries on tables the role can see (no other subqueries), and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
+* **Terms** are defined in their table's block (`tables: <table>: terms:`); a top-level `terms:` key is rejected at startup. A term name is unique per table, so the same word ("late") can mean different rows on different tables. Terms are shown to the model in a `TERMS` section and point routing at their table. A predicate may use the table's own columns and `EXISTS` / `NOT EXISTS` subqueries on tables the role can see (no other subqueries), and is guidance for the model, not injected into the SQL, so "employees who are *not* terminated" still works. For a rule that must always be right, put it in a view (`WITH (security_invoker = true)`) and use a column term.
+* **Other keys:** `fallback_tables` (used when a question names no table), `not_recorded` (phrases for things the database doesn't hold), `domains`, `role_aliases` and `function_aliases` (see below), and `retrieval`, which overrides `config/settings/retrieval.yaml` for this database (Odoo uses it).
 * **Loading.** A structural error (unknown key, wrong type, a name defined twice) stops startup. A name that isn't in the database is skipped with a log line. No folder at all means an empty model: everything is discovered and there is no vocabulary.
 
 ### Domains of Discourse (`config/databases/<database>/semantic/domains.yaml`)

@@ -24,7 +24,7 @@ max_result_bytes: 1000000
 # long lists slow planning and fail on SQL Server (error 8623). Over the
 # limit, that user's access isn't built and startup / sign-in stops with a
 # message: model a large hierarchy as a closure table instead, so the query
-# carries one value (README "Large scopes"). It never falls back to running
+# carries one value (docs/row-level-security.md, "Large scopes"). It never falls back to running
 # the long list, or to no filter.
 max_scope_values: 1000
 
