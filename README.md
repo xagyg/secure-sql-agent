@@ -686,7 +686,6 @@ This is a research demonstration, not a production system.
 * The public API has no user authentication. Visitors are anonymous and all share the demo `SecurityContext`. Session IDs are generated in the browser and only separate conversation history and rate-limit buckets; they don't prove identity.
 * CORS only controls which web pages can call the API from a browser. It doesn't stop direct calls with `curl` or scripts. Rate limits and the concurrency gate are the real controls.
 * Only the API is exposed through the tunnel. Ollama and PostgreSQL listen on localhost only.
-* The in-memory rate limiter treats each IPv6 address separately, so a client with a large IPv6 range could spread requests across addresses.
 * The table and column names in `config/databases/northwind/` assume the snake_case PostgreSQL port of Northwind, and `config/databases/northwind_mssql/` the original SQL Server Northwind. Check them against your schema before running (`tools/check_engine.py`). Startup logs every name it can't find.
 * On SQL Server, read-only access rests on the login's permissions (see [SQL Server](#sql-server)); PostgreSQL also enforces a read-only transaction.
 * The local REPL and API use the same underlying agent and security controls; the API adds the HTTP-specific rate limiting, concurrency, timeout and audit controls.
