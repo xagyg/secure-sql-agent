@@ -4,7 +4,7 @@
 -- for each employee as their own manager, so a grant of "self" on
 -- manager_id covers the user and their whole team. The agent's row filter
 -- then carries one value - the user's employee_id - however big the team
--- is (README "Large scopes"; docs/examples/closure-table/README.md).
+-- is (docs/row-level-security.md, "Large scopes"; docs/examples/closure-table/README.md).
 --
 -- Run as the database owner, NOT as the agent's read-only login:
 --     psql -U postgres -d northwind -f employee_hierarchy.postgres.sql

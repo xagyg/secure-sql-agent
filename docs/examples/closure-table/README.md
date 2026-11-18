@@ -1,6 +1,6 @@
 # Closure-table example: large teams as one value
 
-A worked, runnable example of the approach in the main README's "Large scopes" section, on Northwind, for PostgreSQL and SQL Server. Nothing here is loaded unless you point the agent at it; the shipped configuration is unchanged.
+A worked, runnable example of the approach in the "Large scopes" section of [Row-level security](../../row-level-security.md#large-scopes-and-hierarchy-optimisation), on Northwind, for PostgreSQL and SQL Server. Nothing here is loaded unless you point the agent at it; the shipped configuration is unchanged.
 
 ## Why
 

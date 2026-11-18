@@ -6,7 +6,7 @@
 # in-memory policies and the shipped Northwind ones, and the rewrite is
 # checked on the SQL text. The rewrite was also checked against a real
 # PostgreSQL database with hand-written ground-truth views for every
-# shipped identity and 23 query shapes (README "Row-level security");
+# shipped identity and 23 query shapes (docs/row-level-security.md);
 # tools/check_row_scope.py runs consistency checks on a real database.
 
 import contextlib

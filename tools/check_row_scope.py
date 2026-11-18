@@ -15,7 +15,7 @@
 #
 # This checks consistency, not correctness against an independent truth:
 # that needs views written by hand, which a read-only login can't create.
-# The unit tests and README describe the ground-truth check.
+# The unit tests and docs/row-level-security.md describe the ground-truth check.
 
 import argparse
 import contextlib

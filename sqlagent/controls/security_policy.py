@@ -674,8 +674,8 @@ class SecurityPolicy:
                 f"{self.source}: scope '{dim}' ({shown}) for user '{user_id}', "
                 f"role '{role}', resolved to {len(resolved)} values - more than "
                 f"query.max_scope_values ({limit}). Model it as a closure or "
-                "entitlement table so the query carries one value (README "
-                "\"Large scopes\"), or raise the limit")
+                "entitlement table so the query carries one value (docs/"
+                "row-level-security.md, \"Large scopes\"), or raise the limit")
 
     def _resolve_values(self, dim, value, attributes, read_hierarchy, cache):
         """A grant's scope values for this user: a fixed list as it is;

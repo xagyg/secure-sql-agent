@@ -87,7 +87,7 @@ group_roles:
   Public-Demo: [demo]
 
 # ---------------------------------------------------------------------------
-# Row scope (see README "Row-level security"). Each dimension says how it
+# Row scope (see docs/row-level-security.md). Each dimension says how it
 # restricts every table a scoped role can query:
 #   column    the table carries the dimension:     {column: EmployeeID}
 #   via       in scope when a related row is:      {via: dbo.Orders}
