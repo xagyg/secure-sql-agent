@@ -901,6 +901,7 @@ class SchemaCatalog:
             f"{table['schema']}.{table['name']}"
             for _, table in matches
         }
+        matched = set(selected)   # before the walk: link-table join targets
 
         if not selected:
             if scope is not None and fallback_names:
@@ -910,7 +911,8 @@ class SchemaCatalog:
                 print("[schema] No table match in domain - using fallback tables")
                 tables = set(fallback_names) | unwalked
                 return self._format_context(
-                    tables | self._link_tables(unwalked, tables))
+                    tables | self._link_tables(unwalked, tables,
+                                               matched=set(fallback_names)))
             if unwalked:
                 return self._format_context(unwalked)
             return ""
@@ -936,8 +938,10 @@ class SchemaCatalog:
             print("[schema] Weak table match - adding fallback tables")
             selected |= set(fallback_names)
             focus |= set(fallback_names)
+            matched |= set(fallback_names)
 
-        links = self._link_tables(unwalked, selected | unwalked)
+        links = self._link_tables(unwalked, selected | unwalked,
+                                  matched=matched)
         return self._format_context(selected | unwalked | links, focus=focus,
                                     question=question)
 
@@ -993,7 +997,7 @@ class SchemaCatalog:
             for phrase in self._naming_phrases(table, terms)
         )
 
-    def _link_tables(self, added, present):
+    def _link_tables(self, added, present, matched=()):
         """
         Tables that join a table added without a relationship walk
         (named_outside_domain: add) to the rest of the schema: a table with
@@ -1002,20 +1006,48 @@ class SchemaCatalog:
         the Sales schema; employee_territories (-> employees and ->
         territories) is the only way to join them, so it comes too. Just
         the joins - not every neighbour, as a walk would add.
+
+        Only real joins count:
+          - a hub (res_company, res_users) reached only by the walk is not
+            a join target: nearly every Odoo table has a company_id, so
+            "points at the product and at the company" matched dozens of
+            tables. A hub the question matched (matched: the tables found
+            before the walk, e.g. res_partner for "customers") still is;
+          - the added tables are not join targets for each other
+            (product_product and product_template are joined directly);
+          - an added table that already joins the schema - directly, or
+            through another added table that does - needs no link.
         """
         if not added:
             return set()
+        hubs = self.hub_tables()
+        joinable = present - added - (hubs - set(matched))
+
         targets = {}
+        neighbours = {}
         for relationship in self.foreign_keys:
-            targets.setdefault(relationship["from_table"], set()).add(
-                relationship["to_table"])
+            a, b = relationship["from_table"], relationship["to_table"]
+            targets.setdefault(a, set()).add(b)
+            neighbours.setdefault(a, set()).add(b)
+            neighbours.setdefault(b, set()).add(a)
+
+        # Added tables already joined to the schema, directly or through
+        # each other.
+        joined = {name for name in added if neighbours.get(name, set()) & joinable}
+        grew = True
+        while grew:
+            more = {name for name in added - joined
+                    if neighbours.get(name, set()) & joined}
+            joined |= more
+            grew = bool(more)
+        unjoined = added - joined
+
         links = set()
         for table, points_to in targets.items():
-            if table in present or table not in self.tables:
+            if table in present or table not in self.tables or table in hubs:
                 continue
-            for name in points_to & added:
-                if points_to & (present - {name}):
-                    links.add(table)
+            if points_to & unjoined and points_to & joinable:
+                links.add(table)
         if links:
             print("[schema] Link table(s) added to join "
                   + ", ".join(sorted(t.split(".")[-1] for t in added))

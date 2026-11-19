@@ -308,6 +308,107 @@ class NamedOutsideDomainDistinct(unittest.TestCase):
                           "retrieval: {named_outside_domain_distinct: maybe}"})
 
 
+def products_catalog(partner_is_hub=True):
+    """
+    Question 9's shape on Odoo: "contact details for customers who have
+    purchased products", routed to Contacts, adds product_product and
+    product_template (named, outside the domain) without a walk.
+
+        product_product -> product_template, company
+        product_template -> company
+        sale_order_line -> product_product, partner, company   (the real join)
+        stock_move      -> product_product, product_template, company
+        mrp_bom         -> product_template, company
+        t01..t20        -> company, partner (and partner is a hub too,
+                           unless partner_is_hub is false)
+    """
+    fillers = [f"t{n:02d}" for n in range(1, 21)]
+    names = ["company", "partner", "country", "product_product",
+             "product_template", "sale_order_line", "stock_move",
+             "mrp_bom"] + fillers
+    catalog = make_catalog(
+        exclude=set(NORTHWIND),
+        extra_tables={f"public.{n}": ["id"] for n in names})
+
+    def fk(a, b):
+        return {"from_table": f"public.{a}", "from_columns": ("x",),
+                "to_table": f"public.{b}", "to_columns": ("id",)}
+
+    catalog.foreign_keys = (
+        [fk(t, "company") for t in fillers]
+        + ([fk(t, "partner") for t in fillers] if partner_is_hub else [])
+        + [fk("partner", "company"), fk("partner", "country"),
+           fk("product_product", "product_template"),
+           fk("product_product", "company"), fk("product_template", "company"),
+           fk("sale_order_line", "product_product"),
+           fk("sale_order_line", "partner"), fk("sale_order_line", "company"),
+           fk("stock_move", "product_product"),
+           fk("stock_move", "product_template"), fk("stock_move", "company"),
+           fk("mrp_bom", "product_template"), fk("mrp_bom", "company")]
+    )
+    return catalog
+
+
+ADDED = {"public.product_product", "public.product_template"}
+
+
+class LinkTables(unittest.TestCase):
+    """_link_tables(): only real joins, not hubs or the added tables
+    themselves."""
+
+    def test_question_9_shape(self):
+        catalog = products_catalog()
+        self.assertTrue({"public.company", "public.partner"}
+                        <= catalog.hub_tables())
+        present = {"public.partner", "public.company", "public.country"} | ADDED
+        links = catalog._link_tables(ADDED, present, matched={"public.partner"})
+        # Not stock_move (product -> product_template), not mrp_bom
+        # (product_template -> company), not the 20 tables that point at
+        # the company: only the join to the customer.
+        self.assertEqual(short(links), {"sale_order_line"})
+
+    def test_hub_reached_only_by_the_walk_is_not_a_join(self):
+        catalog = products_catalog()
+        present = {"public.partner", "public.company", "public.country"} | ADDED
+        # partner wasn't matched (it came in through the walk), so the only
+        # targets are company (a hub) and country: nothing joins them.
+        links = catalog._link_tables(ADDED, present, matched={"public.country"})
+        self.assertEqual(links, set())
+
+    def test_non_hub_target_is_always_a_join(self):
+        catalog = products_catalog(partner_is_hub=False)
+        self.assertNotIn("public.partner", catalog.hub_tables())
+        present = {"public.partner", "public.company"} | ADDED
+        self.assertEqual(short(catalog._link_tables(ADDED, present)),
+                         {"sale_order_line"})
+
+    def test_added_tables_are_not_join_targets_for_each_other(self):
+        catalog = products_catalog()
+        # Only the added tables and a hub: stock_move points at both added
+        # tables, but that is not a join to the schema.
+        present = {"public.company"} | ADDED
+        self.assertEqual(catalog._link_tables(ADDED, present), set())
+
+    def test_added_table_joined_directly_needs_no_link(self):
+        catalog = products_catalog()
+        catalog.foreign_keys.append(
+            {"from_table": "public.product_template", "from_columns": ("x",),
+             "to_table": "public.country", "to_columns": ("id",)})
+        present = {"public.partner", "public.company", "public.country"} | ADDED
+        # product_template joins country directly, and product_product
+        # joins through product_template: nothing to link.
+        self.assertEqual(catalog._link_tables(
+            ADDED, present, matched={"public.partner"}), set())
+
+    def test_northwind_territories_unchanged(self):
+        catalog = make_catalog()
+        self.assertEqual(catalog.hub_tables(), frozenset())
+        links = catalog._link_tables({"public.territories"},
+                                     {"public.territories", "public.employees",
+                                      "public.orders"})
+        self.assertEqual(links, {"public.employee_territories"})
+
+
 class Blending(unittest.TestCase):
 
     QUESTION = "list the shippers [where=staff records]"   # Logistics vs HR
