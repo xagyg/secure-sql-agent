@@ -619,8 +619,8 @@ What the data means, one folder per database (`config/databases/northwind/semant
 
 ```yaml
 sources:                           # which tables and views to discover
-  include: ["erp.*", "semantic.*"]   # "*.*" = every schema
-  exclude: ["erp.audit_*"]
+  include: [erp.*, semantic.*]   # "*.*" = every schema
+  exclude: [erp.audit_*]
   use_database_foreign_keys: false   # most ERPs have none: declare them below
 
 tables:
