@@ -297,6 +297,10 @@ class RelationshipWalk(_Strict):
     # question, the best matches to the question first, then the
     # narrowest. 0: no limit.
     link_tables_max: int = Field(5, ge=0)
+    # When no table is named in full (a weak match), the domain's fallback
+    # tables are used, plus at most this many of the best weak matches,
+    # without a relationship walk. 0: every weak match.
+    weak_match_tables: int = Field(3, ge=0)
 
 
 class SchemaText(_Strict):

@@ -495,6 +495,120 @@ class LinkTablesCap(unittest.TestCase):
             model_from(**{"r.yaml": "retrieval: {link_tables_max: -1}"})
 
 
+class WeakMatch(unittest.TestCase):
+    """No table named in full: the fallback tables plus the best few weak
+    matches, without a relationship walk (weak_match_tables)."""
+
+    def tables(self, question, retrieval=None, fallbacks=("public.employees",)):
+        catalog = make_catalog()
+        with_retrieval(catalog, retrieval or {})
+        if not fallbacks:
+            catalog.fallback_table_names = set()   # no global list either
+        scope = (set(catalog.tables), list(fallbacks), 1)
+        return tables_in(catalog.discover_schema(question, scope=scope))
+
+    def test_weak_match_is_not_walked(self):
+        # "freight" is only a column of orders. A walk from orders would
+        # bring customers, shippers and order_details.
+        self.assertEqual(self.tables("total freight this year"),
+                         {"employees", "orders"})
+
+    def test_only_the_best_few_weak_matches(self):
+        # "cities" is a column word of four tables (3 points each): with a
+        # limit of 1 the first is kept, and orders joins it to employees.
+        self.assertEqual(self.tables("which cities?", {"weak_match_tables": 1}),
+                         {"customers", "employees", "orders"})
+
+    def test_zero_keeps_every_weak_match(self):
+        self.assertEqual(self.tables("which cities?", {"weak_match_tables": 0}),
+                         {"customers", "employees", "orders", "suppliers"})
+
+    def test_without_any_fallback_tables_the_walk_is_unchanged(self):
+        tables = self.tables("total freight this year", fallbacks=())
+        self.assertIn("shippers", tables)
+        self.assertIn("order_details", tables)
+
+    def test_named_table_still_walks(self):
+        self.assertIn("territories", self.tables("list each region"))
+
+    def test_shipped_default_is_three(self):
+        self.assertEqual(RelationshipWalk().weak_match_tables, 3)
+        self.assertEqual(load_settings(environ={}).retrieval.relationships
+                         .weak_match_tables, 3)
+
+    def test_database_override(self):
+        model = model_from(**{"r.yaml": "retrieval: {weak_match_tables: 1}"})
+        self.assertEqual(model.retrieval["weak_match_tables"], 1)
+
+
+class OdooSalespeople(unittest.TestCase):
+    """"Which salespeople generated the most revenue this year?" named no
+    table: "salespeople" isn't a form of the salesperson alias."""
+
+    def test_salespeople_names_res_users(self):
+        from sqlagent.adaptive.text_match import phrase_matches, tokenize
+        model = load_semantic_model(ODOO_SEMANTIC_PATH)
+        users = model.tables["public.res_users"]
+        aliases = users["aliases"] if isinstance(users, dict) else users.aliases
+        terms = tokenize("Which salespeople generated the most revenue this year?")
+        self.assertTrue(any(phrase_matches(a, terms) for a in aliases))
+        terms = tokenize("top sales people")
+        self.assertTrue(any(phrase_matches(a, terms) for a in aliases))
+
+
+class OnlyAHubIsNamed(unittest.TestCase):
+    """"Which salespeople generated the most revenue this year?" on Odoo:
+    "salespeople" names res_users, a hub, which the walk doesn't go back
+    from - so the best other match (sale_order, on its revenue column) is
+    kept too."""
+
+    QUESTION = "Which salespeople generated the most revenue this year?"
+
+    def catalog(self, users_is_hub=True):
+        fillers = [f"t{n:02d}" for n in range(1, 21)]
+        tables = {"res_users": ["id", "partner_id", "login"],
+                  "res_partner": ["id", "name"],
+                  "sale_order": ["id", "user_id", "partner_id",
+                                 "revenue_total", "date_order"],
+                  "sale_order_line": ["id", "order_id"]}
+        tables.update({t: ["id", "create_uid"] for t in fillers})
+        catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+            f"public.{n}": cols for n, cols in tables.items()})
+        catalog.tables["public.res_users"]["aliases"] = ["salesperson", "salespeople"]
+
+        def fk(a, b):
+            return {"from_table": f"public.{a}", "from_columns": ("x",),
+                    "to_table": f"public.{b}", "to_columns": ("id",)}
+
+        catalog.foreign_keys = (
+            ([fk(t, "res_users") for t in fillers] if users_is_hub else [])
+            + [fk("sale_order", "res_users"), fk("sale_order", "res_partner"),
+               fk("sale_order_line", "sale_order"),
+               fk("res_users", "res_partner")])
+        with_retrieval(catalog, {})
+        return catalog
+
+    def tables(self, catalog):
+        scope = ({"public.sale_order", "public.sale_order_line",
+                  "public.res_partner", "public.res_users"},
+                 ["public.sale_order", "public.sale_order_line",
+                  "public.res_partner"], 1)
+        return tables_in(catalog.discover_schema(self.QUESTION, scope=scope))
+
+    def test_best_other_match_is_kept(self):
+        catalog = self.catalog()
+        self.assertIn("public.res_users", catalog.hub_tables())
+        tables = self.tables(catalog)
+        self.assertTrue({"res_users", "sale_order", "res_partner",
+                         "sale_order_line"} <= tables)
+        self.assertNotIn("t01", tables)
+
+    def test_a_named_non_hub_is_unchanged(self):
+        # res_users not a hub: the walk goes back to sale_order anyway.
+        tables = self.tables(self.catalog(users_is_hub=False))
+        self.assertTrue({"res_users", "sale_order"} <= tables)
+
+
 class Blending(unittest.TestCase):
 
     QUESTION = "list the shippers [where=staff records]"   # Logistics vs HR

@@ -895,6 +895,22 @@ class SchemaCatalog:
         named = [(score, table) for score, table in matches
                  if self.name_score(table, terms) >= FULL_NAME_MATCH]
         if named:
+            # A hub is not walked back from, so a hub named alone (Odoo's
+            # res_users for "salespeople") reaches none of the tables that
+            # point at it (sale_order). Keep the best other match too.
+            hubs = self.hub_tables()
+
+            def full(table):
+                return f"{table['schema']}.{table['name']}"
+
+            if all(full(t) in hubs for _, t in named):
+                other = next(((s, t) for s, t in matches
+                              if full(t) not in hubs and (s, t) not in named), None)
+                if other is not None:
+                    print(f"[schema] Only a hub is named "
+                          f"({', '.join(t['name'] for _, t in named)}) - "
+                          f"also using the best other match: {other[1]['name']}")
+                    named.append(other)
             matches = named
 
         selected = {
@@ -926,20 +942,35 @@ class SchemaCatalog:
             for _, table in matches
             if self.name_score(table, terms) >= FULL_NAME_MATCH
         } | unwalked
-        focus.add(f"{matches[0][1]['schema']}.{matches[0][1]['name']}")
-        selected = self.get_related_tables(selected, depth=relationship_depth)
+        best = f"{matches[0][1]['schema']}.{matches[0][1]['name']}"
+        focus.add(best)
 
         # A weak match (no table named in full, only a partial name or a
         # column word) is a poor signal on its own, so the fallback tables
-        # are added alongside it. e.g. "Margaret's order history": "order"
+        # are used alongside it. e.g. "Margaret's order history": "order"
         # only partly matches order_details, and employees comes from the
-        # fallback list.
+        # fallback list. The best few weak matches are added WITHOUT a
+        # relationship walk, plus any table needed to join them: walking
+        # from up to table_limit tables found on words like "revenue" in
+        # their columns once put 45 tables (~12k tokens) into one prompt
+        # ("Which salespeople generated the most revenue this year?").
         best_score = matches[0][0]
-        if best_score < FULL_NAME_MATCH:
-            print("[schema] Weak table match - adding fallback tables")
-            selected |= set(fallback_names)
-            focus |= set(fallback_names)
-            matched |= set(fallback_names)
+        if best_score < FULL_NAME_MATCH and fallback_names:
+            limit = self._retrieval_setting("weak_match_tables")
+            weak = [f"{t['schema']}.{t['name']}" for _, t in matches]
+            weak = weak[:limit] if limit else weak
+            base = set(fallback_names)
+            print("[schema] Weak table match - fallback tables plus "
+                  + ", ".join(t.split(".")[-1] for t in weak)
+                  + " (no relationship walk)")
+            added = (set(weak) - base) | unwalked
+            links = self._link_tables(added, base | added,
+                                      matched=base | set(weak), terms=terms)
+            return self._format_context(base | added | links,
+                                        focus=focus | base | {best},
+                                        question=question)
+
+        selected = self.get_related_tables(selected, depth=relationship_depth)
 
         links = self._link_tables(unwalked, selected | unwalked,
                                   matched=matched, terms=terms)

@@ -154,6 +154,15 @@ relationships:
   # what was kept and dropped, with scores. 0: no limit.
   link_tables_max: 5
 
+  # A weak match: no table named in full by the question, only partial
+  # names or column words ("Which salespeople generated the most revenue
+  # this year?" matches sale_order only on its revenue column). The
+  # domain's fallback tables are used, plus at most this many of the best
+  # weak matches, WITHOUT a relationship walk (plus any table needed to
+  # join them). Walking from every weak match once put 45 tables into one
+  # prompt. 0: every weak match.
+  weak_match_tables: 3
+
 # How the schema is written into the SQL prompt. It is most of the prompt,
 # and a prompt longer than the model's context (Ollama's num_ctx) is cut
 # without an error, so keep it small.
