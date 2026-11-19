@@ -167,6 +167,7 @@ class RetrievalSpec(_Strict):
     hub_threshold: int | None = Field(default=None, ge=0)
     named_outside_domain: Literal["walk", "add", "note"] | None = None
     named_outside_domain_distinct: bool | None = None
+    link_tables_max: int | None = Field(default=None, ge=0)
     hub_tables: list[str] = []        # always hubs, whatever their count
     not_hub_tables: list[str] = []    # never hubs, whatever their count
 

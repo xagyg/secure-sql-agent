@@ -409,6 +409,82 @@ class LinkTables(unittest.TestCase):
         self.assertEqual(links, {"public.employee_territories"})
 
 
+def many_links_catalog(retrieval=None):
+    """
+    Eight genuine links between product (added) and partner (matched):
+    l1..l7 have more columns the wider their number; sales_line is the
+    widest but has a column the question names ("quantity").
+    """
+    fillers = {f"l{n}": ["id", "product_id", "partner_id"]
+               + [f"c{i}" for i in range(n)] for n in range(1, 8)}
+    tables = {"product": ["id"], "partner": ["id"], **fillers,
+              "sales_line": ["id", "product_id", "partner_id", "quantity"]
+              + [f"c{i}" for i in range(20)]}
+    catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+        f"public.{n}": cols for n, cols in tables.items()})
+
+    def fk(a, b):
+        return {"from_table": f"public.{a}", "from_columns": ("x",),
+                "to_table": f"public.{b}", "to_columns": ("id",)}
+
+    catalog.foreign_keys = [fk(t, end) for t in [*fillers, "sales_line"]
+                            for end in ("product", "partner")]
+    with_retrieval(catalog, retrieval or {})
+    return catalog
+
+
+class LinkTablesCap(unittest.TestCase):
+    """link_tables_max: the best matches to the question, then the
+    narrowest."""
+
+    ADDED = {"public.product"}
+    PRESENT = {"public.product", "public.partner"}
+
+    def links(self, retrieval=None, question="total quantity by partner"):
+        catalog = many_links_catalog(retrieval)
+        terms = catalog.question_terms(question)
+        return short(catalog._link_tables(self.ADDED, self.PRESENT,
+                                          matched={"public.partner"},
+                                          terms=terms))
+
+    def test_question_match_first_then_narrowest(self):
+        self.assertEqual(self.links({"link_tables_max": 3}),
+                         {"sales_line", "l1", "l2"})
+
+    def test_without_a_match_the_narrowest_win(self):
+        self.assertEqual(self.links({"link_tables_max": 3}, question="show"),
+                         {"l1", "l2", "l3"})
+
+    def test_shipped_default_is_five(self):
+        self.assertEqual(RelationshipWalk().link_tables_max, 5)
+        self.assertEqual(load_settings(environ={}).retrieval.relationships
+                         .link_tables_max, 5)
+        self.assertEqual(len(self.links()), 5)
+
+    def test_zero_is_no_limit(self):
+        self.assertEqual(len(self.links({"link_tables_max": 0})), 8)
+
+    def test_under_the_cap_keeps_all(self):
+        self.assertEqual(len(self.links({"link_tables_max": 8})), 8)
+
+    def test_log_lists_kept_and_dropped(self):
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.links({"link_tables_max": 2})
+        log = out.getvalue()
+        self.assertIn("(cap 2 of 8)", log)
+        self.assertIn("dropped:", log)
+        self.assertIn("sales_line (", log)
+
+    def test_database_override(self):
+        model = model_from(**{"r.yaml": "retrieval: {link_tables_max: 2}"})
+        self.assertEqual(model.retrieval["link_tables_max"], 2)
+        with self.assertRaises(SemanticModelError):
+            model_from(**{"r.yaml": "retrieval: {link_tables_max: -1}"})
+
+
 class Blending(unittest.TestCase):
 
     QUESTION = "list the shippers [where=staff records]"   # Logistics vs HR

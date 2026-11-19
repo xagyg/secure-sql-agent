@@ -912,7 +912,8 @@ class SchemaCatalog:
                 tables = set(fallback_names) | unwalked
                 return self._format_context(
                     tables | self._link_tables(unwalked, tables,
-                                               matched=set(fallback_names)))
+                                               matched=set(fallback_names),
+                                               terms=terms))
             if unwalked:
                 return self._format_context(unwalked)
             return ""
@@ -941,7 +942,7 @@ class SchemaCatalog:
             matched |= set(fallback_names)
 
         links = self._link_tables(unwalked, selected | unwalked,
-                                  matched=matched)
+                                  matched=matched, terms=terms)
         return self._format_context(selected | unwalked | links, focus=focus,
                                     question=question)
 
@@ -997,7 +998,7 @@ class SchemaCatalog:
             for phrase in self._naming_phrases(table, terms)
         )
 
-    def _link_tables(self, added, present, matched=()):
+    def _link_tables(self, added, present, matched=(), terms=()):
         """
         Tables that join a table added without a relationship walk
         (named_outside_domain: add) to the rest of the schema: a table with
@@ -1017,6 +1018,9 @@ class SchemaCatalog:
             (product_product and product_template are joined directly);
           - an added table that already joins the schema - directly, or
             through another added table that does - needs no link.
+
+        At most link_tables_max are kept: the best matches to the
+        question's terms first (score_table), then the fewest columns.
         """
         if not added:
             return set()
@@ -1048,11 +1052,31 @@ class SchemaCatalog:
                 continue
             if points_to & unjoined and points_to & joinable:
                 links.add(table)
-        if links:
-            print("[schema] Link table(s) added to join "
-                  + ", ".join(sorted(t.split(".")[-1] for t in added))
-                  + ": " + ", ".join(sorted(t.split(".")[-1] for t in links)))
-        return links
+        if not links:
+            return links
+
+        joined_names = ", ".join(sorted(t.split(".")[-1] for t in added))
+        limit = self._retrieval_setting("link_tables_max")
+        if not limit or len(links) <= limit:
+            print(f"[schema] Link table(s) added to join {joined_names}: "
+                  + ", ".join(sorted(t.split(".")[-1] for t in links)))
+            return links
+
+        terms = set(terms)
+        ranked = sorted(
+            links,
+            key=lambda t: (-self.score_table(self.tables[t], terms),
+                           len(self.tables[t]["columns"]), t))
+
+        def listed(names):
+            return ", ".join(
+                f"{t.split('.')[-1]} ({self.score_table(self.tables[t], terms)})"
+                for t in names)
+
+        print(f"[schema] Link table(s) added to join {joined_names} "
+              f"(cap {limit} of {len(ranked)}): {listed(ranked[:limit])}; "
+              f"dropped: {listed(ranked[limit:])}")
+        return set(ranked[:limit])
 
     def discover_schema(self, question, scope=None, anchors=None):
         """

@@ -286,6 +286,10 @@ class RelationshipWalk(_Strict):
     # sale_order, and part of purchase_order) is the domain's word, so
     # the domain's reading wins. Off: any full-name match counts.
     named_outside_domain_distinct: bool = True
+    # At most this many link tables (named_outside_domain: add) per
+    # question, the best matches to the question first, then the
+    # narrowest. 0: no limit.
+    link_tables_max: int = Field(5, ge=0)
 
 
 class SchemaText(_Strict):

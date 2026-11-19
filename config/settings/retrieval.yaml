@@ -145,6 +145,14 @@ relationships:
   # label, alias or term match counts, as before.
   named_outside_domain_distinct: true
 
+  # At most this many link tables (see named_outside_domain: add) for one
+  # question. On Odoo, products asked about from Contacts had 12 genuine
+  # links (every table with a product and a partner key). Candidates are
+  # ranked by how well they match the question (name, label, alias, term
+  # and column words), then by fewest columns, so the cheapest wins a tie.
+  # The log lists what was kept and dropped, with scores. 0: no limit.
+  link_tables_max: 5
+
 # How the schema is written into the SQL prompt. It is most of the prompt,
 # and a prompt longer than the model's context (Ollama's num_ctx) is cut
 # without an error, so keep it small.
