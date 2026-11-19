@@ -566,10 +566,10 @@ roles:
       public.employees: [home_phone]
 
   hr_analyst:
-    allow: ["semantic.employees_v", "erp.emp_*"]
-    deny:  ["erp.emp_salary_hist"]        # deny beats a wildcard allow
+    allow: [semantic.employees_v, erp.emp_*]
+    deny:  [erp.emp_salary_hist]        # deny beats a wildcard allow
     deny_columns:
-      "erp.emp_*": [tax_file_no]
+      erp.emp_*: [tax_file_no]
 
 group_roles:                       # identity-provider group -> roles
   Northwind-Sales: [sales]
