@@ -320,22 +320,28 @@ def examples_for_question(examples, question, schema, limit):
     if not limit or len(examples) <= limit:
         return examples
 
-    from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize
+    from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize, words as split
 
-    words = tokenize(question) - GENERIC_TERMS
+    # One entry per question word, with its forms ("companies" also
+    # matches "company"), so a word counts once however many forms match.
+    words = {frozenset(tokenize(w)) for w in split(question)
+             if tokenize(w) and not tokenize(w) & GENERIC_TERMS}
     shown = _schema_tables(schema)
     dialect = active_dialect()
 
     def score(example):
         tables = _example_tables(example.sql, dialect) or frozenset()
         said = tokenize(example.question) | tokenize(example.note or "")
-        return 2 * len(tables & shown) + len(words & said)
+        return 2 * len(tables & shown) + sum(1 for forms in words if forms & said)
 
     scores = [score(e) for e in examples]
     ranked = sorted(range(len(examples)), key=lambda i: (-scores[i], i))
     chosen = sorted(ranked[:limit])
-    print(f"[llm] SQL examples: {limit} of {len(examples)} for this question: "
-          + "; ".join(f"{examples[i].question} ({scores[i]})" for i in chosen))
+    detail = ""
+    if _LLM.verbose:
+        detail = ": " + "; ".join(f"{examples[i].question} ({scores[i]})"
+                                  for i in chosen)
+    print(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
     return [examples[i] for i in chosen]
 
 

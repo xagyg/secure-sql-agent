@@ -467,16 +467,26 @@ class LinkTablesCap(unittest.TestCase):
     def test_under_the_cap_keeps_all(self):
         self.assertEqual(len(self.links({"link_tables_max": 8})), 8)
 
-    def test_log_lists_kept_and_dropped(self):
+    def log(self, verbose):
         import io
         from contextlib import redirect_stdout
+        from unittest import mock
+        from sqlagent.settings import get_settings
         out = io.StringIO()
-        with redirect_stdout(out):
+        with redirect_stdout(out), \
+             mock.patch.object(get_settings().llm, "verbose", verbose):
             self.links({"link_tables_max": 2})
-        log = out.getvalue()
-        self.assertIn("(cap 2 of 8)", log)
-        self.assertIn("dropped:", log)
-        self.assertIn("sales_line (", log)
+        return out.getvalue()
+
+    def test_log_names_only_the_kept(self):
+        log = self.log(False)
+        self.assertIn("(2 of 8): l1, sales_line", log)
+        self.assertNotIn("dropped", log)
+        self.assertNotIn("(6)", log)
+
+    def test_verbose_log_lists_kept_and_dropped_with_scores(self):
+        log = self.log(True)
+        self.assertIn("(2 of 8): sales_line (6), l1 (3); dropped: l2 (3)", log)
 
     def test_database_override(self):
         model = model_from(**{"r.yaml": "retrieval: {link_tables_max: 2}"})

@@ -130,6 +130,31 @@ class ExamplesForQuestion(unittest.TestCase):
         from sqlagent.settings import LlmSettings
         self.assertEqual(LlmSettings(model="m").sql_examples_max, 5)
 
+    def log(self, verbose):
+        import io
+        from contextlib import redirect_stdout
+        out = io.StringIO()
+        with redirect_stdout(out), \
+             mock.patch.object(llm._LLM, "verbose", verbose):
+            self.chosen("which shipping companies do we use?", limit=1)
+        return out.getvalue()
+
+    def test_log_gives_only_the_count(self):
+        log = self.log(False)
+        self.assertIn("[llm] SQL examples: 1 of 5\n", log)
+        self.assertNotIn("shipping companies", log)
+
+    def test_verbose_log_lists_the_examples_with_scores(self):
+        self.assertIn("[llm] SQL examples: 1 of 5: shipping companies (2)",
+                      self.log(True))
+
+    def test_verbose_off_by_default_and_set_by_environment(self):
+        from sqlagent.settings import load_settings
+        self.assertFalse(load_settings(environ={}).llm.verbose)
+        settings = load_settings(environ={"SQLAGENT_VERBOSE": "true"})
+        self.assertTrue(settings.llm.verbose)
+        self.assertIn("SQLAGENT_VERBOSE", settings.overridden)
+
     def test_prompt_carries_only_the_chosen(self):
         captured = []
         with use_database("northwind"), \

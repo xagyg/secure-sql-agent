@@ -1073,9 +1073,13 @@ class SchemaCatalog:
                 f"{t.split('.')[-1]} ({self.score_table(self.tables[t], terms)})"
                 for t in names)
 
+        if get_settings().llm.verbose:
+            kept = (f"{listed(ranked[:limit])}; "
+                    f"dropped: {listed(ranked[limit:])}")
+        else:
+            kept = ", ".join(sorted(t.split(".")[-1] for t in ranked[:limit]))
         print(f"[schema] Link table(s) added to join {joined_names} "
-              f"(cap {limit} of {len(ranked)}): {listed(ranked[:limit])}; "
-              f"dropped: {listed(ranked[limit:])}")
+              f"({limit} of {len(ranked)}): {kept}")
         return set(ranked[:limit])
 
     def discover_schema(self, question, scope=None, anchors=None):

@@ -61,12 +61,18 @@ num_ctx:
 # Print prompt/output token counts and times for each call, with a
 # warning when a prompt was cut or nears num_ctx.
 log_tokens: true
+# Print the detail behind some log lines: link tables kept and dropped
+# (relationships.link_tables_max in retrieval.yaml) and the SQL examples
+# chosen (sql_examples_max below), each with its score. Also set by the
+# environment variable SQLAGENT_VERBOSE=true.
+verbose: false
 
 # The database's SQL examples (sql_examples in its identity.yaml) are worth
 # ~2,000 tokens on Odoo. Each SQL prompt carries at most this many: those
 # whose tables are in the question's schema (2 points a table) and whose
 # question or note shares words with the question (1 point a word) first.
-# The log lists the ones chosen, with scores. 0 sends every example.
+# The log says how many were sent; with verbose: true it lists them, with
+# scores. 0 sends every example.
 sql_examples_max: 5
 
 # Sent with every request. Skips ngrok's browser warning page; harmless
