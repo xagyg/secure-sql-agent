@@ -137,6 +137,32 @@ relationships:
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
 
+  # Such a table counts as named only when a phrase naming it has a word
+  # the domain doesn't use (in any of its tables' names, labels or
+  # aliases). From Purchasing, "sales order" names sale_order, but "order"
+  # alone - an alias of sale_order, and part of purchase_order's name - is
+  # the domain's word, so sale_order is left out. false: any full name,
+  # label, alias or term match counts, as before.
+  named_outside_domain_distinct: true
+
+  # At most this many link tables (see named_outside_domain: add) for one
+  # question. On Odoo, products asked about from Contacts had 12 genuine
+  # links (every table with a product and a partner key). Candidates are
+  # ranked by how well they match the question (name, label, alias, term
+  # and column words), then by fewest columns, so the cheapest wins a tie.
+  # The log says how many were kept; with verbose: true (llm.yaml) it lists
+  # what was kept and dropped, with scores. 0: no limit.
+  link_tables_max: 5
+
+  # A weak match: no table named in full by the question, only partial
+  # names or column words ("Which salespeople generated the most revenue
+  # this year?" matches sale_order only on its revenue column). The
+  # domain's fallback tables are used, plus at most this many of the best
+  # weak matches, WITHOUT a relationship walk (plus any table needed to
+  # join them). Walking from every weak match once put 45 tables into one
+  # prompt. 0: every weak match.
+  weak_match_tables: 3
+
 # How the schema is written into the SQL prompt. It is most of the prompt,
 # and a prompt longer than the model's context (Ollama's num_ctx) is cut
 # without an error, so keep it small.

@@ -291,6 +291,60 @@ def examples_for_role(examples, allowed_tables):
     return kept
 
 
+def _schema_tables(schema):
+    """The tables a schema text shows ("TABLE public.res_partner  -- ..."),
+    as lowercase full names, without quotes."""
+    found = set()
+    for match in re.finditer(r"^TABLE\s+(\S+)", schema or "", re.M):
+        name = re.sub(r'["\[\]`]', "", match.group(1)).lower()
+        found.add(full_table_name(name))
+    return found
+
+
+def examples_for_question(examples, question, schema, limit):
+    """
+    At most `limit` of the SQL examples (already filtered by
+    examples_for_role), the most useful for this question first:
+
+      - each table the example reads that is also in this question's
+        schema counts 2 (it shows how to use the tables the model has);
+      - each question word (minus generic words such as "show") that is
+        also in the example's question or note counts 1.
+
+    Ties keep the database's own order, as do the examples chosen, so the
+    prompt reads as the identity file does. A question that matches
+    nothing gets the first `limit`. 0 (or a list no longer than the
+    limit) keeps every example.
+    """
+    examples = list(examples)
+    if not limit or len(examples) <= limit:
+        return examples
+
+    from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize, words as split
+
+    # One entry per question word, with its forms ("companies" also
+    # matches "company"), so a word counts once however many forms match.
+    words = {frozenset(tokenize(w)) for w in split(question)
+             if tokenize(w) and not tokenize(w) & GENERIC_TERMS}
+    shown = _schema_tables(schema)
+    dialect = active_dialect()
+
+    def score(example):
+        tables = _example_tables(example.sql, dialect) or frozenset()
+        said = tokenize(example.question) | tokenize(example.note or "")
+        return 2 * len(tables & shown) + sum(1 for forms in words if forms & said)
+
+    scores = [score(e) for e in examples]
+    ranked = sorted(range(len(examples)), key=lambda i: (-scores[i], i))
+    chosen = sorted(ranked[:limit])
+    detail = ""
+    if _LLM.verbose:
+        detail = ": " + "; ".join(f"{examples[i].question} ({scores[i]})"
+                                  for i in chosen)
+    print(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
+    return [examples[i] for i in chosen]
+
+
 def generate_sql(question, schema, history, allowed_tables=None):
     """
     allowed_tables: the tables the role may see (the catalog's full
@@ -310,12 +364,13 @@ def generate_sql(question, schema, history, allowed_tables=None):
     if len(examples) < len(db.sql_examples):
         print(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
               "(the rest use tables this role can't see)")
+    examples = examples_for_question(examples, question, schema,
+                                     _LLM.sql_examples_max)
     sql_examples = _format_examples(examples)
 
     system_prompt = f"""
 You are a {engine} assistant working with the {db.connection.database} database.
-Your job is to generate ONE {engine} SELECT statement that answers
-the user's current question.
+Write ONE {engine} SELECT statement that answers the user's CURRENT question.
 
 DATABASE SCHEMA
 {schema}
@@ -323,83 +378,51 @@ DATABASE SCHEMA
 CONVERSATION CONTEXT
 {history_text if history_text else "(no previous conversation)"}
 
-IMPORTANT:
-* Conversation context is background information only.
-* Do not copy JSON, previous query results, or previous answers into SQL.
-* Generate SQL for the CURRENT user question.
-* Use previous questions and results to resolve references such as:
-  "them", "those customers", "the previous result", "now show me..."
-* A follow-up usually refers to the MOST RECENT turn. Use earlier turns
-  only when the current question clearly points back to them.
-* If the current question does not refer to the conversation at all,
-  ignore the conversation context and answer it on its own.
+RULES
+* The conversation is background only. Use it to resolve references
+  ("them", "those customers", "the previous result", "now show me..."),
+  usually to the most recent turn. If the question doesn't refer to it,
+  ignore it. Never copy its JSON, results or answers into SQL.
+* Reply with ONE of: a SELECT statement, or one of these markers alone.
+  Never both.
+  {WRITE_REQUEST_SENTINEL}: the message asks to add, change or delete data
+    or the database ("delete all customers", "drop the orders table").
+    Never use it for a question that only reads data, even one you
+    can't answer.
+  {NOT_A_DATA_QUESTION_SENTINEL}: not a question about the data - a greeting,
+    thanks, general chat, or ANY insult, complaint or comment about you.
+  {UNCLEAR_QUESTION_SENTINEL}: about the data but too vague for one query; it
+    names no record, measure or kind of thing (e.g. "what does {db_name} have?",
+    "show me stuff"). Don't guess a table or a filter.
+  {DATA_NOT_AVAILABLE_SENTINEL}: no table in the schema could hold the answer.
+    Don't guess or use a different table. A table marked "... more
+    columns, not listed" has other columns too: one may be what you need.
+* {db_names} is the name of the company and the database, never a
+  value to filter on: never write WHERE ... = {db_values}.
+* For what is known about a person, company or other record ("tell me
+  about X", "what information do you have about X?"), SELECT * from the
+  table that holds it. Restricted columns are removed automatically, so
+  never refuse these.
+* No WITH clauses (CTEs) and no subqueries in FROM or JOIN: they are
+  rejected. Use joins, subqueries in WHERE or SELECT, or conditional
+  aggregation (SUM(CASE WHEN ... THEN ... END)).
 * {engine} syntax.
-* If the current message explicitly asks to add, change, delete or
-  otherwise modify data or the database (e.g. "delete all customers",
-  "update the price", "drop the orders table"), do NOT write a query
-  and do NOT substitute a SELECT. Return exactly this and nothing else:
-  {WRITE_REQUEST_SENTINEL}
-* If the current message is not a question about the data at all
-  (e.g. a greeting, thanks, an insult, a comment about you, or general
-  chat), do NOT write a query. Return exactly this and nothing else:
-  {NOT_A_DATA_QUESTION_SENTINEL}
-* If the current message IS a question about the data, but the
-  DATABASE SCHEMA above has no table that could hold the answer, do
-  NOT guess and do NOT use a different table. Return exactly this and
-  nothing else:
-  {DATA_NOT_AVAILABLE_SENTINEL}
-  Use it ONLY when no listed table could hold the answer. A table
-  marked "... more columns, not listed" has other columns too: a
-  column you need may be one of them.
-* If the current message is about the data but too vague to answer
-  with one query (it names no record, measure or kind of thing, e.g.
-  "what does {db_name} have?", "show me stuff", "what's going on?"),
-  do NOT guess a table or a filter. Return exactly this and nothing
-  else:
-  {UNCLEAR_QUESTION_SENTINEL}
-* {db_names} is the name of the company and the
-  database. It is never a value to filter on: never write
-  WHERE ... = {db_values}.
-* If the message asks what is known about a person, company or other
-  record ("what information do you have about X?", "tell me about X",
-  "any further details on X?"), select ALL columns of the matching row
-  with SELECT * from the table that holds it (use the conversation to
-  tell which table that is). Restricted columns are removed
-  automatically, so never refuse these.
-* Only use {WRITE_REQUEST_SENTINEL} for requests to modify data. Never
-  use it for questions that only read data, even when they can't be
-  answered: use {DATA_NOT_AVAILABLE_SENTINEL} or
-  {UNCLEAR_QUESTION_SENTINEL} for those.
-* Reply with ONE of: a SELECT statement, or a single marker. Never both.
+{engine_rules}
+* Show names, not internal IDs. For every column you SELECT that holds
+  another record's id (partner_id, user_id, product_id, ...),
+  join that record's table and select its name instead, where the table
+  is in the schema. Identify a row by its own name or number (S00023),
+  not its id, unless the user asks for ids.
 
 EXAMPLES (message -> correct reply)
   "delete all customers"             -> {WRITE_REQUEST_SENTINEL}
-  "update the price of Chai to 20"   -> {WRITE_REQUEST_SENTINEL}
   "add a new supplier"               -> {WRITE_REQUEST_SENTINEL}
   "you are stupid"                   -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "stupid"                           -> {NOT_A_DATA_QUESTION_SENTINEL}
   "do you not understand?"           -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "hello"                            -> {NOT_A_DATA_QUESTION_SENTINEL}
   "thanks!"                          -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "what's the weather today?"        -> {NOT_A_DATA_QUESTION_SENTINEL}
-  "what does North wind have"        -> {UNCLEAR_QUESTION_SENTINEL}
   "show me some data"                -> {UNCLEAR_QUESTION_SENTINEL}
-{sql_examples}Insults, complaints and comments about you are NEVER data questions:
-always reply {NOT_A_DATA_QUESTION_SENTINEL} for them.
-* No WITH clauses (CTEs) and no subqueries in FROM or JOIN: they are
-  rejected. Use joins, subqueries in WHERE or SELECT, or conditional
-  aggregation (SUM(CASE WHEN ... THEN ... END)) instead.
-{engine_rules}
-* Reply with the SQL only.
-* Show names, not internal IDs. For every column you SELECT that holds
-  another record's id (partner_id, user_id, product_id, employee_id,
-  company_id, ...), join that record's table and select its name
-  instead, where the table is in the schema. Identify a row by its own
-  name or number (an order's S00023 or P00015), not by its id.
-  e.g. purchase orders awaiting approval:
-       SELECT po.name, p.name AS vendor, po.date_order, po.amount_total
-       not SELECT po.id, po.partner_id, ... - unless the user asks
-       for ids.
+{sql_examples}
+Reply with the SQL only.
 """
 
     if _LLM.log_tokens:

@@ -139,6 +139,13 @@ class LlmSettings(_Strict):
     num_ctx: int | None = Field(None, ge=512, le=1_048_576)
     # Print each call's token counts and times ([llm] lines).
     log_tokens: bool = True
+    # Print the detail behind some log lines: each link table kept and
+    # dropped with its score, and each SQL example chosen with its score.
+    verbose: bool = False
+    # The SQL prompt carries at most this many of the database's SQL
+    # examples: those whose tables are in the question's schema and whose
+    # words are in the question first. 0 sends every example.
+    sql_examples_max: int = Field(5, ge=0)
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
@@ -280,6 +287,20 @@ class RelationshipWalk(_Strict):
     #   add   add it, without walking its relationships
     #   note  log it only; the domain's schema is used as is
     named_outside_domain: Literal["walk", "add", "note"] = "add"
+    # Such a table counts as named only when a phrase naming it has a word
+    # that no table name, label or alias in the domain uses: "sales order"
+    # names sale_order from Purchasing, but "order" alone (an alias of
+    # sale_order, and part of purchase_order) is the domain's word, so
+    # the domain's reading wins. Off: any full-name match counts.
+    named_outside_domain_distinct: bool = True
+    # At most this many link tables (named_outside_domain: add) per
+    # question, the best matches to the question first, then the
+    # narrowest. 0: no limit.
+    link_tables_max: int = Field(5, ge=0)
+    # When no table is named in full (a weak match), the domain's fallback
+    # tables are used, plus at most this many of the best weak matches,
+    # without a relationship walk. 0: every weak match.
+    weak_match_tables: int = Field(3, ge=0)
 
 
 class SchemaText(_Strict):
@@ -344,6 +365,7 @@ ENV_OVERRIDES = {
     "OLLAMA_MODEL":                 ("llm", "model"),
     "OLLAMA_CONNECT_TIMEOUT":       ("llm", "connect_timeout"),
     "OLLAMA_READ_TIMEOUT":          ("llm", "read_timeout"),
+    "SQLAGENT_VERBOSE":             ("llm", "verbose"),
     "DEMO_ALLOWED_ORIGIN":          ("api", "allowed_origins", _comma_list),
     "DEMO_TRUSTED_PROXY_HOPS":      ("api", "trusted_proxy_hops"),
     "DEMO_MAX_QUESTION_CHARS":      ("api", "max_question_chars"),

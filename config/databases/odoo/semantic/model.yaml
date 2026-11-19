@@ -242,7 +242,8 @@ tables:
 
   res_users:
     label: user
-    aliases: [salesperson, sales_rep, buyer, responsible, owner]
+    aliases: [salesperson, salespeople, sales_people, sales_rep, buyer,
+              responsible, owner]
     description: >-
       People who sign in to Odoo. The user's name is on its partner:
       join res_partner ON res_partner.id = res_users.partner_id.
@@ -388,7 +389,7 @@ tables:
       name:            {label: order number, aliases: [order_no, so_number, reference]}
       date_order:      {label: order date, aliases: [ordered, sold]}
       partner_id:      {label: customer, aliases: [client]}
-      user_id:         {label: salesperson, aliases: [sales_rep, account_manager]}
+      user_id:         {label: salesperson, aliases: [salespeople, sales_rep, account_manager]}
       team_id:         {label: sales team}
       amount_untaxed:  {label: subtotal before taxes (ex-GST), aliases: [net, subtotal, untaxed, ex_gst]}
       amount_tax:      {label: tax amount (GST), aliases: [gst, tax]}

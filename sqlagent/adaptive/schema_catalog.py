@@ -857,6 +857,20 @@ class SchemaCatalog:
                 if f"{table['schema']}.{table['name']}" not in domain_tables
                 and self.name_score(table, terms) >= FULL_NAME_MATCH
             ]
+            # A word the domain also uses ("order" for purchase_order) is
+            # read the domain's way: it doesn't name a table outside it
+            # (sale_order, alias "order"). A word only the outside table
+            # has ("sales" in "sales order") still does.
+            if outside and self._retrieval_setting("named_outside_domain_distinct"):
+                domain_words = self._domain_words(domain_tables)
+                kept = [(score, t) for score, t in outside
+                        if self._named_apart(t, terms, domain_words)]
+                shared = [t["name"] for _, t in outside
+                          if all(t is not k for _, k in kept)]
+                if shared:
+                    print("[schema] Named outside the domain only by words "
+                          f"the domain also uses, not added: {', '.join(shared)}")
+                outside = kept
             if outside:
                 names = ", ".join(t["name"] for _, t in outside)
                 outside_mode = self._retrieval_setting("named_outside_domain")
@@ -881,12 +895,29 @@ class SchemaCatalog:
         named = [(score, table) for score, table in matches
                  if self.name_score(table, terms) >= FULL_NAME_MATCH]
         if named:
+            # A hub is not walked back from, so a hub named alone (Odoo's
+            # res_users for "salespeople") reaches none of the tables that
+            # point at it (sale_order). Keep the best other match too.
+            hubs = self.hub_tables()
+
+            def full(table):
+                return f"{table['schema']}.{table['name']}"
+
+            if all(full(t) in hubs for _, t in named):
+                other = next(((s, t) for s, t in matches
+                              if full(t) not in hubs and (s, t) not in named), None)
+                if other is not None:
+                    print(f"[schema] Only a hub is named "
+                          f"({', '.join(t['name'] for _, t in named)}) - "
+                          f"also using the best other match: {other[1]['name']}")
+                    named.append(other)
             matches = named
 
         selected = {
             f"{table['schema']}.{table['name']}"
             for _, table in matches
         }
+        matched = set(selected)   # before the walk: link-table join targets
 
         if not selected:
             if scope is not None and fallback_names:
@@ -896,7 +927,9 @@ class SchemaCatalog:
                 print("[schema] No table match in domain - using fallback tables")
                 tables = set(fallback_names) | unwalked
                 return self._format_context(
-                    tables | self._link_tables(unwalked, tables))
+                    tables | self._link_tables(unwalked, tables,
+                                               matched=set(fallback_names),
+                                               terms=terms))
             if unwalked:
                 return self._format_context(unwalked)
             return ""
@@ -909,25 +942,94 @@ class SchemaCatalog:
             for _, table in matches
             if self.name_score(table, terms) >= FULL_NAME_MATCH
         } | unwalked
-        focus.add(f"{matches[0][1]['schema']}.{matches[0][1]['name']}")
-        selected = self.get_related_tables(selected, depth=relationship_depth)
+        best = f"{matches[0][1]['schema']}.{matches[0][1]['name']}"
+        focus.add(best)
 
         # A weak match (no table named in full, only a partial name or a
         # column word) is a poor signal on its own, so the fallback tables
-        # are added alongside it. e.g. "Margaret's order history": "order"
+        # are used alongside it. e.g. "Margaret's order history": "order"
         # only partly matches order_details, and employees comes from the
-        # fallback list.
+        # fallback list. The best few weak matches are added WITHOUT a
+        # relationship walk, plus any table needed to join them: walking
+        # from up to table_limit tables found on words like "revenue" in
+        # their columns once put 45 tables (~12k tokens) into one prompt
+        # ("Which salespeople generated the most revenue this year?").
         best_score = matches[0][0]
-        if best_score < FULL_NAME_MATCH:
-            print("[schema] Weak table match - adding fallback tables")
-            selected |= set(fallback_names)
-            focus |= set(fallback_names)
+        if best_score < FULL_NAME_MATCH and fallback_names:
+            limit = self._retrieval_setting("weak_match_tables")
+            weak = [f"{t['schema']}.{t['name']}" for _, t in matches]
+            weak = weak[:limit] if limit else weak
+            base = set(fallback_names)
+            print("[schema] Weak table match - fallback tables plus "
+                  + ", ".join(t.split(".")[-1] for t in weak)
+                  + " (no relationship walk)")
+            added = (set(weak) - base) | unwalked
+            links = self._link_tables(added, base | added,
+                                      matched=base | set(weak), terms=terms)
+            return self._format_context(base | added | links,
+                                        focus=focus | base | {best},
+                                        question=question)
 
-        links = self._link_tables(unwalked, selected | unwalked)
+        selected = self.get_related_tables(selected, depth=relationship_depth)
+
+        links = self._link_tables(unwalked, selected | unwalked,
+                                  matched=matched, terms=terms)
         return self._format_context(selected | unwalked | links, focus=focus,
                                     question=question)
 
-    def _link_tables(self, added, present):
+    def _naming_phrases(self, table, terms):
+        """
+        The phrases that name this table in the question, by the rules of
+        name_score(): its table name (every part matched), label, aliases
+        and term phrases. Column words never name a table.
+        """
+        phrases = []
+        if phrase_matches(table["name"], terms):
+            phrases.append(table["name"])
+        names = list(table.get("aliases", ()))
+        if table.get("label"):
+            names.append(table["label"])
+        phrases.extend(n for n in names if phrase_matches(n, terms))
+        phrases.extend(
+            phrase
+            for term in table.get("terms", ())
+            for phrase in term["phrases"]
+            if phrase_matches(phrase, terms)
+        )
+        return phrases
+
+    def _domain_words(self, domain_tables):
+        """
+        Every word form in the names, labels and aliases of a domain's
+        (loaded) tables: what a question word can already mean inside
+        the domain. Column names and aliases don't count.
+        """
+        found = set()
+        for full_name in domain_tables:
+            table = self.tables.get(full_name)
+            if table is None:
+                continue
+            names = [table["name"], *table.get("aliases", ())]
+            if table.get("label"):
+                names.append(table["label"])
+            for name in names:
+                for forms in phrase_parts(name):
+                    found |= forms
+        return found
+
+    def _named_apart(self, table, terms, domain_words):
+        """
+        True if some phrase naming this outside table has a word the
+        domain doesn't use ("sales" in "sales order", seen from
+        Purchasing). False if every naming word is also the domain's
+        ("order" alone): the domain's reading of the word wins.
+        """
+        return any(
+            any(not (forms & domain_words) for forms in phrase_parts(phrase))
+            for phrase in self._naming_phrases(table, terms)
+        )
+
+    def _link_tables(self, added, present, matched=(), terms=()):
         """
         Tables that join a table added without a relationship walk
         (named_outside_domain: add) to the rest of the schema: a table with
@@ -936,25 +1038,80 @@ class SchemaCatalog:
         the Sales schema; employee_territories (-> employees and ->
         territories) is the only way to join them, so it comes too. Just
         the joins - not every neighbour, as a walk would add.
+
+        Only real joins count:
+          - a hub (res_company, res_users) reached only by the walk is not
+            a join target: nearly every Odoo table has a company_id, so
+            "points at the product and at the company" matched dozens of
+            tables. A hub the question matched (matched: the tables found
+            before the walk, e.g. res_partner for "customers") still is;
+          - the added tables are not join targets for each other
+            (product_product and product_template are joined directly);
+          - an added table that already joins the schema - directly, or
+            through another added table that does - needs no link.
+
+        At most link_tables_max are kept: the best matches to the
+        question's terms first (score_table), then the fewest columns.
         """
         if not added:
             return set()
+        hubs = self.hub_tables()
+        joinable = present - added - (hubs - set(matched))
+
         targets = {}
+        neighbours = {}
         for relationship in self.foreign_keys:
-            targets.setdefault(relationship["from_table"], set()).add(
-                relationship["to_table"])
+            a, b = relationship["from_table"], relationship["to_table"]
+            targets.setdefault(a, set()).add(b)
+            neighbours.setdefault(a, set()).add(b)
+            neighbours.setdefault(b, set()).add(a)
+
+        # Added tables already joined to the schema, directly or through
+        # each other.
+        joined = {name for name in added if neighbours.get(name, set()) & joinable}
+        grew = True
+        while grew:
+            more = {name for name in added - joined
+                    if neighbours.get(name, set()) & joined}
+            joined |= more
+            grew = bool(more)
+        unjoined = added - joined
+
         links = set()
         for table, points_to in targets.items():
-            if table in present or table not in self.tables:
+            if table in present or table not in self.tables or table in hubs:
                 continue
-            for name in points_to & added:
-                if points_to & (present - {name}):
-                    links.add(table)
-        if links:
-            print("[schema] Link table(s) added to join "
-                  + ", ".join(sorted(t.split(".")[-1] for t in added))
-                  + ": " + ", ".join(sorted(t.split(".")[-1] for t in links)))
-        return links
+            if points_to & unjoined and points_to & joinable:
+                links.add(table)
+        if not links:
+            return links
+
+        joined_names = ", ".join(sorted(t.split(".")[-1] for t in added))
+        limit = self._retrieval_setting("link_tables_max")
+        if not limit or len(links) <= limit:
+            print(f"[schema] Link table(s) added to join {joined_names}: "
+                  + ", ".join(sorted(t.split(".")[-1] for t in links)))
+            return links
+
+        terms = set(terms)
+        ranked = sorted(
+            links,
+            key=lambda t: (-self.score_table(self.tables[t], terms),
+                           len(self.tables[t]["columns"]), t))
+
+        def listed(names):
+            return ", ".join(
+                f"{t.split('.')[-1]} ({self.score_table(self.tables[t], terms)})"
+                for t in names)
+
+        if get_settings().llm.verbose:
+            kept = (f"{listed(ranked[:limit])}; "
+                    f"dropped: {listed(ranked[limit:])}")
+        else:
+            kept = ", ".join(sorted(t.split(".")[-1] for t in ranked[:limit]))
+        print(f"[schema] Link table(s) added to join {joined_names} "
+              f"({limit} of {len(ranked)}): {kept}")
+        return set(ranked[:limit])
 
     def discover_schema(self, question, scope=None, anchors=None):
         """
