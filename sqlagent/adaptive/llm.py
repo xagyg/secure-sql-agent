@@ -291,6 +291,54 @@ def examples_for_role(examples, allowed_tables):
     return kept
 
 
+def _schema_tables(schema):
+    """The tables a schema text shows ("TABLE public.res_partner  -- ..."),
+    as lowercase full names, without quotes."""
+    found = set()
+    for match in re.finditer(r"^TABLE\s+(\S+)", schema or "", re.M):
+        name = re.sub(r'["\[\]`]', "", match.group(1)).lower()
+        found.add(full_table_name(name))
+    return found
+
+
+def examples_for_question(examples, question, schema, limit):
+    """
+    At most `limit` of the SQL examples (already filtered by
+    examples_for_role), the most useful for this question first:
+
+      - each table the example reads that is also in this question's
+        schema counts 2 (it shows how to use the tables the model has);
+      - each question word (minus generic words such as "show") that is
+        also in the example's question or note counts 1.
+
+    Ties keep the database's own order, as do the examples chosen, so the
+    prompt reads as the identity file does. A question that matches
+    nothing gets the first `limit`. 0 (or a list no longer than the
+    limit) keeps every example.
+    """
+    examples = list(examples)
+    if not limit or len(examples) <= limit:
+        return examples
+
+    from sqlagent.adaptive.text_match import GENERIC_TERMS, tokenize
+
+    words = tokenize(question) - GENERIC_TERMS
+    shown = _schema_tables(schema)
+    dialect = active_dialect()
+
+    def score(example):
+        tables = _example_tables(example.sql, dialect) or frozenset()
+        said = tokenize(example.question) | tokenize(example.note or "")
+        return 2 * len(tables & shown) + len(words & said)
+
+    scores = [score(e) for e in examples]
+    ranked = sorted(range(len(examples)), key=lambda i: (-scores[i], i))
+    chosen = sorted(ranked[:limit])
+    print(f"[llm] SQL examples: {limit} of {len(examples)} for this question: "
+          + "; ".join(f"{examples[i].question} ({scores[i]})" for i in chosen))
+    return [examples[i] for i in chosen]
+
+
 def generate_sql(question, schema, history, allowed_tables=None):
     """
     allowed_tables: the tables the role may see (the catalog's full
@@ -310,6 +358,8 @@ def generate_sql(question, schema, history, allowed_tables=None):
     if len(examples) < len(db.sql_examples):
         print(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
               "(the rest use tables this role can't see)")
+    examples = examples_for_question(examples, question, schema,
+                                     _LLM.sql_examples_max)
     sql_examples = _format_examples(examples)
 
     system_prompt = f"""

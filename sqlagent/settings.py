@@ -139,6 +139,10 @@ class LlmSettings(_Strict):
     num_ctx: int | None = Field(None, ge=512, le=1_048_576)
     # Print each call's token counts and times ([llm] lines).
     log_tokens: bool = True
+    # The SQL prompt carries at most this many of the database's SQL
+    # examples: those whose tables are in the question's schema and whose
+    # words are in the question first. 0 sends every example.
+    sql_examples_max: int = Field(5, ge=0)
     headers: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("headers")
