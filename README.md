@@ -583,9 +583,9 @@ group_roles:                       # identity-provider group -> roles
   ```yaml
   payroll_officer:
     extends: hr_analyst
-    undeny: ["erp.emp_salary_hist"]            # hr_analyst denies it; payroll may see it
+    undeny: [erp.emp_salary_hist]            # hr_analyst denies it; payroll may see it
     undeny_columns:
-      "erp.emp_*": [bank_account]              # hr_analyst hides it; payroll may see it
+      erp.emp_*: [bank_account]              # hr_analyst hides it; payroll may see it
   ```
 * **Fails closed.** A missing file, invalid YAML, a duplicate or unknown key, `default` other than `deny`, a `deny_columns` table the role isn't granted (usually a typo), or an undefined role stops startup, and so does a role that ends up with no tables at all (usually missing database grants, e.g. after loading a new database). A denied column that doesn't exist on its table is logged as a warning.
 * **Users come from identity, not the file.** `group_roles` maps identity-provider groups to roles (`SecurityPolicy.roles_for_groups`). The demo API always uses the `demo` role; the REPL uses `SQLAGENT_ROLES`, or a local identity (below). No user is ever named in this file: roles and grants go to groups. Giving one person extra access is the identity provider's job, not the agent's: the agent sees only the groups the user ends up in, however they were assigned. The demo does this with a group of one in `config/idp/`.
