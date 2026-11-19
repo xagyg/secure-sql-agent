@@ -137,6 +137,14 @@ relationships:
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
 
+  # Such a table counts as named only when a phrase naming it has a word
+  # the domain doesn't use (in any of its tables' names, labels or
+  # aliases). From Purchasing, "sales order" names sale_order, but "order"
+  # alone - an alias of sale_order, and part of purchase_order's name - is
+  # the domain's word, so sale_order is left out. false: any full name,
+  # label, alias or term match counts, as before.
+  named_outside_domain_distinct: true
+
 # How the schema is written into the SQL prompt. It is most of the prompt,
 # and a prompt longer than the model's context (Ollama's num_ctx) is cut
 # without an error, so keep it small.

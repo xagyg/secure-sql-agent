@@ -280,6 +280,12 @@ class RelationshipWalk(_Strict):
     #   add   add it, without walking its relationships
     #   note  log it only; the domain's schema is used as is
     named_outside_domain: Literal["walk", "add", "note"] = "add"
+    # Such a table counts as named only when a phrase naming it has a word
+    # that no table name, label or alias in the domain uses: "sales order"
+    # names sale_order from Purchasing, but "order" alone (an alias of
+    # sale_order, and part of purchase_order) is the domain's word, so
+    # the domain's reading wins. Off: any full-name match counts.
+    named_outside_domain_distinct: bool = True
 
 
 class SchemaText(_Strict):

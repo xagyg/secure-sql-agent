@@ -195,6 +195,119 @@ class NamedOutsideDomain(unittest.TestCase):
         self.assertNotIn("audit_log", tables)
 
 
+def orders_catalog(retrieval=None):
+    """
+    Odoo's shape for the word "order": sale_order has the one-word alias
+    "order" (so "order" names it in full), purchase_order only has
+    "order" in its name (a partial match). Both point at partner.
+    """
+    catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+        "public.sale_order": ["id", "partner_id", "date_order"],
+        "public.purchase_order": ["id", "partner_id", "date_order"],
+        "public.partner": ["id", "name"],
+    })
+    catalog.tables["public.sale_order"].update(
+        label="sales order", aliases=["order", "quotation", "sale"])
+    catalog.tables["public.purchase_order"].update(
+        label="purchase order", aliases=["po", "rfq"])
+    catalog.tables["public.partner"].update(
+        label="partner", aliases=["customer", "vendor", "supplier"])
+
+    def fk(a):
+        return {"from_table": f"public.{a}", "from_columns": ("partner_id",),
+                "to_table": "public.partner", "to_columns": ("id",)}
+
+    catalog.foreign_keys = [fk("sale_order"), fk("purchase_order")]
+    with_retrieval(catalog, retrieval or {})
+    return catalog
+
+
+PURCHASING = ({"public.purchase_order", "public.partner"},
+              ["public.purchase_order", "public.partner"], 1)
+SALES = ({"public.sale_order", "public.partner"},
+         ["public.sale_order", "public.partner"], 1)
+
+
+class NamedOutsideDomainDistinct(unittest.TestCase):
+    """named_outside_domain_distinct: a word the domain also uses doesn't
+    name a table outside it."""
+
+    def tables(self, question, scope, retrieval=None):
+        catalog = orders_catalog(retrieval)
+        return tables_in(catalog.discover_schema(question, scope=scope))
+
+    def test_shared_word_stays_in_the_domain(self):
+        # "order" is sale_order's alias, but it is also part of
+        # purchase_order's name: from Purchasing it means a purchase order.
+        tables = self.tables("What was the last order from Acme?", PURCHASING)
+        self.assertNotIn("sale_order", tables)
+        self.assertIn("purchase_order", tables)
+
+    def test_switch_off_restores_the_old_behaviour(self):
+        tables = self.tables("What was the last order from Acme?", PURCHASING,
+                             {"named_outside_domain_distinct": False})
+        self.assertIn("sale_order", tables)
+
+    def test_distinct_word_still_names_the_outside_table(self):
+        # "sales" is in no Purchasing table name, label or alias.
+        tables = self.tables("What was the last sales order from Acme?",
+                             PURCHASING)
+        self.assertIn("sale_order", tables)
+        self.assertIn("purchase_order", tables)
+
+    def test_distinct_one_word_alias(self):
+        tables = self.tables("Show the last quotation", PURCHASING)
+        self.assertIn("sale_order", tables)
+
+    def test_the_other_way_round(self):
+        # From Sales, "purchase order" names purchase_order ("purchase" is
+        # not a Sales word); plain "order" stays with sale_order.
+        self.assertIn("purchase_order",
+                      self.tables("What was the last purchase order?", SALES))
+        tables = self.tables("What was the last order?", SALES)
+        self.assertIn("sale_order", tables)
+        self.assertNotIn("purchase_order", tables)
+
+    def test_naming_phrases_follow_name_score(self):
+        catalog = orders_catalog()
+        table = catalog.tables["public.sale_order"]
+        terms = catalog.question_terms("the last sales order")
+        self.assertEqual(set(catalog._naming_phrases(table, terms)),
+                         {"sale_order", "sales order", "order", "sale"})
+        terms = catalog.question_terms("the last order")
+        self.assertEqual(catalog._naming_phrases(table, terms), ["order"])
+
+    def test_domain_words_ignore_columns(self):
+        catalog = orders_catalog()
+        words = catalog._domain_words(PURCHASING[0])
+        self.assertIn("order", words)
+        self.assertIn("vendor", words)
+        self.assertNotIn("date", words)     # date_order is a column
+        self.assertNotIn("sale", words)
+
+    def test_northwind_category_from_hr_is_still_added(self):
+        # The existing case: "categories" is no HR word.
+        catalog = make_catalog()
+        catalog.domain_resolver.blend = False
+        ctx, decision = route(catalog, NamedOutsideDomain.QUESTION)
+        scope = catalog.domain_resolver.scope(decision)
+        self.assertIn("categories",
+                      tables_in(catalog.discover_schema(ctx.question, scope=scope)))
+
+    def test_shipped_default_is_on(self):
+        self.assertTrue(RelationshipWalk().named_outside_domain_distinct)
+        self.assertTrue(load_settings(environ={}).retrieval.relationships
+                        .named_outside_domain_distinct)
+
+    def test_database_override(self):
+        model = model_from(**{"r.yaml":
+                              "retrieval: {named_outside_domain_distinct: false}"})
+        self.assertIs(model.retrieval["named_outside_domain_distinct"], False)
+        with self.assertRaises(SemanticModelError):
+            model_from(**{"r.yaml":
+                          "retrieval: {named_outside_domain_distinct: maybe}"})
+
+
 class Blending(unittest.TestCase):
 
     QUESTION = "list the shippers [where=staff records]"   # Logistics vs HR
