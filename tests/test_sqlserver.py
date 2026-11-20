@@ -398,6 +398,14 @@ class Pipeline(unittest.TestCase):
         self.assertIsNone(r.failure_reason)
         self.assertEqual(r.sql, "SELECT TOP 100 CompanyName FROM dbo.Customers")
 
+    def test_qualify_top_after_the_filter(self):
+        r = self.prepare("SELECT CompanyName, ROW_NUMBER() OVER (ORDER BY CompanyName) AS rn "
+                         "FROM dbo.Customers QUALIFY rn <= 3 ORDER BY CompanyName")
+        self.assertIsNone(r.failure_reason)
+        self.assertTrue(r.sql.startswith("SELECT TOP 100 CompanyName, rn FROM (SELECT "))
+        self.assertEqual(r.sql.count("TOP"), 1)
+        self.assertTrue(r.sql.endswith(") AS _t WHERE rn <= 3 ORDER BY CompanyName"))
+
     def test_union_star_expanded_and_limited(self):
         r = self.prepare("SELECT * FROM dbo.Customers UNION SELECT * FROM dbo.Customers")
         self.assertIsNone(r.failure_reason)
