@@ -14,3 +14,16 @@ user: brad
 # returns more than query.yaml max_rows rows.
 table_rows: 20
 table_value_chars: 40
+
+# How rewritten SQL ([sql after rewrite], [sql after withholding], the
+# row-scoped query) is laid out in the console log, here and under the
+# API. Display only: the SQL that runs, the history and the prompts keep
+# the compact text. The model's own SQL ([sql], [corrected sql]) is
+# always shown as it wrote it.
+sql_format:
+  pretty: true              # false: one line, as before
+  pad: 4                    # indent of the column list under SELECT
+  indent: 4                 # indent of subqueries and WHERE conditions
+  leading_comma: false      # true: ", column" at the start of each line
+  max_text_width: 80        # break a clause longer than this; lower it
+                            # (e.g. 40) to put each AND on its own line

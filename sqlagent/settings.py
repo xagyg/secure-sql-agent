@@ -341,12 +341,23 @@ class RetrievalSettings(_Strict):
 # repl.yaml
 # ---------------------------------------------------------------------------
 
+class SqlFormat(_Strict):
+    """How rewritten SQL is laid out in the console log (sqlglot's pretty
+    options). Display only: the SQL that runs is not changed."""
+    pretty: bool = True
+    pad: int = Field(4, ge=0, le=16)
+    indent: int = Field(4, ge=0, le=16)
+    leading_comma: bool = False
+    max_text_width: int = Field(80, ge=20, le=1000)
+
+
 class ReplSettings(_Strict):
     user: str = Field("local", min_length=1)
     # The table shown instead of the LLM's explanation (--no-explain): at
     # most table_rows rows, each value cut to table_value_chars.
     table_rows: int = Field(20, ge=1, le=10_000)
     table_value_chars: int = Field(40, ge=8, le=1000)
+    sql_format: SqlFormat = Field(default_factory=SqlFormat)
 
 
 # ---------------------------------------------------------------------------
