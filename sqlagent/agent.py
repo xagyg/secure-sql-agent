@@ -524,13 +524,17 @@ def run_agent(question, catalog, history, security, explain=True):
     # ---------------------------------------------------------
     # Who / What / Where -> Domain of Discourse (see domains.py)
     # ---------------------------------------------------------
-    # [where=...] / [who=...] tags are removed here, so neither the
-    # LLM nor the conversation history ever sees them.
+    # [where=...] / [who=...] / [explain] tags are removed here, so
+    # neither the LLM nor the conversation history ever sees them.
     context = parse_context_tags(question)
     question = context.question
 
     if context.where or context.who:
         print(f"\n[context] where={context.where!r} who={context.who!r}")
+    if context.explain and not explain:
+        # [explain] turns the explanation on for this question only.
+        print("\n[context] [explain]: explaining this result")
+        explain = True
 
     if not question:
         result = _result("Please add a question to go with the context tag.",
@@ -954,7 +958,8 @@ def _answer_from_results(question, sql, results, withheld, history,
         print("\n[security] Every result column was withheld.")
         return _policy_block("not_found_or_restricted", sql)
 
-    print("\n[agent] Asking Ollama to interpret the results...")
+    if explain and results:
+        print("\n[agent] Asking Ollama to interpret the results...")
 
     # Remove the artificial row cap (MAX_ROWS) from the SQL supplied to
     # the explanation model so that it doesn't incorrectly attribute the

@@ -7,10 +7,13 @@
 #
 #     python -m unittest tests.test_relationship_walk -v
 
+import contextlib
 import dataclasses
+import io
 import unittest
 from pathlib import Path
 
+from sqlagent.adaptive.schema_catalog import typed_in_full
 from sqlagent.adaptive.semantic_model import SemanticModelError, load_semantic_model
 from sqlagent.settings import RelationshipWalk, load_settings
 from tests.fixtures import NORTHWIND, make_catalog
@@ -280,10 +283,20 @@ class NamedOutsideDomainDistinct(unittest.TestCase):
     def test_domain_words_ignore_columns(self):
         catalog = orders_catalog()
         words = catalog._domain_words(PURCHASING[0])
-        self.assertIn("order", words)
-        self.assertIn("vendor", words)
-        self.assertNotIn("date", words)     # date_order is a column
-        self.assertNotIn("sale", words)
+        self.assertEqual(set(words), {"public.purchase_order", "public.partner"})
+        self.assertIn("order", words["public.purchase_order"])
+        self.assertIn("vendor", words["public.partner"])
+        everything = set().union(*words.values())
+        self.assertNotIn("date", everything)     # date_order is a column
+        self.assertNotIn("sale", everything)
+
+    def test_log_names_the_domain_table(self):
+        catalog = orders_catalog()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            catalog.discover_schema("What was the last order from Acme?",
+                                    scope=PURCHASING)
+        self.assertIn("not added: sale_order (as purchase_order)", out.getvalue())
 
     def test_northwind_category_from_hr_is_still_added(self):
         # The existing case: "categories" is no HR word.
@@ -306,6 +319,120 @@ class NamedOutsideDomainDistinct(unittest.TestCase):
         with self.assertRaises(SemanticModelError):
             model_from(**{"r.yaml":
                           "retrieval: {named_outside_domain_distinct: maybe}"})
+
+
+def moves_catalog():
+    """
+    An Accounting-shaped domain where "stock" and "move" each belong to a
+    different table (stock_valuation_layer, account_move), but no single
+    domain table is a "stock move". stock_move is outside the domain.
+    A sales domain has sale_order_line ("sales order line"), whose words
+    cover sale_order's label "sales order".
+    """
+    catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+        "public.account_move": ["id", "partner_id"],
+        "public.stock_valuation_layer": ["id", "product_id"],
+        "public.stock_move": ["id", "product_id"],
+        "public.sale_order": ["id", "partner_id"],
+        "public.sale_order_line": ["id", "order_id"],
+        "public.mrp_bom": ["id", "product_id"],
+        "public.bill_material": ["id"],
+    })
+    catalog.tables["public.account_move"].update(
+        label="journal entry", aliases=["move", "invoice", "bill"])
+    catalog.tables["public.stock_valuation_layer"].update(
+        label="stock valuation", aliases=["valuation"])
+    catalog.tables["public.stock_move"].update(label="stock move")
+    catalog.tables["public.sale_order"].update(label="sales order")
+    catalog.tables["public.sale_order_line"].update(label="sales order line")
+    catalog.tables["public.mrp_bom"].update(label="bill of materials",
+                                            aliases=["bom"])
+    catalog.tables["public.bill_material"].update(label="bill material")
+    catalog.foreign_keys = []
+    with_retrieval(catalog, {})
+    return catalog
+
+
+ACCOUNTING = ({"public.account_move", "public.stock_valuation_layer"},
+              ["public.account_move", "public.stock_valuation_layer"], 1)
+ORDER_LINES = ({"public.sale_order_line"}, ["public.sale_order_line"], 1)
+
+
+class CoveredByOneDomainTable(unittest.TestCase):
+    """named_outside_domain_distinct checks one domain table at a time,
+    exempts phrases typed out in full, and ignores filler words."""
+
+    def tables(self, question, scope):
+        catalog = moves_catalog()
+        return tables_in(catalog.discover_schema(question, scope=scope))
+
+    def test_words_spread_over_two_domain_tables_still_name(self):
+        # "stock" (stock_valuation_layer) and "move" (account_move) are
+        # both Accounting words, but no Accounting table is a stock move.
+        # The words aren't side by side, so this is the per-table check.
+        tables = self.tables("Which moves changed stock this week?", ACCOUNTING)
+        self.assertIn("stock_move", tables)
+
+    def test_one_table_covering_the_words_still_wins(self):
+        # "order" and "sales" scattered: sale_order_line has both, so
+        # from that domain they mean order lines, not sale_order.
+        tables = self.tables("Which orders came from sales reps?", ORDER_LINES)
+        self.assertNotIn("sale_order", tables)
+
+    def test_phrase_typed_in_full_is_kept(self):
+        for question in ("List the sales orders for Acme",
+                         "List rows of sale_order for Acme"):
+            with self.subTest(question=question):
+                self.assertIn("sale_order", self.tables(question, ORDER_LINES))
+
+    def test_table_name_typed_as_identifier(self):
+        self.assertIn("stock_move",
+                      self.tables("count the rows in stock_move", ACCOUNTING))
+
+    def test_one_word_phrase_is_never_exempt(self):
+        catalog = moves_catalog()
+        catalog.tables["public.stock_move"]["aliases"] = ["move"]
+        terms = catalog.question_terms("show the last move")
+        words = catalog._domain_words(ACCOUNTING[0])
+        self.assertEqual(
+            catalog._covered_by(catalog.tables["public.stock_move"], terms,
+                                words, "show the last move"),
+            "account_move")
+
+    def test_filler_words_do_not_decide(self):
+        # "bill of materials" with its words apart: bill_material covers
+        # "bill" and "material"; "of" doesn't make the phrase distinct.
+        catalog = moves_catalog()
+        question = "which bill has materials of steel"
+        terms = catalog.question_terms(question)
+        words = catalog._domain_words({"public.bill_material"})
+        self.assertNotIn("of", words["public.bill_material"])
+        self.assertEqual(
+            catalog._covered_by(catalog.tables["public.mrp_bom"], terms,
+                                words, question),
+            "bill_material")
+
+    def test_filler_never_counts_as_a_domain_word(self):
+        catalog = moves_catalog()
+        catalog.tables["public.account_move"]["label"] = "journal of entries"
+        words = catalog._domain_words(ACCOUNTING[0])
+        self.assertNotIn("of", words["public.account_move"])
+
+
+class TypedInFull(unittest.TestCase):
+
+    def test_matches(self):
+        self.assertTrue(typed_in_full("stock_move", "rows in stock_move"))
+        self.assertTrue(typed_in_full("stock_move", "show stock moves"))
+        self.assertTrue(typed_in_full("sales order", "List the Sales Orders"))
+        self.assertTrue(typed_in_full("bill of materials",
+                                      "the bill of materials for X"))
+
+    def test_words_apart_or_out_of_order(self):
+        self.assertFalse(typed_in_full("stock_move", "moves of stock"))
+        self.assertFalse(typed_in_full("stock_move", "stock that moved"))
+        self.assertFalse(typed_in_full("sales order", "sales by order"))
+        self.assertFalse(typed_in_full("", "anything"))
 
 
 def products_catalog(partner_is_hub=True):
