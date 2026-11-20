@@ -31,6 +31,7 @@
 # range or an override that doesn't parse raises SettingsError and
 # startup stops. The folder can be moved with SQLAGENT_SETTINGS_DIR.
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -51,6 +52,8 @@ from sqlagent.config_files import (
     format_validation_error,
     load_yaml,
 )
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_SETTINGS_DIR = CONFIG_DIR / "settings"
@@ -472,5 +475,5 @@ def get_settings():
     settings = load_settings()
     note = (f"; from environment: {', '.join(settings.overridden)}"
             if settings.overridden else "")
-    print(f"[settings] {settings.source}{note}")
+    logger.info(f"[settings] {settings.source}{note}")
     return settings

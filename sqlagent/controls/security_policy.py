@@ -70,6 +70,7 @@
 # rest of the agent sees is each role's flattened lists.
 
 import fnmatch
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -85,6 +86,8 @@ from sqlagent.controls.row_scope import RowScopeError, combine_filters, compile_
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.databases import DatabaseConfigError, active_database
 from sqlagent.controls.security_utils import full_table_name, is_pattern
+
+logger = logging.getLogger(__name__)
 
 
 class SecurityPolicyError(ConfigFileError):
@@ -388,7 +391,7 @@ class SecurityPolicy:
         # every restriction a role lifts from its parent.
         self.inheritance = list(parsed._inheritance)
         for line in self.inheritance:
-            print(f"[security] {line}")
+            logger.info(f"[security] {line}")
         self.group_roles = {
             group.lower(): {r.lower() for r in roles}
             for group, roles in parsed.group_roles.items()
@@ -459,8 +462,8 @@ class SecurityPolicy:
 
         for pattern in allow:
             if not is_pattern(pattern) and pattern not in by_lower:
-                print(f"[security] role {role}: allowed table '{pattern}' "
-                      "not found in the database - skipped")
+                logger.info(f"[security] role {role}: allowed table '{pattern}' "
+                            "not found in the database - skipped")
 
         tables = {
             actual for lower, actual in by_lower.items()
@@ -579,8 +582,8 @@ class SecurityPolicy:
         if log:
             log_context(context)
             for table in sorted(narrowed):
-                print(f"[security]   {table}: grants see different rows, so a "
-                      "column is shown only if every grant shows it")
+                logger.info(f"[security]   {table}: grants see different rows, so a "
+                            "column is shown only if every grant shows it")
         return context
 
     def _resolve_joins(self, read_foreign_keys, log=True):
@@ -628,8 +631,8 @@ class SecurityPolicy:
                     "say which with join:")
             self.scopes[dim][1][table] = ("via", parent, joins[0], rule[3])
             if log:
-                print(f"[security] scope {dim}: {self._spelled[table]} via {rule[3]} "
-                      f"on {shown} (foreign key)")
+                logger.info(f"[security] scope {dim}: {self._spelled[table]} via {rule[3]} "
+                            f"on {shown} (foreign key)")
         self._joins_resolved = True
 
     def _rules_for(self, dim, role, role_tables, log):
@@ -650,8 +653,8 @@ class SecurityPolicy:
                 "add a rule, mark it unscoped, or give the scope default: unscoped")
         if log and (dim, role) not in self._defaults_shown:
             self._defaults_shown.add((dim, role))
-            print(f"[security] scope {dim}: unscoped by default for role {role}: "
-                  + ", ".join(missing))
+            logger.info(f"[security] scope {dim}: unscoped by default for role {role}: "
+                        + ", ".join(missing))
         return {**rules, **{t.lower(): ("unscoped",) for t in missing}}
 
     def _check_scope_size(self, user_id, role, dim, value, resolved):
@@ -682,14 +685,14 @@ class SecurityPolicy:
         spec = self.scopes[dim][0]
         me = attributes.get(spec.user_attribute)
         if me is None:
-            print(f"[security] WARNING: no '{spec.user_attribute}' attribute for "
-                  f"scope {dim} ({value}) - no rows in that scope")
+            logger.info(f"[security] WARNING: no '{spec.user_attribute}' attribute for "
+                        f"scope {dim} ({value}) - no rows in that scope")
             return []
         if value == "self":
             return [me]
         if read_hierarchy is None:
-            print(f"[security] WARNING: scope {dim} ({value}) needs the hierarchy, "
-                  "which can't be read here - no rows in that scope")
+            logger.info(f"[security] WARNING: scope {dim} ({value}) needs the hierarchy, "
+                        "which can't be read here - no rows in that scope")
             return []
         if dim not in cache:
             h = spec.hierarchy
@@ -711,10 +714,10 @@ def log_context(context):
     """Print what a SecurityContext resolved to (startup log), including
     each table's row filter, so what a user can see is reviewable."""
     roles = ", ".join(sorted(context.roles)) or "(none)"
-    print(f"[security] user {context.user_id} (roles: {roles}): "
-          f"{len(context.tables)} table(s)")
+    logger.info(f"[security] user {context.user_id} (roles: {roles}): "
+                f"{len(context.tables)} table(s)")
     if context.row_filters:
-        print(f"[security] grants: {'; '.join(context.grants)}")
+        logger.info(f"[security] grants: {'; '.join(context.grants)}")
     try:
         from sqlagent.execution.engines import active_dialect
         dialect = active_dialect()
@@ -725,7 +728,7 @@ def log_context(context):
         suffix = f"  [denied: {', '.join(sorted(denied))}]" if denied else ""
         row_filter = context.row_filters.get(table.lower())
         rows = f"  [rows: {row_filter.sql(dialect=dialect)}]" if row_filter is not None else ""
-        print(f"[security]   {table}{suffix}{rows}")
+        logger.info(f"[security]   {table}{suffix}{rows}")
 
 
 def load_security_policy(path=None):
@@ -753,6 +756,6 @@ def load_security_policy(path=None):
         raise SecurityPolicyError(str(ex)) from ex
 
     policy = SecurityPolicy.from_dict(data, source=path)
-    print(f"[security] Loaded {path}: {len(policy.roles)} role(s), "
-          f"{len(policy.group_roles)} group mapping(s)")
+    logger.info(f"[security] Loaded {path}: {len(policy.roles)} role(s), "
+                f"{len(policy.group_roles)} group mapping(s)")
     return policy

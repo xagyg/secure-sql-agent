@@ -41,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from sqlagent.agent import run_agent
+from sqlagent.log import request_context
 from sqlagent.settings import get_settings
 from sqlagent.databases import active_database
 from sqlagent.execution.engines import active_engine
@@ -264,7 +265,7 @@ class AgentGate:
             exc = finished.exception()  # mark retrieved; the caller sees it if still waiting
             if exc is not None and abandoned:
                 # The request already got its 504; one line, not a traceback.
-                print(
+                log.warning(
                     f"[timeout] abandoned agent run failed in {_error_source(exc)}: "
                     f"{type(exc).__name__}: {exc}"
                 )
@@ -367,19 +368,25 @@ demo_catalog: SchemaCatalog | None = None
 
 
 # ==========================================================================
-# Audit logging
+# Logging
+#
+# The console log (sqlagent/log.py) is what the REPL prints. Inside a
+# request every line carries the request's id - the same id= as its
+# audit lines - so concurrent requests can be told apart.
 # ==========================================================================
 
-logger = logging.getLogger("secure_sql_agent.demo")
-logger.setLevel(logging.INFO)
+log = logging.getLogger("sqlagent.api")
+
+audit_logger = logging.getLogger("secure_sql_agent.demo")
+audit_logger.setLevel(logging.INFO)
 _handler = logging.FileHandler(AUDIT_LOG_PATH)
 _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-logger.addHandler(_handler)
+audit_logger.addHandler(_handler)
 
 
 def audit(event: str, **fields) -> None:
     parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
-    logger.info("%s %s", event, parts)
+    audit_logger.info("%s %s", event, parts)
 
 
 # ==========================================================================
@@ -502,7 +509,19 @@ async def ask(payload: AskRequest, request: Request):
 
     request_id = uuid.uuid4().hex[:12]
     audit("request_received", id=request_id, ip=ip_key, session=payload.session_id, question=question)
-    print(f"\n[question] {question}")
+
+    # Every console line from here on - including the agent's, in its
+    # worker thread (asyncio.to_thread copies the context) - carries
+    # request_id.
+    with request_context(request_id):
+        return await _answer(payload, question, request_id, history, working_history)
+
+
+async def _answer(payload: AskRequest, question: str, request_id: str,
+                  history: list, working_history: list) -> AskResponse:
+    """The rest of ask(): run the agent and turn its result into the
+    response. Runs with request_id set for the console log."""
+    log.info(f"\n[question] {question}")
 
     try:
         result = await agent_gate.run(
@@ -520,7 +539,7 @@ async def ask(payload: AskRequest, request: Request):
         ) from None
     except asyncio.TimeoutError:
         audit("timeout", id=request_id, session=payload.session_id)
-        print(f"[timeout] no answer within {AGENT_TIMEOUT_SECONDS}s — returned 504")
+        log.warning(f"[timeout] no answer within {AGENT_TIMEOUT_SECONDS}s — returned 504")
         raise HTTPException(
             status_code=504,
             detail=(

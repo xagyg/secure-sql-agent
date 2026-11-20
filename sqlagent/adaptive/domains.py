@@ -25,12 +25,15 @@
 # Everything here is deterministic. The LLM never chooses the domain.
 
 import fnmatch
+import logging
 import re
 from dataclasses import dataclass, field
 
 from sqlagent.controls.security_utils import full_table_name, is_pattern
 from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_matches, tokenize
 from sqlagent.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -246,15 +249,15 @@ class DomainResolver:
                     if matches:
                         found |= matches
                     else:
-                        print(f"[domain] {key}: {what} pattern '{pattern}' "
-                              "matches no available table - skipped")
+                        logger.info(f"[domain] {key}: {what} pattern '{pattern}' "
+                                    "matches no available table - skipped")
                     continue
                 match = self.catalog.resolve_table_name(table)
                 if match:
                     found.add(match)
                 else:
-                    print(f"[domain] {key}: {what} '{full_table_name(table)}' "
-                          "not available - skipped")
+                    logger.info(f"[domain] {key}: {what} '{full_table_name(table)}' "
+                                "not available - skipped")
             return found
 
         self.domain_tables = {}
@@ -265,7 +268,7 @@ class DomainResolver:
                 domain.get("fallback_tables", ()), key, "fallback table")
 
         usable = [k for k, t in self.domain_tables.items() if t]
-        print(f"[domain] {len(usable)} domain(s) available: {', '.join(usable) or 'none'}")
+        logger.info(f"[domain] {len(usable)} domain(s) available: {', '.join(usable) or 'none'}")
 
     # -- matching helpers ----------------------------------------------
 

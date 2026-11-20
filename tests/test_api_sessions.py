@@ -9,6 +9,10 @@
 #     python -m unittest tests.test_api_sessions -v
 
 import asyncio
+import contextlib
+import io
+import logging
+import re
 import tempfile
 import threading
 import time
@@ -75,6 +79,67 @@ class SessionHistory(unittest.TestCase):
             self.assertEqual(self.ask("too slow").status_code, 504)
             self.assertTrue(finished.wait(2))
         self.assertEqual(self.history(), [])
+
+
+
+class RequestIdInLog(unittest.TestCase):
+    """The agent's console lines carry the request's id, the same id as
+    its audit lines; outside a request nothing is added."""
+
+    def setUp(self):
+        SessionHistory.setUp(self)
+
+    def test_agent_lines_carry_the_audit_id(self):
+        def run_agent(question, catalog, history, security):
+            logging.getLogger("sqlagent.agent").info("\n[agent] Generating SQL...")
+            return {"answer": "ok", "blocked": False}
+
+        audited = []
+        with mock.patch.object(api, "run_agent", run_agent), \
+                mock.patch.object(api, "audit", lambda event, **f: audited.append((event, f))), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(SessionHistory.ask(self, "q").status_code, 200)
+
+        rid = dict(audited)["request_received"]["id"]
+        lines = out.getvalue().splitlines()
+        self.assertIn(f"[{rid}] [question] q", lines)
+        self.assertIn(f"[{rid}] [agent] Generating SQL...", lines)
+        self.assertTrue(all(line.startswith(f"[{rid}] ") for line in lines))
+
+    def test_no_prefix_outside_a_request(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            logging.getLogger("sqlagent.agent").info("\n[agent] Generating SQL...")
+        self.assertEqual(out.getvalue(), "\n[agent] Generating SQL...\n")
+
+    def test_concurrent_requests_keep_their_own_id(self):
+        def run_agent(question, catalog, history, security):
+            for _ in range(5):
+                logging.getLogger("sqlagent.agent").info(f"[agent] {question}")
+                time.sleep(0.01)
+            return {"answer": question, "blocked": False}
+
+        audited = []
+
+        async def both():
+            import httpx
+            transport = httpx.ASGITransport(app=api.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+                await asyncio.gather(*(
+                    c.post("/sqlagent/api/ask",
+                           json={"question": q, "session_id": f"session-{q}"})
+                    for q in ("alpha", "bravo")))
+
+        with mock.patch.object(api, "run_agent", run_agent), \
+                mock.patch.object(api, "audit", lambda event, **f: audited.append((event, f))), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            asyncio.run(both())
+
+        ids = {f["question"]: f["id"] for event, f in audited if event == "request_received"}
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 12)          # [question] + 5 [agent] each
+        for line in lines:
+            rid, question = re.fullmatch(r"\[(\w+)\] \[\w+\] (\w+)", line).groups()
+            self.assertEqual(rid, ids[question])
 
 
 if __name__ == "__main__":

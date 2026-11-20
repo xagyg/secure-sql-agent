@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 
-import re
-import json
 import base64
+import json
+import logging
+import re
 from functools import lru_cache
 
 import httpx
@@ -14,6 +15,8 @@ from sqlagent.databases import active_database
 from sqlagent.controls.security_utils import full_table_name
 from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +221,13 @@ def ask_ollama(messages):
         response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
                                       options=OLLAMA_OPTIONS or None)
     except _RETRYABLE_ERRORS as ex:
-        print(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
+        logger.info(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
         response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
                                       options=OLLAMA_OPTIONS or None)
     if _LLM.log_tokens:
         report = token_report(response, _LLM.num_ctx, estimated_tokens(messages))
         if report:
-            print(f"[llm] {report}")
+            logger.info(f"[llm] {report}")
     return response.message.content
 
 
@@ -341,7 +344,7 @@ def examples_for_question(examples, question, schema, limit):
     if _LLM.verbose:
         detail = ": " + "; ".join(f"{examples[i].question} ({scores[i]})"
                                   for i in chosen)
-    print(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
+    logger.info(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
     return [examples[i] for i in chosen]
 
 
@@ -362,8 +365,8 @@ def generate_sql(question, schema, history, allowed_tables=None):
     engine_rules = active_engine().prompt_rules
     examples = examples_for_role(db.sql_examples, allowed_tables)
     if len(examples) < len(db.sql_examples):
-        print(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
-              "(the rest use tables this role can't see)")
+        logger.info(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
+                    "(the rest use tables this role can't see)")
     examples = examples_for_question(examples, question, schema,
                                      _LLM.sql_examples_max)
     sql_examples = _format_examples(examples)
@@ -426,7 +429,7 @@ Reply with the SQL only.
 """
 
     if _LLM.log_tokens:
-        print(prompt_breakdown(system_prompt, schema=schema,
+        logger.info(prompt_breakdown(system_prompt, schema=schema,
                                examples=sql_examples, history=history_text))
 
     return clean_sql(ask_ollama([

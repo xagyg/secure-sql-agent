@@ -12,3 +12,6 @@
 #               holds what is specific to each database product)
 #
 # agent.py orchestrates the pipeline across the three layers.
+
+# Configures the console log (see log.py) before any module logs.
+from sqlagent import log as _log  # noqa: F401
