@@ -9,6 +9,8 @@
 import logging
 from dataclasses import dataclass
 
+import sqlglot
+
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
     WITHHELD_NOTE,
@@ -99,6 +101,22 @@ class _Retry:
     reason: object
     hint: str | None = None
     action: str | None = None
+
+
+def _pretty_sql(sql):
+    """SQL laid out one clause per line (repl.yaml sql_format), for the
+    console only. What runs, what the model sees and the history keep the
+    compact text. Returned as is when it can't be parsed."""
+    fmt = get_settings().repl.sql_format
+    if not fmt.pretty:
+        return sql
+    try:
+        return sqlglot.transpile(
+            sql, read=active_dialect(), write=active_dialect(), pretty=True,
+            pad=fmt.pad, indent=fmt.indent, leading_comma=fmt.leading_comma,
+            max_text_width=fmt.max_text_width)[0]
+    except Exception:
+        return sql
 
 
 def _is_unparseable(reason):
@@ -205,11 +223,11 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
         logger.info(f"\n[security] Restricted column(s) withheld: "
                     f"{', '.join(prepared.withheld)}")
         logger.info("\n[sql after withholding]")
-        logger.info(prepared.stripped_sql)
+        logger.info(_pretty_sql(prepared.stripped_sql))
 
     if prepared.rewritten:
         logger.info("\n[sql after rewrite]")
-        logger.info(prepared.sql)
+        logger.info(_pretty_sql(prepared.sql))
 
     reason = prepared.failure_reason
     retry = None
@@ -668,7 +686,7 @@ def _execute(sql, security):
     scoped_sql = apply_row_scope(sql, security.row_filters, active_dialect())
     if scoped_sql != sql:
         logger.info("\n[security] Row scope applied:")
-        logger.info(scoped_sql)
+        logger.info(_pretty_sql(scoped_sql))
     results, sources = execute_sql_with_sources(scoped_sql)
     results, removed = apply_result_policy(results, security, sources)
 

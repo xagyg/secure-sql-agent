@@ -142,6 +142,11 @@ def _words_of(name):
     return name.replace("_", " ").strip()
 
 
+def _full_name(table):
+    """A catalog table's "schema.table" name."""
+    return f"{table['schema']}.{table['name']}"
+
+
 class SchemaCatalog:
 
     def __init__(self, connection_factory, security=None, semantic=None,
@@ -848,17 +853,14 @@ class SchemaCatalog:
           - weak matches top up with the domain's fallback tables instead
             of the global list.
         """
+        if anchors:
+            context = self._anchored_context(anchors, scope, relationship_depth,
+                                             question)
+            if context is not None:
+                return context
+
         fallback_names = self.fallback_table_names
         unwalked = set()   # added to the schema, but not walked from
-
-        if anchors:
-            selected = {name for name in anchors if name in self.tables}
-            if selected:
-                depth = scope[2] if scope is not None else relationship_depth
-                focus = set(selected)
-                selected = self.get_related_tables(selected, depth=depth)
-                return self._format_context(selected, focus=focus,
-                                            question=question)
 
         if scope is None:
             matches = self.search(question, limit=table_limit)
@@ -866,144 +868,191 @@ class SchemaCatalog:
             domain_tables, domain_fallbacks, relationship_depth = scope
             if domain_fallbacks:
                 fallback_names = domain_fallbacks
-
             matches = self.search(
                 question, limit=table_limit, restrict_to=domain_tables)
+            matches, unwalked = self._add_named_outside_domain(
+                question, matches, domain_tables, table_limit)
 
-            # Named outside the domain means named: its table name, label,
-            # alias or a term - not column words. A wide table (Odoo's
-            # res_company, 146 columns) otherwise reached the full-name
-            # score on words like "sale" and "customer" in its column
-            # names, and was added in full to questions that never named it.
-            terms = self.question_terms(question)
-            outside = [
-                (score, table)
-                for score, table in self.search(question, limit=table_limit)
-                if f"{table['schema']}.{table['name']}" not in domain_tables
-                and self.name_score(table, terms) >= FULL_NAME_MATCH
-            ]
-            # Words that one domain table already covers ("order" for
-            # purchase_order) are read the domain's way: they don't name a
-            # table outside it (sale_order, alias "order"). A word no
-            # single domain table has ("sales" in "sales order") still
-            # does, and so does a phrase typed out in full ("stock_move").
-            if outside and self._retrieval_setting("named_outside_domain_distinct"):
-                domain_words = self._domain_words(domain_tables)
-                kept, shared = [], []
-                for score, t in outside:
-                    covered_by = self._covered_by(t, terms, domain_words, question)
-                    if covered_by:
-                        shared.append(f"{t['name']} (as {covered_by})")
-                    else:
-                        kept.append((score, t))
-                if shared:
-                    logger.info("[schema] Named outside the domain only by words "
-                                f"the domain also uses, not added: {', '.join(shared)}")
-                outside = kept
-            if outside:
-                names = ", ".join(t["name"] for _, t in outside)
-                outside_mode = self._retrieval_setting("named_outside_domain")
-                if outside_mode == "note":
-                    logger.info(f"[schema] Named outside the domain, not added: {names}")
-                elif outside_mode == "add":
-                    logger.info(f"[schema] Named outside the domain, added "
-                                f"(no relationship walk): {names}")
-                    unwalked = {f"{t['schema']}.{t['name']}" for _, t in outside}
-                else:
-                    logger.info(f"[schema] Named outside the domain, added: {names}")
-                    matches = sorted(matches + outside, key=lambda m: m[0],
-                                     reverse=True)
-
-        # When the question names a table, a table matched only on a
-        # column word ("customers" in crm_lead's partner columns) is
-        # noise: it and its relationship walk filled most of the prompt.
-        # The walk from the named tables still brings in the related ones
-        # a query needs (sale_order_line from sale_order), and they keep
-        # the columns the question names.
         terms = self.question_terms(question)
-        named = [(score, table) for score, table in matches
-                 if self.name_score(table, terms) >= FULL_NAME_MATCH]
-        if named:
-            # A hub is not walked back from, so a hub named alone (Odoo's
-            # res_users for "salespeople") reaches none of the tables that
-            # point at it (sale_order). Keep the best other match too.
-            hubs = self.hub_tables()
+        matches = self._prefer_named_tables(matches, terms)
 
-            def full(table):
-                return f"{table['schema']}.{table['name']}"
-
-            if all(full(t) in hubs for _, t in named):
-                other = next(((s, t) for s, t in matches
-                              if full(t) not in hubs and (s, t) not in named), None)
-                if other is not None:
-                    logger.info(f"[schema] Only a hub is named "
-                                f"({', '.join(t['name'] for _, t in named)}) - "
-                                f"also using the best other match: {other[1]['name']}")
-                    named.append(other)
-            matches = named
-
-        selected = {
-            f"{table['schema']}.{table['name']}"
-            for _, table in matches
-        }
-        matched = set(selected)   # before the walk: link-table join targets
-
-        if not selected:
-            if scope is not None and fallback_names:
-                # Nothing in the domain matched the words (e.g. "show me
-                # Nancy's details"), but we do know the area: use the
-                # domain's fallback tables rather than the global list.
-                logger.info("[schema] No table match in domain - using fallback tables")
-                tables = set(fallback_names) | unwalked
-                return self._format_context(
-                    tables | self._link_tables(unwalked, tables,
-                                               matched=set(fallback_names),
-                                               terms=terms))
-            if unwalked:
-                return self._format_context(unwalked)
-            return ""
+        if not matches:
+            return self._context_without_match(scope, fallback_names,
+                                               unwalked, terms)
 
         # Only tables the question names list every column. A table
         # matched on a column word alone (product_template on "sales")
         # is a supporting table; the best match always stays in focus.
+        best = _full_name(matches[0][1])
         focus = {
-            f"{table['schema']}.{table['name']}"
+            _full_name(table)
             for _, table in matches
             if self.name_score(table, terms) >= FULL_NAME_MATCH
-        } | unwalked
-        best = f"{matches[0][1]['schema']}.{matches[0][1]['name']}"
-        focus.add(best)
+        } | unwalked | {best}
 
-        # A weak match (no table named in full, only a partial name or a
-        # column word) is a poor signal on its own, so the fallback tables
-        # are used alongside it. e.g. "Margaret's order history": "order"
-        # only partly matches order_details, and employees comes from the
-        # fallback list. The best few weak matches are added WITHOUT a
-        # relationship walk, plus any table needed to join them: walking
-        # from up to table_limit tables found on words like "revenue" in
-        # their columns once put 45 tables (~12k tokens) into one prompt
-        # ("Which salespeople generated the most revenue this year?").
-        best_score = matches[0][0]
-        if best_score < FULL_NAME_MATCH and fallback_names:
-            limit = self._retrieval_setting("weak_match_tables")
-            weak = [f"{t['schema']}.{t['name']}" for _, t in matches]
-            weak = weak[:limit] if limit else weak
-            base = set(fallback_names)
-            logger.info("[schema] Weak table match - fallback tables plus "
-                        + ", ".join(t.split(".")[-1] for t in weak)
-                        + " (no relationship walk)")
-            added = (set(weak) - base) | unwalked
-            links = self._link_tables(added, base | added,
-                                      matched=base | set(weak), terms=terms)
-            return self._format_context(base | added | links,
-                                        focus=focus | base | {best},
-                                        question=question)
+        if matches[0][0] < FULL_NAME_MATCH and fallback_names:
+            return self._weak_match_context(matches, fallback_names, unwalked,
+                                            focus, best, terms, question)
 
+        selected = {_full_name(table) for _, table in matches}
+        matched = set(selected)   # before the walk: link-table join targets
         selected = self.get_related_tables(selected, depth=relationship_depth)
 
         links = self._link_tables(unwalked, selected | unwalked,
                                   matched=matched, terms=terms)
         return self._format_context(selected | unwalked | links, focus=focus,
+                                    question=question)
+
+    # -- get_context() steps -------------------------------------------
+
+    def _anchored_context(self, anchors, scope, relationship_depth, question):
+        """The schema for a follow-up: the anchor tables (those in the
+        catalog) plus their relationship hops, with no fallback tables.
+        None when no anchor is in the catalog: the keyword search is
+        used instead."""
+        selected = {name for name in anchors if name in self.tables}
+        if not selected:
+            return None
+        depth = scope[2] if scope is not None else relationship_depth
+        focus = set(selected)
+        selected = self.get_related_tables(selected, depth=depth)
+        return self._format_context(selected, focus=focus, question=question)
+
+    def _add_named_outside_domain(self, question, matches, domain_tables,
+                                  table_limit):
+        """
+        Tables outside the domain that the question names, handled by
+        named_outside_domain: "note" (logged only), "add" (returned as
+        unwalked tables: in the schema, no relationship walk) or anything
+        else (added to the matches). Returns (matches, unwalked).
+
+        Named outside the domain means named: its table name, label,
+        alias or a term - not column words. A wide table (Odoo's
+        res_company, 146 columns) otherwise reached the full-name score
+        on words like "sale" and "customer" in its column names, and was
+        added in full to questions that never named it.
+        """
+        terms = self.question_terms(question)
+        outside = [
+            (score, table)
+            for score, table in self.search(question, limit=table_limit)
+            if _full_name(table) not in domain_tables
+            and self.name_score(table, terms) >= FULL_NAME_MATCH
+        ]
+        if outside and self._retrieval_setting("named_outside_domain_distinct"):
+            outside = self._named_apart_from_domain(outside, terms, domain_tables,
+                                                    question)
+        if not outside:
+            return matches, set()
+
+        names = ", ".join(t["name"] for _, t in outside)
+        outside_mode = self._retrieval_setting("named_outside_domain")
+        if outside_mode == "note":
+            logger.info(f"[schema] Named outside the domain, not added: {names}")
+            return matches, set()
+        if outside_mode == "add":
+            logger.info(f"[schema] Named outside the domain, added "
+                        f"(no relationship walk): {names}")
+            return matches, {_full_name(t) for _, t in outside}
+        logger.info(f"[schema] Named outside the domain, added: {names}")
+        return sorted(matches + outside, key=lambda m: m[0], reverse=True), set()
+
+    def _named_apart_from_domain(self, outside, terms, domain_tables, question):
+        """
+        The outside tables still named once words the domain uses are read
+        the domain's way. Words that one domain table already covers
+        ("order" for purchase_order) don't name a table outside it
+        (sale_order, alias "order"). A word no single domain table has
+        ("sales" in "sales order") still does, and so does a phrase typed
+        out in full ("stock_move").
+        """
+        domain_words = self._domain_words(domain_tables)
+        kept, shared = [], []
+        for score, t in outside:
+            covered_by = self._covered_by(t, terms, domain_words, question)
+            if covered_by:
+                shared.append(f"{t['name']} (as {covered_by})")
+            else:
+                kept.append((score, t))
+        if shared:
+            logger.info("[schema] Named outside the domain only by words "
+                        f"the domain also uses, not added: {', '.join(shared)}")
+        return kept
+
+    def _prefer_named_tables(self, matches, terms):
+        """
+        When the question names a table, only the named tables (a table
+        matched only on a column word - "customers" in crm_lead's partner
+        columns - is noise: it and its relationship walk filled most of
+        the prompt). The walk from the named tables still brings in the
+        related ones a query needs (sale_order_line from sale_order), and
+        they keep the columns the question names. Otherwise `matches`
+        unchanged.
+
+        A hub is not walked back from, so a hub named alone (Odoo's
+        res_users for "salespeople") reaches none of the tables that
+        point at it (sale_order): the best other match is kept too.
+        """
+        named = [(score, table) for score, table in matches
+                 if self.name_score(table, terms) >= FULL_NAME_MATCH]
+        if not named:
+            return matches
+        hubs = self.hub_tables()
+        if all(_full_name(t) in hubs for _, t in named):
+            other = next(((s, t) for s, t in matches
+                          if _full_name(t) not in hubs and (s, t) not in named), None)
+            if other is not None:
+                logger.info(f"[schema] Only a hub is named "
+                            f"({', '.join(t['name'] for _, t in named)}) - "
+                            f"also using the best other match: {other[1]['name']}")
+                named.append(other)
+        return named
+
+    def _context_without_match(self, scope, fallback_names, unwalked, terms):
+        """
+        The schema when no table matched. Nothing in the domain matched
+        the words (e.g. "show me Nancy's details"), but with a scope we
+        know the area: the domain's fallback tables rather than the
+        global list. Without one, only tables added outside the domain,
+        or nothing.
+        """
+        if scope is not None and fallback_names:
+            logger.info("[schema] No table match in domain - using fallback tables")
+            tables = set(fallback_names) | unwalked
+            return self._format_context(
+                tables | self._link_tables(unwalked, tables,
+                                           matched=set(fallback_names),
+                                           terms=terms))
+        if unwalked:
+            return self._format_context(unwalked)
+        return ""
+
+    def _weak_match_context(self, matches, fallback_names, unwalked, focus,
+                            best, terms, question):
+        """
+        The schema for a weak match (no table named in full, only a
+        partial name or a column word), a poor signal on its own: the
+        fallback tables, plus the best few weak matches WITHOUT a
+        relationship walk and any table needed to join them. e.g.
+        "Margaret's order history": "order" only partly matches
+        order_details, and employees comes from the fallback list.
+        Walking from up to table_limit tables found on words like
+        "revenue" in their columns once put 45 tables (~12k tokens) into
+        one prompt ("Which salespeople generated the most revenue this
+        year?").
+        """
+        limit = self._retrieval_setting("weak_match_tables")
+        weak = [_full_name(t) for _, t in matches]
+        weak = weak[:limit] if limit else weak
+        base = set(fallback_names)
+        logger.info("[schema] Weak table match - fallback tables plus "
+                    + ", ".join(t.split(".")[-1] for t in weak)
+                    + " (no relationship walk)")
+        added = (set(weak) - base) | unwalked
+        links = self._link_tables(added, base | added,
+                                  matched=base | set(weak), terms=terms)
+        return self._format_context(base | added | links,
+                                    focus=focus | base | {best},
                                     question=question)
 
     def _naming_phrases(self, table, terms):

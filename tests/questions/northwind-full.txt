@@ -1,3 +1,6 @@
+# Complex
+1. For each employee who handled orders in 1997, calculate their total sales revenue from orders shipped to customers in Germany, France or the UK. Include only orders that were shipped within 10 days of being placed. Rank the employees by total revenue, and show each employee's name, number of qualifying orders, total revenue, average order value, and the country that contributed the most revenue to their sales. Only include employees with more than 5 qualifying orders, and sort the results from highest to lowest revenue.
+---
 # Customers and contacts
 1. Show me all customers.
 2. Which customers are located in Germany?
