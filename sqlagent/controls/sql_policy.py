@@ -4,8 +4,11 @@
 # SQL policy for model-generated queries: parse, check structure (one
 # read-only SELECT), check authorisation (tables and columns against the
 # SecurityContext), strip restricted columns from the SELECT list, expand
-# SELECT * to authorised columns, and add the row limit. Split out of
-# agent_controls.py.
+# SELECT * to authorised columns, and add the row limit.
+#
+# Every failure is a Reason: the message as text, plus a stable code (and,
+# for an unauthorised table, the table) so callers decide what to do
+# without matching on the wording.
 
 import re
 from dataclasses import dataclass, field
@@ -17,6 +20,7 @@ from sqlagent.controls.security_utils import (
     contains_case_insensitive,
     full_table_name,
     get_denied_columns,
+    ident,
     is_authorized_table,
 )
 from sqlagent.execution.engines import active_dialect
@@ -34,12 +38,54 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 # ---------------------------------------------------------------------------
+# Failure reasons
+# ---------------------------------------------------------------------------
+
+# Reason codes. messages.block_rule() maps them to the user-facing rule.
+UNPARSEABLE = "unparseable"
+SINGLE_STATEMENT = "single_statement"
+READ_ONLY = "read_only"
+TABLE_NOT_AUTHORISED = "table_not_authorised"
+COLUMN_NOT_AUTHORISED = "column_not_authorised"
+POLICY = "policy"
+
+
+class Reason(str):
+    """
+    Why a query was stopped. A str (the message for the log), plus
+    `code` (one of the codes above) and, for TABLE_NOT_AUTHORISED, the
+    `table` as the query wrote it.
+    """
+
+    def __new__(cls, text, code=POLICY, table=None):
+        reason = super().__new__(cls, text)
+        reason.code = code
+        reason.table = table
+        return reason
+
+
+class SqlPolicyError(ValueError):
+    """The SQL could not be parsed as exactly one statement; `reason` says
+    which (UNPARSEABLE or SINGLE_STATEMENT)."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def reason_of(ex):
+    """The Reason carried by an exception from this module (a plain
+    ValueError becomes a POLICY reason)."""
+    return getattr(ex, "reason", None) or Reason(str(ex))
+
+
+# ---------------------------------------------------------------------------
 # SQL parsing and structural safety
 # ---------------------------------------------------------------------------
 
 def parse_single_sql(sql):
     """
-    Parse SQL and require exactly one statement.
+    Parse SQL and require exactly one statement. Raises SqlPolicyError.
 
     SQL is parsed structurally rather than inspected using
     keyword/string matching.
@@ -50,26 +96,30 @@ def parse_single_sql(sql):
         # sqlglot underlines the bad token with terminal colour codes,
         # which show up as "←[4m" in a Windows console and in logs.
         message = _ANSI_ESCAPE.sub("", str(ex))
-        raise ValueError(f"SQL could not be parsed: {message}")
+        raise SqlPolicyError(Reason(f"SQL could not be parsed: {message}",
+                                    UNPARSEABLE)) from ex
 
     if len(statements) != 1:
-        raise ValueError("Exactly one SQL statement is permitted.")
+        raise SqlPolicyError(Reason("Exactly one SQL statement is permitted.",
+                                    SINGLE_STATEMENT))
 
     return statements[0]
 
 
 def is_read_only_select(tree):
     """
-    Return True only for read-only SELECT queries.
-
-    UNION / UNION ALL are represented by sqlglot as compound
-    query expressions and are also read-only.
+    True only for a SELECT, or a UNION / UNION ALL of SELECTs (sqlglot's
+    compound query expression, also read-only).
     """
-    if isinstance(tree, exp.Select):
-        return True
+    return isinstance(tree, (exp.Select, exp.Union))
+
+
+def _union_selects(tree):
+    """The SELECT branches of a UNION (nested UNIONs flattened), or
+    [tree] for a plain SELECT."""
     if isinstance(tree, exp.Union):
-        return True
-    return False
+        return _union_selects(tree.this) + _union_selects(tree.expression)
+    return [tree]
 
 
 # Node types that must never appear ANYWHERE in the tree, not just at the
@@ -114,9 +164,10 @@ def _check_table_references(tree):
     """
     for table in tree.find_all(exp.Table):
         if table.catalog:
-            return False, "Cross-database and linked-server references are not permitted."
+            return False, Reason(
+                "Cross-database and linked-server references are not permitted.")
         if not isinstance(table.this, exp.Identifier):
-            return False, "Only tables and views can be queried, not functions."
+            return False, Reason("Only tables and views can be queried, not functions.")
     return True, None
 
 
@@ -124,7 +175,7 @@ def _check_external_data(tree):
     for func in tree.find_all(exp.Func):
         name = (func.name if isinstance(func, exp.Anonymous) else func.sql_name())
         if name and name.lower() in _EXTERNAL_DATA_FUNCTIONS:
-            return False, "External data sources are not permitted."
+            return False, Reason("External data sources are not permitted.")
     return True, None
 
 
@@ -136,18 +187,17 @@ def validate_sql_structure(tree):
     for dangerous words in the SQL text.
     """
     if not is_read_only_select(tree):
-        return False, "Only read-only SELECT queries are permitted."
+        return False, Reason("Only read-only SELECT queries are permitted.", READ_ONLY)
 
     # Data-modifying statements nested inside a SELECT (e.g. in a CTE).
     if _FORBIDDEN_NODES and tree.find(*_FORBIDDEN_NODES):
-        return False, (
+        return False, Reason(
             "Only read-only queries are permitted: "
-            "data-modifying operations are not allowed."
-        )
+            "data-modifying operations are not allowed.", READ_ONLY)
 
     # SELECT INTO creates a table and therefore isn't read-only.
     if tree.find(exp.Into):
-        return False, "SELECT INTO is not permitted."
+        return False, Reason("SELECT INTO is not permitted.", READ_ONLY)
 
     allowed, reason = _check_external_data(tree)
     if not allowed:
@@ -169,7 +219,7 @@ def is_safe_sql(sql):
     """
     try:
         tree = parse_single_sql(sql)
-    except ValueError:
+    except SqlPolicyError:
         return False
 
     allowed, _ = validate_sql_structure(tree)
@@ -192,12 +242,13 @@ def build_table_alias_map(tree, security):
         table_name = table.name
 
         if not table_name:
-            return None, "A referenced table could not be determined."
+            return None, Reason("A referenced table could not be determined.")
 
         full_name = full_table_name(table_name, schema_name)
 
         if not is_authorized_table(security, full_name):
-            return None, f"Table '{full_name}' is not authorised."
+            return None, Reason(f"Table '{full_name}' is not authorised.",
+                                TABLE_NOT_AUTHORISED, table=full_name)
 
         table_aliases[table_name.lower()] = full_name
 
@@ -207,13 +258,26 @@ def build_table_alias_map(tree, security):
     return table_aliases, None
 
 
-def validate_columns(tree, table_aliases, security):
+def _is_real_column(name, table_aliases, catalog):
+    """True when `name` is a column of one of the referenced tables in the
+    role's catalog. None for the catalog means unknown (False)."""
+    if catalog is None:
+        return False
+    return any(
+        contains_case_insensitive(get_authorized_columns(catalog, table), name)
+        for table in set(table_aliases.values())
+    )
+
+
+def validate_columns(tree, table_aliases, security, catalog=None):
     """
     Validate every explicitly referenced column against the
     SecurityContext.
 
     Unqualified columns are checked conservatively against every
-    referenced table that has a matching denied column.
+    referenced table that has a matching denied column. `catalog` (the
+    role's SchemaCatalog), when given, tells a real column apart from a
+    whole-row reference that happens to share its name.
     """
     for column in tree.find_all(exp.Column):
         column_name = column.name
@@ -224,19 +288,23 @@ def validate_columns(tree, table_aliases, security):
         #     SELECT e FROM employees e
         #     SELECT row_to_json(e) / to_jsonb(e.*) FROM employees e
         #     SELECT (e).home_phone FROM employees e
-        if not column.table and column_name.lower() in table_aliases:
-            return False, "Whole-row table references are not permitted."
+        # PostgreSQL resolves a bare name as a column first, so a name that
+        # is also a column of a referenced table (customers.region beside
+        # the region table) is a column, not a whole row.
+        if (not column.table and column_name.lower() in table_aliases
+                and not _is_real_column(column_name, table_aliases, catalog)):
+            return False, Reason("Whole-row table references are not permitted.")
 
         if isinstance(column.this, exp.Star) and column.find_ancestor(exp.Func):
-            return False, "Whole-row table references are not permitted."
+            return False, Reason("Whole-row table references are not permitted.")
 
         if not column_name:
-            return False, "Unable to determine a referenced column."
+            return False, Reason("Unable to determine a referenced column.")
 
         table_reference = column.table
 
         if table_reference and table_reference.lower() not in table_aliases:
-            return False, (
+            return False, Reason(
                 f"Unable to determine table for "
                 f"column '{table_reference}.{column_name}'."
             )
@@ -244,10 +312,9 @@ def validate_columns(tree, table_aliases, security):
         denied_table = _table_denying_column(column, table_aliases, security)
 
         if denied_table:
-            return False, (
-                f"Column '{denied_table}.{column_name}' "
-                f"is not authorised."
-            )
+            return False, Reason(
+                f"Column '{denied_table}.{column_name}' is not authorised.",
+                COLUMN_NOT_AUTHORISED)
 
     return True, None
 
@@ -258,7 +325,7 @@ def _table_denying_column(column, table_aliases, security):
 
     A qualified column (c.phone) is checked against its own table; an
     unqualified one (phone) conservatively against every referenced
-    table. Shared by validate_columns() and strip_denied_projection().
+    table. Shared by validate_columns() and strip_denied_projection_tree().
     """
     name = column.name
     if not name:
@@ -279,9 +346,10 @@ def _table_denying_column(column, table_aliases, security):
     )
 
 
-def is_authorized_sql(sql, security):
+def is_authorized_sql(sql, security, catalog=None):
     """
-    Check whether generated SQL is authorised.
+    The complete security validation for model-generated SQL. Returns
+    (allowed, reason), reason a Reason.
 
     Policy:
       - exactly one statement
@@ -293,13 +361,13 @@ def is_authorized_sql(sql, security):
     """
     try:
         tree = parse_single_sql(sql)
-    except ValueError as ex:
-        return False, str(ex)
+    except SqlPolicyError as ex:
+        return False, ex.reason
 
-    return validate_tree(tree, security)
+    return validate_tree(tree, security, catalog)
 
 
-def validate_tree(tree, security):
+def validate_tree(tree, security, catalog=None):
     """
     is_authorized_sql() for an already-parsed statement: structure, then
     tables, then columns. Returns (allowed, reason).
@@ -312,61 +380,16 @@ def validate_tree(tree, security):
     if reason:
         return False, reason
 
-    allowed, reason = validate_columns(tree, table_aliases, security)
+    allowed, reason = validate_columns(tree, table_aliases, security, catalog)
     if not allowed:
         return False, reason
 
     return True, None
 
 
-def validate_agent_sql(sql, security):
-    """
-    Perform the complete security validation for AI-generated SQL.
-
-    is_authorized_sql() already parses the statement, runs the structural
-    checks and then the authorisation checks, returning a specific reason
-    at each step. (A separate is_safe_sql() pre-check used to run first,
-    but it returns only a bool, which collapsed every structural failure
-    into one generic message.)
-    """
-    return is_authorized_sql(sql, security)
-
-
 # ---------------------------------------------------------------------------
 # SELECT * rewriting
 # ---------------------------------------------------------------------------
-
-def rewrite_select_stars(sql, security, catalog):
-    """
-    Replace SELECT * and SELECT alias.* with explicit authorised columns.
-
-    Restricted columns are omitted from the generated projection.
-    """
-    try:
-        tree = parse_single_sql(sql)
-    except ValueError as ex:
-        raise ValueError(str(ex))
-
-    if not isinstance(tree, exp.Select):
-        return sql
-
-    rewrite_select_stars_tree(tree, security, catalog)
-    return tree.sql(dialect=active_dialect())
-
-
-_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
-
-
-def _identifier(name):
-    """
-    An identifier for a generated column reference. Quoted only when the
-    name can't be written plainly (a space or other character, e.g. SQL
-    Server's "Order Details"); sqlglot then renders the dialect's quotes,
-    [Order Details] or "Order Details". Plain names stay unquoted, as
-    before, so their case is matched the way the database matches it.
-    """
-    return exp.Identifier(this=name,
-                          quoted=not _PLAIN_IDENTIFIER.fullmatch(name))
 
 
 def _select_sources(select):
@@ -397,27 +420,41 @@ def _select_sources(select):
     return tables, other
 
 
+def _authorised_columns_of(full_table, reference, security, catalog):
+    """Column references (reference.column) for every column of
+    `full_table` the role may see, in catalog order."""
+    denied_columns = get_denied_columns(security, full_table)
+    return [
+        exp.Column(this=ident(column_name), table=ident(reference))
+        for column_name in get_authorized_columns(catalog, full_table)
+        if not contains_case_insensitive(denied_columns, column_name)
+    ]
+
+
 def rewrite_select_stars_tree(tree, security, catalog):
     """
-    rewrite_select_stars() on a parsed SELECT, in place. Only the tables
-    this SELECT reads directly (FROM and JOINs) are expanded; tables in
-    subqueries are not. Raises ValueError for an alias.* whose table
-    can't be determined, and for a * over a derived table or other
-    non-table source: its columns can't be checked against the catalog,
-    and left unexpanded it could return restricted columns
+    Replace SELECT * and SELECT alias.* with the authorised columns, in
+    place; restricted columns are left out. Each branch of a UNION is
+    rewritten the same way.
+
+    Only the tables a SELECT reads directly (FROM and JOINs) are
+    expanded; tables in subqueries are not. Raises ValueError for an
+    alias.* whose table can't be determined, and for a * over a derived
+    table or other non-table source: its columns can't be checked against
+    the catalog, and left unexpanded it could return restricted columns
     (SELECT * FROM (SELECT * FROM customers) t).
     """
-    tables, other_sources = _select_sources(tree)
+    for select in _union_selects(tree):
+        if isinstance(select, exp.Select):
+            _rewrite_select_stars(select, security, catalog)
 
-    # ---------------------------------------------------------
-    # Expand SELECT expressions
-    # ---------------------------------------------------------
+
+def _rewrite_select_stars(select, security, catalog):
+    tables, other_sources = _select_sources(select)
     new_expressions = []
 
-    for expression in tree.expressions:
-        # -----------------------------------------------------
+    for expression in select.expressions:
         # SELECT *
-        # -----------------------------------------------------
         if isinstance(expression, exp.Star):
             if other_sources:
                 raise ValueError(
@@ -426,81 +463,39 @@ def rewrite_select_stars_tree(tree, security, catalog):
                     "authorised columns - list the columns instead."
                 )
             for table_info in tables:
-                full_table = table_info["full_table"]
-                reference = table_info["reference"]
-
-                denied_columns = get_denied_columns(security, full_table)
-
-                for column_name in get_authorized_columns(catalog, full_table):
-                    if contains_case_insensitive(denied_columns, column_name):
-                        continue
-
-                    new_expressions.append(
-                        exp.Column(
-                            this=_identifier(column_name),
-                            table=_identifier(reference),
-                        )
-                    )
+                new_expressions += _authorised_columns_of(
+                    table_info["full_table"], table_info["reference"],
+                    security, catalog)
             continue
 
-        # -----------------------------------------------------
         # SELECT alias.*
-        # -----------------------------------------------------
-        if (
-            isinstance(expression, exp.Column)
-            and isinstance(expression.this, exp.Star)
-        ):
-            table_reference = expression.table
-            matching_table = None
-
-            for table_info in tables:
-                if table_info["reference"].lower() == table_reference.lower():
-                    matching_table = table_info
-                    break
-
+        if isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star):
+            reference = expression.table
+            matching_table = next(
+                (t for t in tables if t["reference"].lower() == reference.lower()),
+                None)
             if matching_table is None:
-                raise ValueError(
-                    f"Unable to determine table for '{table_reference}.*'."
-                )
-
-            full_table = matching_table["full_table"]
-            denied_columns = get_denied_columns(security, full_table)
-
-            for column_name in get_authorized_columns(catalog, full_table):
-                if contains_case_insensitive(denied_columns, column_name):
-                    continue
-
-                new_expressions.append(
-                    exp.Column(
-                        this=_identifier(column_name),
-                        table=_identifier(table_reference),
-                    )
-                )
+                raise ValueError(f"Unable to determine table for '{reference}.*'.")
+            new_expressions += _authorised_columns_of(
+                matching_table["full_table"], reference, security, catalog)
             continue
 
-        # -----------------------------------------------------
-        # Normal SELECT expression
-        # -----------------------------------------------------
         new_expressions.append(expression)
 
-    tree.set("expressions", new_expressions)
+    select.set("expressions", new_expressions)
 
 
 # ---------------------------------------------------------------------------
 # Restricted columns in the SELECT list
 # ---------------------------------------------------------------------------
 
-def _is_denied_column(column, table_aliases, security):
-    """Same rule as validate_columns() (see _table_denying_column)."""
-    return _table_denying_column(column, table_aliases, security) is not None
-
-
-def strip_denied_projection(sql, security):
+def strip_denied_projection_tree(tree, security):
     """
-    Remove restricted columns from the SELECT list, so a question like
-    "tell me more about Ernst Handel" is answered without phone/fax/address
-    instead of being blocked outright. This matches how SELECT * already
-    behaves (rewrite_select_stars omits restricted columns).
+    Remove restricted columns from the SELECT list, in place, so a
+    question like "tell me more about Ernst Handel" is answered without
+    phone/fax/address instead of being blocked outright. This matches how
+    SELECT * already behaves (rewrite_select_stars_tree omits restricted
+    columns).
 
     Only plain column outputs are removed:
         SELECT phone ...            -> removed
@@ -511,30 +506,10 @@ def strip_denied_projection(sql, security):
         ORDER BY / GROUP BY / JOIN on a restricted column
         CONCAT(phone, fax), CASE ... phone ...  (derived values)
 
-    Returns (sql, removed) where removed is a list of the column names
-    taken out. Returns the SQL unchanged (and removed=[]) when there's
-    nothing to strip, when it can't be parsed or isn't a plain SELECT, or
-    when stripping would leave no columns at all; the validator then
-    decides as usual.
-    """
-    try:
-        tree = parse_single_sql(sql)
-    except ValueError:
-        return sql, []
-
-    removed = strip_denied_projection_tree(tree, security)
-    if not removed:
-        return sql, []
-
-    return tree.sql(dialect=active_dialect()), removed
-
-
-def strip_denied_projection_tree(tree, security):
-    """
-    strip_denied_projection() on a parsed statement, in place. Returns
-    the removed column names; the tree is unchanged when nothing is
-    removed (not a plain SELECT, an unauthorised table, nothing
-    restricted, or nothing would be left).
+    Returns the removed column names; the tree is unchanged when nothing
+    is removed (not a plain SELECT, an unauthorised table, nothing
+    restricted, or nothing would be left). A UNION is never stripped:
+    removing a column from one branch would misalign the others.
     """
     if not isinstance(tree, exp.Select):
         return []
@@ -552,7 +527,7 @@ def strip_denied_projection_tree(tree, security):
         if (
             isinstance(target, exp.Column)
             and not isinstance(target.this, exp.Star)
-            and _is_denied_column(target, table_aliases, security)
+            and _table_denying_column(target, table_aliases, security)
         ):
             removed.append(target.name)
             continue
@@ -580,31 +555,14 @@ def get_authorized_columns(catalog, full_table):
 # Query limits
 # ---------------------------------------------------------------------------
 
-def apply_query_limits(sql):
-    """
-    Ensure SELECT queries have a maximum row count.
-
-    A smaller explicit limit ("top 10") is kept; a larger one is lowered
-    to MAX_ROWS.
-    """
-    try:
-        tree = parse_single_sql(sql)
-    except ValueError as ex:
-        raise ValueError(str(ex))
-
-    if not isinstance(tree, exp.Select):
-        return sql
-
-    apply_query_limits_tree(tree)
-    return tree.sql(dialect=active_dialect())
-
-
 def apply_query_limits_tree(tree):
-    """apply_query_limits() on a parsed SELECT, in place: add LIMIT
+    """Cap the rows a parsed SELECT or UNION returns, in place: add LIMIT
     MAX_ROWS when the query has no limit, and lower a literal limit above
-    MAX_ROWS (LIMIT 1000, TOP 1000, FETCH NEXT 1000 ROWS) to MAX_ROWS.
-    The result policy caps the rows anyway; this keeps the SQL honest, so
-    the explanation isn't told about a limit that never applied."""
+    MAX_ROWS (LIMIT 1000, TOP 1000, FETCH NEXT 1000 ROWS) to MAX_ROWS; a
+    smaller one ("top 10") is kept. The result policy caps the rows
+    anyway, but only after the database has sent them all; this also
+    keeps the SQL honest, so the explanation isn't told about a limit
+    that never applied."""
     limit = tree.args.get("limit")
     if limit is None:
         tree.set(
@@ -638,13 +596,13 @@ class PreparedSql:
         stripped_sql   the SQL just after they were removed, or None
         rewritten      True when SELECT * expansion or the row limit
                        changed the SQL
-        failure_reason why validation stopped it, or None
+        failure_reason why validation stopped it (a Reason), or None
     """
     sql: str
     withheld: list = field(default_factory=list)
     stripped_sql: str | None = None
     rewritten: bool = False
-    failure_reason: str | None = None
+    failure_reason: Reason | None = None
 
 
 def prepare_sql(sql, security, catalog):
@@ -661,43 +619,41 @@ def prepare_sql(sql, security, catalog):
     only re-parse is the last check, which is deliberately run on the
     exact text that will be executed rather than the in-memory tree, so
     nothing that changes in turning the tree back into SQL can slip
-    past it. (execute_sql() runs its own structural check on that same
-    text as the final gate.)
+    past it. (execute_sql_with_sources() runs its own structural check on
+    that same text as the final gate.)
 
     Restricted columns used anywhere other than the SELECT list (WHERE,
     JOIN, ORDER BY, inside expressions) are left in place and blocked by
-    validation. Only a plain SELECT is stripped or rewritten; a UNION is
-    validated and run as written.
+    validation. Restricted columns are stripped only from a plain SELECT;
+    a UNION has each branch's * expanded and the row limit added, like a
+    SELECT.
 
     Raises ValueError when a SELECT * can't be expanded.
     """
     try:
         tree = parse_single_sql(sql)
-    except ValueError as ex:
-        return PreparedSql(sql=sql, failure_reason=str(ex))
+    except SqlPolicyError as ex:
+        return PreparedSql(sql=sql, failure_reason=ex.reason)
 
     result = PreparedSql(sql=sql)
-    is_select = isinstance(tree, exp.Select)
 
-    if is_select:
-        result.withheld = strip_denied_projection_tree(tree, security)
-        if result.withheld:
-            result.sql = result.stripped_sql = tree.sql(dialect=active_dialect())
+    result.withheld = strip_denied_projection_tree(tree, security)
+    if result.withheld:
+        result.sql = result.stripped_sql = tree.sql(dialect=active_dialect())
 
-    allowed, reason = validate_tree(tree, security)
+    allowed, reason = validate_tree(tree, security, catalog)
     if not allowed:
         result.failure_reason = reason
         return result
 
-    if is_select:
-        rewrite_select_stars_tree(tree, security, catalog)
-        apply_query_limits_tree(tree)
-        final_sql = tree.sql(dialect=active_dialect())
-        if final_sql != result.sql:
-            result.sql = final_sql
-            result.rewritten = True
+    rewrite_select_stars_tree(tree, security, catalog)
+    apply_query_limits_tree(tree)
+    final_sql = tree.sql(dialect=active_dialect())
+    if final_sql != result.sql:
+        result.sql = final_sql
+        result.rewritten = True
 
-    allowed, reason = validate_agent_sql(result.sql, security)
+    allowed, reason = is_authorized_sql(result.sql, security, catalog)
     if not allowed:
         result.failure_reason = reason
 

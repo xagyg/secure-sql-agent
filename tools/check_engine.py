@@ -212,7 +212,7 @@ def main():
     database = profile.connection.database
     for label, sql in [
         ("cross-database name", f"SELECT * FROM {database}.{shown}"),
-        ("two statements", f"SELECT 1 AS a; SELECT 2 AS b"),
+        ("two statements", "SELECT 1 AS a; SELECT 2 AS b"),
         ("data change", f"DELETE FROM {shown}"),
         ("table the role can't see", "SELECT * FROM no_such_schema.no_such_table"),
     ] + ([("external data", "SELECT * FROM OPENROWSET('SQLNCLI', 'Server=x;', 'SELECT 1') AS a")]

@@ -478,7 +478,7 @@ IMPORTANT:
 
 
 # Statement keywords that mean the model produced something other than a
-# query. These are passed through UNCHANGED so validate_agent_sql() can
+# query. These are passed through UNCHANGED so sql_policy.prepare_sql() can
 # reject them with a proper "read-only" policy block, instead of being
 # silently discarded or turned into an HTTP 500.
 _STATEMENT_START = re.compile(
@@ -506,10 +506,9 @@ def clean_sql(text):
     what the model actually produced:
 
       * A response that already starts with a statement keyword
-        (SELECT, WITH, DELETE, ...) is returned as-is. Previously
-        everything before the first SELECT was cut off, which silently
-        turned "DELETE ... WHERE id IN (SELECT ...)" into a broken
-        fragment and broke every query beginning with WITH.
+        (SELECT, WITH, DELETE, ...) is returned as-is. Cutting to the
+        first SELECT would turn "DELETE ... WHERE id IN (SELECT ...)"
+        into a harmless-looking fragment and break every WITH query.
       * Prose followed by SQL is trimmed to where the SQL starts.
       * Anything else is returned unchanged rather than raising, so the
         validator produces the user-facing result instead of an HTTP 500.
@@ -545,8 +544,7 @@ def classify_model_output(text):
       "unclear"      - a data question too vague for one query
                        (UNCLEAR_QUESTION_SENTINEL).
       "no_sql"       - anything else, e.g. the model answered or declined
-                       in prose. Previously this fell through to the parser
-                       and surfaced as "couldn't be validated".
+                       in prose (rather than surfacing as a parse failure).
 
     A marker counts when it is the whole reply, or a line of its own
     (ignoring quotes, backticks and punctuation). A marker line wins over
@@ -558,9 +556,9 @@ def classify_model_output(text):
     and its SQL is not trusted to answer the question. The agent then
     picks the user-facing message itself (a read-only marker without
     write intent becomes "restricted" when the question names a
-    restricted column, otherwise "unclear"). Previously the SQL
-    won, failed to parse, and the user got "couldn't produce a valid
-    query". Two DIFFERENT markers in one reply give "no_sql" rather than
+    restricted column, otherwise "unclear"), rather than letting the SQL
+    win, fail to parse and report "couldn't produce a valid query". Two
+    DIFFERENT markers in one reply give "no_sql" rather than
     a guess. A marker mentioned mid-sentence doesn't count.
     """
     found = set()
@@ -634,9 +632,10 @@ def explain_results(question, sql, results, withheld=(), row_cap=None):
     Send SQL results back to Ollama and ask for a natural-language answer.
 
     The row count and the columns actually present are computed here and
-    stated in the prompt, rather than left for the model to infer: it
-    previously miscounted (reading a supplier_id of 27 as "27 suppliers")
-    and described columns from the SQL that weren't in the results.
+    stated in the prompt, rather than left for the model to infer: left
+    to itself it miscounts (reading a supplier_id of 27 as "27
+    suppliers") and describes columns from the SQL that aren't in the
+    results.
     withheld lists result columns removed by the security policy. At most
     llm.explain_rows rows (and explain_result_chars characters of them)
     are shown; the full count is stated twice, before and after them.

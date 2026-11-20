@@ -4,8 +4,7 @@
 # Checks on the user's QUESTION (not the SQL) for restricted columns:
 # which message to show when the model can't answer, and the follow-up
 # pre-check that answers "restricted" before the model is called. They
-# choose messages; they never grant access. Split out of
-# agent_controls.py.
+# choose messages; they never grant access.
 
 import re
 from functools import lru_cache

@@ -100,7 +100,12 @@ class PostgresText(unittest.TestCase):
 
     def test_strip_row_limit(self):
         self.assertEqual(self.engine.strip_row_limit("SELECT a FROM t LIMIT 100", 100),
-                         "SELECT a FROM t ")
+                         "SELECT a FROM t")
+        # A limit inside a subquery is the model's own and stays.
+        self.assertEqual(
+            self.engine.strip_row_limit(
+                "SELECT * FROM (SELECT id FROM t LIMIT 100) AS s LIMIT 100", 100),
+            "SELECT * FROM (SELECT id FROM t LIMIT 100) AS s")
         # Another limit is the user's own and stays.
         self.assertEqual(self.engine.strip_row_limit("SELECT a FROM t LIMIT 1000", 100),
                          "SELECT a FROM t LIMIT 1000")

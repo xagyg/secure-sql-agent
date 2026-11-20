@@ -17,9 +17,8 @@
 #      tables and every column are in the loaded catalog.
 #   4. Fallback schema and Domains of Discourse, from the semantic model.
 #
-# The vocabulary that used to be defined here (TABLE_ALIASES, COLUMN_ALIASES,
-# DEFAULT_FALLBACK_TABLES) now lives in config/databases/<database>/semantic/
-# (see semantic_model.py).
+# The vocabulary (table and column aliases, fallback tables) lives in
+# config/databases/<database>/semantic/ (see semantic_model.py).
 
 import re
 from contextlib import closing
@@ -165,7 +164,6 @@ class SchemaCatalog:
 
         self.fallback_schema = ""
         self.fallback_table_names = set()
-        self.last_schema = ""
         self.domain_resolver = None
         # Typo-correction vocabulary, built on first use from the loaded
         # tables and domains (see question_terms). Reset by refresh().
@@ -1078,11 +1076,6 @@ class SchemaCatalog:
             covered = covered or owner.split(".")[-1]
         return covered
 
-    def _named_apart(self, table, terms, domain_words, question=""):
-        """True if a phrase naming this outside table isn't covered by any
-        single domain table (see _covered_by)."""
-        return self._covered_by(table, terms, domain_words, question) is None
-
     def _link_tables(self, added, present, matched=(), terms=()):
         """
         Tables that join a table added without a relationship walk
@@ -1180,10 +1173,9 @@ class SchemaCatalog:
                columns read at startup (e.g. "show me Nancy's information"
                names a person, not a table, so nothing matches by keyword)
 
-        Step 2 used to be "the last schema discovered". The catalog is
-        shared by every API session, so that meant one visitor's previous
-        question decided what the next visitor's question could see, and
-        usually left out the table that was needed.
+        Step 2 is deliberately not "the last schema discovered": the
+        catalog is shared by every API session, so one visitor's previous
+        question would decide what the next visitor's could see.
         """
         schema = self.get_context(
             question,
@@ -1194,7 +1186,6 @@ class SchemaCatalog:
         )
 
         if schema and schema.strip():
-            self.last_schema = schema
             return schema
 
         print(

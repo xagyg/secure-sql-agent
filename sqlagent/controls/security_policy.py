@@ -84,7 +84,7 @@ from sqlagent.config_files import (
 from sqlagent.controls.row_scope import RowScopeError, combine_filters, compile_grant
 from sqlagent.controls.security_context import SecurityContext
 from sqlagent.databases import DatabaseConfigError, active_database
-from sqlagent.controls.security_utils import full_table_name
+from sqlagent.controls.security_utils import full_table_name, is_pattern
 
 
 class SecurityPolicyError(ConfigFileError):
@@ -97,10 +97,6 @@ class SecurityPolicyError(ConfigFileError):
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-def _is_pattern(text):
-    return any(ch in text for ch in "*?[")
 
 
 def _norm(text):
@@ -462,7 +458,7 @@ class SecurityPolicy:
         deny = [_norm(p) for p in spec.deny]
 
         for pattern in allow:
-            if not _is_pattern(pattern) and pattern not in by_lower:
+            if not is_pattern(pattern) and pattern not in by_lower:
                 print(f"[security] role {role}: allowed table '{pattern}' "
                       "not found in the database - skipped")
 
@@ -509,7 +505,7 @@ class SecurityPolicy:
         attributes = attributes or {}
         grants = [(r.lower(), None) for r in roles]
         for group in groups:
-            grants += [(r, None) for r in sorted(self.group_roles.get(group.lower(), ()))]
+            grants += [(r, None) for r in sorted(self.roles_for_groups([group]))]
             grants += [(g.role.lower(), g.scope)
                        for g in self.group_grants.get(group.lower(), ())]
 

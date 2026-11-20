@@ -4,7 +4,6 @@
 # User-facing messages for blocked or unanswerable requests. Every message
 # and label here is generic: none ever names a table or column, so all are
 # safe to send to the browser. Detailed reasons stay in the server log.
-# Split out of agent_controls.py.
 #
 # The database's name, description and example questions come from its
 # config/databases/<database>/identity.yaml, so the wording follows the
@@ -132,9 +131,9 @@ def clarify_message(labels):
     """
     The model couldn't tell what the question was after (it said so, or
     misused the read-only marker for a question with no write intent).
-    Previously this was reported as "not available ... may be restricted
-    for your role", which blamed security for what was really a vague
-    question, and made genuine access denials less credible.
+    Deliberately not "not available ... may be restricted for your
+    role": that blames security for a vague question and makes genuine
+    access denials less credible.
     """
     areas = _areas_text(labels, "or")
     hint = f" about {areas}" if areas else " about the data"
@@ -154,12 +153,27 @@ WITHHELD_RULE = "fields_withheld"
 WITHHELD_LABEL = "fields withheld"
 
 
-def block_rule(reason):
-    """Map an internal validation reason to a stable rule code."""
-    r = reason.lower()
+# sql_policy reason codes -> rule codes.
+_CODE_RULES = {
+    "unparseable": "unparseable",
+    "table_not_authorised": "restricted_data",
+    "column_not_authorised": "restricted_data",
+    "read_only": "read_only",
+    "single_statement": "single_statement",
+}
 
-    # Checked first: parser error text can echo arbitrary SQL, which might
-    # contain words like "select" or "not authorised".
+
+def block_rule(reason):
+    """Map a validation reason (a sql_policy.Reason, or plain text) to a
+    stable rule code."""
+    code = getattr(reason, "code", None)
+    if code is not None:
+        return _CODE_RULES.get(code, "policy")
+
+    # Plain text: parser error text can echo arbitrary SQL, which might
+    # contain words like "select" or "not authorised", so it is checked
+    # first.
+    r = reason.lower()
     if "could not be parsed" in r:
         return "unparseable"
     if "not authorised" in r:
@@ -177,7 +191,3 @@ def rule_label(rule):
 
 def rule_message(rule):
     return BLOCK_RULES.get(rule, BLOCK_RULES["policy"])["message"]
-
-
-def user_friendly_block_message(reason):
-    return rule_message(block_rule(reason))

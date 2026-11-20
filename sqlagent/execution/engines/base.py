@@ -21,11 +21,21 @@
 #   missing_column     the column named in a "no such column" error
 #   sanitize_error     a database error with schema detail removed, safe
 #                      to send to the correction model
-#   strip_row_limit    the agent's own row cap removed from a query, for
-#                      the explanation model
+#
+# strip_row_limit (the agent's own row cap removed from a query, for the
+# explanation model) works on the parsed query and is shared by every
+# engine.
 #
 # Rows are returned as dicts with the lowercase keys documented on each
 # method, whatever the driver's own row type.
+
+import sqlglot
+from sqlglot import exp
+
+
+def _is_literal(node, value):
+    return (isinstance(node, exp.Literal) and not node.is_string
+            and node.this == str(value))
 
 
 class Engine:
@@ -108,8 +118,32 @@ class Engine:
         raise NotImplementedError
 
     def strip_row_limit(self, sql, max_rows):
-        """sql without the agent's own row cap of max_rows."""
-        raise NotImplementedError
+        """
+        sql without the agent's own row cap: a top-level LIMIT / TOP /
+        FETCH FIRST of exactly max_rows (sql_policy.apply_query_limits_tree
+        adds it to the outermost query). A limit inside a subquery is the
+        model's own and stays, as does any other number. Returned
+        unchanged when there is nothing to strip or it can't be parsed.
+        """
+        try:
+            tree = sqlglot.parse_one(sql, read=self.dialect)
+        except Exception:
+            return sql
+        limit = tree.args.get("limit") if tree is not None else None
+        if isinstance(limit, exp.Fetch):
+            count = limit.args.get("count")
+        elif isinstance(limit, exp.Limit):
+            count = limit.expression
+        else:
+            return sql
+        # TOP n PERCENT / WITH TIES is the model's own, not the row cap.
+        options = limit.args.get("limit_options")
+        if not _is_literal(count, max_rows) or (
+                options and (options.args.get("percent")
+                             or options.args.get("with_ties"))):
+            return sql
+        tree.set("limit", None)
+        return tree.sql(dialect=self.dialect)
 
     def __repr__(self):
         return f"<{type(self).__name__} {self.name}>"

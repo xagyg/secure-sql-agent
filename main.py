@@ -19,7 +19,6 @@
 # See read_questions() for the file format.
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -47,7 +46,6 @@ from sqlagent.adaptive.schema_catalog import EmptyCatalogError, SchemaCatalog
 from sqlagent.adaptive.semantic_model import SemanticModelError, load_semantic_model
 from sqlagent.execution.engines import active_engine
 from sqlagent.execution.sql_execution import (
-    execute_sql,
     get_connection,
     list_tables,
     read_hierarchy,
@@ -59,10 +57,6 @@ from sqlagent.identities import IdentityError, load_identity
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-# History length is history_turns in config/settings/llm.yaml;
-# run_agent() trims it.
-conversation_history = []
 
 # The local user and their roles. In a real deployment both come from the
 # user's sign-in (identity-provider groups -> roles, see group_roles in
@@ -364,12 +358,8 @@ def print_banner():
     print(f"        Ollama {active_engine().label} Agent")
     print("==============================================")
     print()
-    print("Commands:")
-    print("  :schema     Show database schema")
-    print("  :sql        Enter SQL directly")
-    print("  :quit       Exit")
-    print()
     print("Ask a natural-language database question.")
+    print("Type quit or exit to leave.")
     print()
 
 
@@ -404,7 +394,8 @@ def main():
         if args.no_out:
             if selection:
                 print(f"[batch]{selection}")
-            return start(items, explain, numbers)
+            start(items, explain, numbers)
+            return
         out_path = Path(args.out) if args.out else default_results_path(args.questions)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as out:
@@ -485,6 +476,10 @@ def start(batch_items, explain=True, numbers=None):
                   numbers=numbers)
         return
 
+    # History length is history_turns in config/settings/llm.yaml;
+    # run_agent() trims it.
+    conversation_history = []
+
     while True:
         try:
             question = input("\n> ").strip()
@@ -497,47 +492,6 @@ def start(batch_items, explain=True, numbers=None):
 
         if is_exit(question):
             break
-
- #       if question.lower() in (":quit", ":exit", ":q"):
- #           break
-
- #       if question.lower() == ":schema":
- #           print("\nSchema Catalog")
- #           print("================")
- #           print(f"Tables: {len(catalog.tables)}")
- #           print(f"Foreign keys: {len(catalog.foreign_keys)}")
- #           continue
-
-        # -----------------------------------------------------
-        # Developer/admin SQL command
-        # -----------------------------------------------------
-        # This deliberately bypasses AI table/column
-        # authorisation because it is an explicit developer
-        # command.
-        #
-        # It STILL passes through execute_sql(), meaning that
-        # destructive SQL and multiple statements remain blocked.
-
-#        if question.lower() == ":sql" or question.lower().startswith(":sql "):
-#            if question.lower() == ":sql":
-#                sql = input("\nSQL> ").strip()
-#            else:
-#                sql = question[4:].strip()
-#
-#            try:
-#                results = execute_sql(sql)
-#                print(json.dumps(results, default=str, indent=2))
-#            except Exception as ex:
-#                print(f"\n[SQL ERROR] {ex}")
-#            continue
-
-#        if question.lower() == ":search":
-#            search = input("\nSearch> ").strip()
-#            context = catalog.get_context(
-#                search, table_limit=10, relationship_depth=1
-#            )
-#            print("\n" + context)
-#            continue
 
         try:
             run_agent(question, catalog, conversation_history, security,

@@ -5,14 +5,13 @@ A thin, hardened HTTP wrapper around the existing agent.run_agent().
 
 This does NOT reimplement any of the Agent Behavioural Controls
 (structural safety, authorisation, rewriting, limits, result policy) —
-those live in sql_policy.py, result_policy.py and question_policy.py
-and run exactly as before. This
-wrapper adds what public, anonymous traffic needs on top of that: rate
-limiting, per-session conversation state (with a memory cap), a fixed
-demo-only SecurityContext, request timeouts, concurrency limits, and
-audit logging.
+those live in sqlagent/controls/ and run exactly as they do for the REPL.
+This wrapper adds what public, anonymous traffic needs on top of that:
+rate limiting, per-session conversation state (with a memory cap), a
+fixed demo-only SecurityContext, request timeouts, concurrency limits,
+and audit logging.
 
-Run from the project root (alongside agent.py, sql_policy.py, etc):
+Run from the project root:
     uvicorn api:app --host 127.0.0.1 --port 8000 --workers 1
 
 Keep --workers 1 (or move the in-memory rate limiter / session store to
@@ -33,8 +32,9 @@ import logging
 import time
 import uuid
 from collections import OrderedDict, defaultdict, deque
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,8 +49,6 @@ from sqlagent.controls.security_policy import load_security_policy
 from sqlagent.adaptive.schema_catalog import SchemaCatalog
 from sqlagent.adaptive.semantic_model import load_semantic_model
 from sqlagent.execution.sql_execution import get_connection, list_tables
-
-from pathlib import Path
 
 
 # ==========================================================================
@@ -108,8 +106,9 @@ AUDIT_LOG_PATH = str(_API.audit_log)
 #
 # Every anonymous demo visitor gets this same read-only, narrow view,
 # independent of the roles real authenticated users get (see main.py).
-# Point this process's PGHOST/PGDATABASE/etc at a disposable copy of the
-# data — never at anything with real users' information.
+# Point the active database profile (config/settings/databases.yaml) at a
+# disposable copy of the data — never at anything with real users'
+# information.
 #
 # The policy file is read at import, so a missing or invalid file stops
 # the server before it accepts a request (fail closed). The role is
@@ -125,7 +124,8 @@ DEMO_SECURITY: SecurityContext | None = None
 
 
 # ==========================================================================
-# Rate limiting — simple fixed-window counters in memory.
+# Rate limiting — sliding-window counters in memory (the timestamps of the
+# last minute's / day's requests per key).
 #
 # Good enough for a single-process demo behind nginx. If you ever run
 # more than one uvicorn worker, swap this for Redis (INCR + EXPIRE) so
@@ -236,7 +236,7 @@ class AgentGate:
         try:
             await asyncio.wait_for(self._sem.acquire(), timeout=queue_timeout)
         except asyncio.TimeoutError:
-            raise AgentBusy()
+            raise AgentBusy() from None
 
         released = False
 
@@ -325,6 +325,11 @@ def _client_ip(request: Request) -> str:
 # Each visitor needs their own list — a single shared list would leak
 # one visitor's questions into another's context. Bounded with an LRU
 # eviction so memory can't grow unboundedly.
+#
+# A run works on a COPY of the session's history, written back only when
+# it finishes in time (ask()). A timed-out run's thread keeps going and
+# would otherwise append to the list the next request is using, and two
+# requests from one session would edit the same list at once.
 # ==========================================================================
 
 
@@ -382,9 +387,16 @@ def audit(event: str, **fields) -> None:
 # ==========================================================================
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    await load_schema_catalog()
+    yield
+
+
 app = FastAPI(
     title="Secure SQL Agent — demo API",
-    root_path="/sqlagent"
+    root_path="/sqlagent",
+    lifespan=lifespan,
 )
 
 if ALLOWED_ORIGINS:
@@ -397,7 +409,6 @@ if ALLOWED_ORIGINS:
     )
 
 
-@app.on_event("startup")
 async def load_schema_catalog():
     global demo_catalog, DEMO_SECURITY
     # Any failure here (database, policy, semantic model, or a catalog with
@@ -427,12 +438,12 @@ class AskResponse(BaseModel):
     # "policy" (a guardrail stopped it), "error" (technical failure) or
     # None (ran normally). rule / rule_label are set for policy blocks
     # only and are generic, so they're safe to show in the browser.
-    reason: Optional[str] = None
-    rule: Optional[str] = None
-    rule_label: Optional[str] = None
+    reason: str | None = None
+    rule: str | None = None
+    rule_label: str | None = None
     # Domain of Discourse the question was routed to, e.g. "Sales" or
     # "Sales + Financials". A business label only; never table names.
-    domain: Optional[str] = None
+    domain: str | None = None
 
 
 @app.get("/api/health")
@@ -443,13 +454,12 @@ async def health():
     }
 
 
-DEMO_UNAVAILABLE_MSG = (
-    "The demo is not currently available. "
-    "Contact bradlongphd@gmail.com to enable the demo."
-)
+# api.yaml unavailable_message
+DEMO_UNAVAILABLE_MSG = _API.unavailable_message
 
 # Resolve relative to this file so it doesn't depend on the working directory
 ENABLE_FLAG = Path(__file__).parent / "demo_enabled.flag"
+
 
 def require_demo_enabled() -> None:
     if not ENABLE_FLAG.exists():
@@ -488,6 +498,7 @@ async def ask(payload: AskRequest, request: Request):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     history = await session_store.get(payload.session_id)
+    working_history = list(history)   # see "Session-scoped conversation history"
 
     request_id = uuid.uuid4().hex[:12]
     audit("request_received", id=request_id, ip=ip_key, session=payload.session_id, question=question)
@@ -495,7 +506,7 @@ async def ask(payload: AskRequest, request: Request):
 
     try:
         result = await agent_gate.run(
-            run_agent, question, demo_catalog, history, DEMO_SECURITY,
+            run_agent, question, demo_catalog, working_history, DEMO_SECURITY,
             queue_timeout=QUEUE_WAIT_SECONDS,
             run_timeout=AGENT_TIMEOUT_SECONDS,
         )
@@ -506,7 +517,7 @@ async def ask(payload: AskRequest, request: Request):
             status_code=429,
             detail="The demo is busy right now — try again in a few seconds.",
             headers={"Retry-After": "5"},
-        )
+        ) from None
     except asyncio.TimeoutError:
         audit("timeout", id=request_id, session=payload.session_id)
         print(f"[timeout] no answer within {AGENT_TIMEOUT_SECONDS}s — returned 504")
@@ -516,23 +527,19 @@ async def ask(payload: AskRequest, request: Request):
                 "That took too long — the model may have been idle and is "
                 "waking up. Ask the question again and you should get a response."
             ),
-        )
-#    except Exception as exc:  # noqa: BLE001 — never leak internals to a public endpoint
-#        audit(
-#            "error",
-#            id=request_id,
-#            session=payload.session_id,
-#            error=type(exc).__name__,
-#            detail=str(exc),
-#        )
-#        raise HTTPException(status_code=500, detail="Something went wrong answering that question.")
+        ) from None
     except Exception as exc:  # noqa: BLE001 — never leak internals to a public endpoint
         audit("error", id=request_id, session=payload.session_id, error=type(exc).__name__)
-        raise HTTPException(status_code=500, detail="Something went wrong answering that question.")
+        raise HTTPException(
+            status_code=500, detail="Something went wrong answering that question.",
+        ) from None
 
-    # run_agent() returns {"answer", "blocked", "reason", "rule",
-    # "rule_label", "sql"} — see agent.py. The SQL is logged for the audit
-    # trail but deliberately NOT returned to the browser.
+    # Finished in time: this run's turn becomes the session's history.
+    history[:] = working_history
+
+    # run_agent() returns the dict described in its docstring (agent.py).
+    # The SQL is logged for the audit trail but deliberately NOT returned
+    # to the browser.
     answer = result["answer"]
     blocked = result["blocked"]
     reason = result.get("reason")

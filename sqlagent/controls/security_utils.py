@@ -1,9 +1,34 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 
+import re
+
+from sqlglot import exp
+
+
 # ---------------------------------------------------------------------------
 # Security helpers
 # ---------------------------------------------------------------------------
+
+# A name that can be written without quotes.
+_PLAIN_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def ident(name):
+    """
+    A sqlglot identifier for a generated reference. Quoted only when the
+    name can't be written plainly (a space or other character, e.g. SQL
+    Server's "Order Details"); sqlglot then renders the dialect's quotes,
+    [Order Details] or "Order Details". Plain names stay unquoted, so
+    their case is matched the way the database matches it.
+    """
+    return exp.Identifier(this=name, quoted=not _PLAIN_IDENTIFIER.fullmatch(name))
+
+
+def is_pattern(name):
+    """True for a table name with fnmatch wildcards ("sales.*",
+    "production.product*")."""
+    return any(ch in name for ch in "*?[")
 
 
 def contains_case_insensitive(values, value):

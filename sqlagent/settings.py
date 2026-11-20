@@ -186,6 +186,8 @@ class ApiSettings(_Strict):
     max_slot_hold: float = Field(150, gt=0, le=7200)
     max_sessions: int = Field(2000, ge=1)
     audit_log: Path = Path("audit.log")
+    unavailable_message: str = Field(
+        "The demo is not currently available.", min_length=1)
 
     @field_validator("allowed_origins")
     @classmethod

@@ -1,23 +1,10 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Changes for PostgreSQL / API use:
-#   - the artificial-limit stripping regex now matches Postgres's
-#     "LIMIT n" instead of SQL Server's "TOP n"
-#   - every exit point now returns a dict ({"answer", "blocked", "sql"})
-#     in addition to the existing print() calls, so a caller other than
-#     the REPL (e.g. an HTTP API) can get the result back directly,
-#     instead of scraping stdout or reading conversation_history after
-#     the fact. The REPL's own printed output is unchanged.
-#   - results now also carry a "reason" ("policy" | "error" | None) so a
-#     caller can tell a guardrail stopping a request apart from a
-#     technical failure. Only "policy" results have blocked=True.
-#   - policy results also carry "rule" / "rule_label" (see BLOCK_RULES in
-#     messages.py): a stable code plus a short, generic label that
-#     is safe to show in the UI. Detailed reasons stay in the console.
-
-
-import re
+# The agent pipeline (run_agent): route the question, generate SQL, apply
+# the controls, execute, explain. Every exit returns a result dict (see
+# run_agent's docstring) so the REPL and the API get the same answer; the
+# console log is printed as it goes.
 
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
@@ -37,7 +24,12 @@ from sqlagent.controls.question_policy import (
     mentions_denied_column,
 )
 from sqlagent.controls.result_policy import apply_result_policy
-from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
+from sqlagent.controls.sql_policy import (
+    MAX_ROWS,
+    TABLE_NOT_AUTHORISED,
+    UNPARSEABLE,
+    prepare_sql,
+)
 from sqlagent.adaptive.history import format_results_table, summarise_result
 from sqlagent.adaptive.llm import (
     CORRECTION_SQL_CHARS,
@@ -75,22 +67,18 @@ from sqlagent.adaptive.text_match import tokenize
 # Agent
 # ---------------------------------------------------------------------------
 
-def _validation_reason_kind(reason):
+def _is_unparseable(reason):
     """
-    Classify a validate_agent_sql() failure.
-
-    A query the parser couldn't read is a technical failure, not a
-    guardrail firing, so it is reported as "error". Everything else
-    (restricted table/column, non read-only, multiple statements) is
-    a policy decision.
+    True when a prepare_sql() failure is SQL the parser couldn't read: a
+    technical failure, not a guardrail firing, so it is reported as
+    "error". Everything else (restricted table/column, not read-only,
+    several statements) is a policy decision.
     """
-    if "could not be parsed" in reason.lower():
-        return "error"
-    return "policy"
+    return getattr(reason, "code", None) == UNPARSEABLE
 
 
 def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
-            label=None, outcome=None, row_count=None):
+            label=None, outcome=None, row_count=None, domain=None):
     """
     The dict run_agent() returns (see its docstring). rule_label is taken
     from BLOCK_RULES unless label is given.
@@ -104,6 +92,7 @@ def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
         "rule": rule,
         "rule_label": label,
         "sql": sql,
+        "domain": domain,
         "outcome": outcome,
         "row_count": row_count,
     }
@@ -117,6 +106,15 @@ def _policy_block(rule, sql=None):
     return _result(message, sql, blocked=True, reason="policy", rule=rule)
 
 
+def _restricted_if_named(question, security, sql=None):
+    """The "restricted" block when the question names a column this role
+    is denied, else None."""
+    if mentions_denied_column(question, security):
+        print("\n[security] Question refers to a restricted column.")
+        return _policy_block("restricted_data", sql)
+    return None
+
+
 def _not_available(question, security, sql=None, corrected=False):
     """
     The model said the data isn't in the schema (DATA_NOT_AVAILABLE),
@@ -124,9 +122,9 @@ def _not_available(question, security, sql=None, corrected=False):
     question names a column this role is denied, otherwise "not
     available".
     """
-    if mentions_denied_column(question, security):
-        print("\n[security] Question refers to a restricted column.")
-        return _policy_block("restricted_data", sql)
+    restricted = _restricted_if_named(question, security, sql)
+    if restricted:
+        return restricted
     if corrected:
         print("\n[agent] Correction: the requested data isn't in the "
               "authorised schema.")
@@ -141,12 +139,12 @@ def _error(message, sql=None):
 
 
 def _validation_failure(reason, sql):
-    """Build the result dict for a validate_agent_sql() failure."""
+    """Build the result dict for a prepare_sql() failure."""
     print(f"\n[security] {reason}")
 
     rule = block_rule(reason)
 
-    if _validation_reason_kind(reason) == "policy":
+    if not _is_unparseable(reason):
         return _policy_block(rule, sql)
 
     message = rule_message(rule)
@@ -182,14 +180,14 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
         print(prepared.sql)
 
     failure = None
-    if prepared.failure_reason:
-        table = _unauthorised_table(prepared.failure_reason) if table_retry else None
-        if table:
-            print(f"\n[security] {prepared.failure_reason}")
-            failure = {"retry_table": table, "reason": prepared.failure_reason}
-        elif table_retry and _validation_reason_kind(prepared.failure_reason) == "error":
-            print(f"\n[security] {prepared.failure_reason}")
-            failure = {"retry_parse": True, "reason": prepared.failure_reason}
+    reason = prepared.failure_reason
+    if reason:
+        if table_retry and getattr(reason, "code", None) == TABLE_NOT_AUTHORISED:
+            print(f"\n[security] {reason}")
+            failure = {"retry_table": reason.table, "reason": reason}
+        elif table_retry and _is_unparseable(reason):
+            print(f"\n[security] {reason}")
+            failure = {"retry_parse": True, "reason": reason}
         elif table_retry and has_derived_table(sql):
             # A subquery in FROM / JOIN (or a WITH): its columns can't be
             # tied to a real table, so the policy rejects the query. Not
@@ -200,7 +198,7 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
                        "hint": _DERIVED_TABLE_HINT,
                        "action": "rewrite it without subqueries in FROM"}
         else:
-            failure = _validation_failure(prepared.failure_reason, prepared.sql)
+            failure = _validation_failure(reason, prepared.sql)
 
     return prepared.sql, prepared.withheld, failure
 
@@ -225,14 +223,37 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 # message is the same generic "not available / may be restricted" either
 # way, so it doesn't confirm the table exists.
 
-_UNAUTHORISED_TABLE = re.compile(r"^Table '([^']+)' is not authorised\.$")
+def _rewrite_once(question, schema, sql, error, hint, security, catalog,
+                  on_same_sql):
+    """
+    Ask the model for one rewrite of `sql` that failed with `error`, then
+    prepare it like any other query. Returns (sql, withheld, failure)
+    from _prepare_sql(), or a finished result dict: not available, an
+    error, or on_same_sql() when the model sends the same SQL back.
+    """
+    try:
+        corrected = correct_sql(question, schema, sql, error, hint)
+    except Exception as ex:
+        print(f"\n[CORRECTION ERROR] {ex}")
+        return _error("I couldn't correct that query.", sql)
 
+    print("\n[corrected sql]")
+    print(corrected)
 
-def _unauthorised_table(reason):
-    """The table a "Table 'x' is not authorised." reason names, or None
-    (any other validation failure is never retried)."""
-    match = _UNAUTHORISED_TABLE.match(reason.strip())
-    return match.group(1) if match else None
+    if classify_model_output(corrected) == "not_available":
+        return _not_available(question, security, sql, corrected=True)
+
+    if _normalise_sql(corrected) == _normalise_sql(sql):
+        print("\n[agent] Correction produced the same SQL. Stopping.")
+        return on_same_sql()
+
+    try:
+        return _prepare_sql(corrected, security, catalog)
+    except Exception as ex:
+        print(f"\n[error] {ex}")
+        message = "I couldn't safely prepare the query for execution."
+        print(f"\n[answer] {message}")
+        return _error(message, corrected)
 
 
 def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
@@ -271,30 +292,10 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
         "answer it from a table that means something else.\n"
     )
     print(f"\n[agent] Asking Ollama to rewrite it without {bare}...")
-    try:
-        corrected = correct_sql(question, schema, sql,
-                                f"Table {bare} is not available.", hint)
-    except Exception as ex:
-        print(f"\n[CORRECTION ERROR] {ex}")
-        return _error("I couldn't correct that query.", sql)
-
-    print("\n[corrected sql]")
-    print(corrected)
-
-    if classify_model_output(corrected) == "not_available":
-        return _not_available(question, security, sql, corrected=True)
-
-    if _normalise_sql(corrected) == _normalise_sql(sql):
-        print("\n[agent] Correction produced the same SQL. Stopping.")
-        return _policy_block(block_rule(reason), sql)
-
-    try:
-        return _prepare_sql(corrected, security, catalog)
-    except Exception as ex:
-        print(f"\n[error] {ex}")
-        message = "I couldn't safely prepare the query for execution."
-        print(f"\n[answer] {message}")
-        return _error(message, corrected)
+    return _rewrite_once(
+        question, schema, sql, f"Table {bare} is not available.", hint,
+        security, catalog,
+        on_same_sql=lambda: _policy_block(block_rule(reason), sql))
 
 
 # ---------------------------------------------------------------------------
@@ -333,30 +334,10 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
         "  allowed.\n"
     )
     print(f"\n[agent] Asking Ollama to {failure.get('action', 'rewrite it as valid SQL')}...")
-    try:
-        corrected = correct_sql(question, schema, _sql_for_correction(sql, sql),
-                                _sanitize_sql_error_for_llm(failure["reason"]), hint)
-    except Exception as ex:
-        print(f"\n[CORRECTION ERROR] {ex}")
-        return _error("I couldn't correct that query.", sql)
-
-    print("\n[corrected sql]")
-    print(corrected)
-
-    if classify_model_output(corrected) == "not_available":
-        return _not_available(question, security, sql, corrected=True)
-
-    if _normalise_sql(corrected) == _normalise_sql(sql):
-        print("\n[agent] Correction produced the same SQL. Stopping.")
-        return _validation_failure(failure["reason"], sql)
-
-    try:
-        return _prepare_sql(corrected, security, catalog)
-    except Exception as ex:
-        print(f"\n[error] {ex}")
-        message = "I couldn't safely prepare the query for execution."
-        print(f"\n[answer] {message}")
-        return _error(message, corrected)
+    return _rewrite_once(
+        question, schema, sql, _sanitize_sql_error_for_llm(failure["reason"]),
+        hint, security, catalog,
+        on_same_sql=lambda: _validation_failure(failure["reason"], sql))
 
 
 def _check_before_running(sql, catalog):
@@ -537,10 +518,8 @@ def run_agent(question, catalog, history, security, explain=True):
         explain = True
 
     if not question:
-        result = _result("Please add a question to go with the context tag.",
-                         outcome="no_question")
-        result["domain"] = None
-        return result
+        return _result("Please add a question to go with the context tag.",
+                       outcome="no_question")
 
     # ---------------------------------------------------------
     # A question about the database itself ("What does Northwind
@@ -552,9 +531,7 @@ def run_agent(question, catalog, history, security, explain=True):
               "listing the available areas.")
         message = overview_message(_available_areas(catalog))
         print(f"\n[answer] {message}")
-        result = _result(message, outcome="overview")
-        result["domain"] = None
-        return result
+        return _result(message, outcome="overview")
 
     # ---------------------------------------------------------
     # Something this database doesn't record (semantic model
@@ -568,9 +545,7 @@ def run_agent(question, catalog, history, security, explain=True):
         print(f"\n[semantic] Not recorded in this database: {name} "
               f"(the question says \"{phrase}\")"
               + (f" - {description}" if description else ""))
-        result = _policy_block("not_available")
-        result["domain"] = None
-        return result
+        return _policy_block("not_available")
 
     resolver = catalog.domain_resolver
     previous_domain = history[-1].get("domain") if history else None
@@ -722,9 +697,9 @@ def _answer_without_sql(question, sql, security, catalog):
         output_kind = "unclear"
 
     if output_kind == "unclear":
-        if mentions_denied_column(question, security):
-            print("\n[security] Question refers to a restricted column.")
-            return _policy_block("restricted_data")
+        restricted = _restricted_if_named(question, security)
+        if restricted:
+            return restricted
         print("\n[agent] Question too vague to answer with one query.")
         message = clarify_message(_available_areas(catalog))
         print(f"\n[answer] {message}")
