@@ -177,9 +177,9 @@ class NamedOutsideDomain(unittest.TestCase):
         self.assertEqual(RelationshipWalk().named_outside_domain, "add")
 
     def test_column_words_alone_do_not_name_a_table(self):
-        # A wide table whose column names repeat a question word scores as
-        # high as a named table (Odoo's res_company on "sales"), but the
-        # question doesn't name it, so it isn't added.
+        # A wide table whose column names repeat a question word (Odoo's
+        # res_company on "sales") isn't named by the question, so it isn't
+        # added. Its column word counts once, not once per column.
         catalog = make_catalog(extra_tables={
             "public.audit_log": [f"category_note_{i}" for i in range(10)]})
         catalog.domain_resolver.blend = False
@@ -188,7 +188,7 @@ class NamedOutsideDomain(unittest.TestCase):
         scope = catalog.domain_resolver.scope(decision)
         terms = catalog.question_terms(ctx.question)
         wide = catalog.tables["public.audit_log"]
-        self.assertGreaterEqual(catalog.score_table(wide, terms), 20)
+        self.assertEqual(catalog.score_table(wide, terms), 3)
         self.assertEqual(catalog.name_score(wide, terms), 0)
         tables = tables_in(catalog.discover_schema(ctx.question, scope=scope))
         self.assertIn("categories", tables)
@@ -607,6 +607,49 @@ class OnlyAHubIsNamed(unittest.TestCase):
         # res_users not a hub: the walk goes back to sale_order anyway.
         tables = self.tables(self.catalog(users_is_hub=False))
         self.assertTrue({"res_users", "sale_order"} <= tables)
+
+
+class ColumnWordsOncePerTable(unittest.TestCase):
+    """score_table(): each question word counts once per table however
+    many columns it is in, and so does each matching column label."""
+
+    QUESTION = "how many beta features require an access code?"
+
+    def catalog(self):
+        wide = ["id"] + [f"x{i}_code" for i in range(24)]   # GLF_CHART_ACCT
+        narrow = ["id", "short_descr", "access_code_req_ind", "access_key",
+                  "feature_withdrawn_ind", "feature_icon_path"]
+        catalog = make_catalog(exclude=set(NORTHWIND), extra_tables={
+            "dbo.glf_chart_acct": wide, "dbo.tbsec_beta_feature": narrow})
+        catalog.tables["dbo.tbsec_beta_feature"]["columns"][2]["label"] = (
+            "Feature requires access code")
+        return catalog
+
+    def scores(self, catalog):
+        terms = catalog.question_terms(self.QUESTION)
+        return {t.split(".")[-1]:
+                catalog.score_table(catalog.tables[t], terms)
+                for t in ("dbo.glf_chart_acct", "dbo.tbsec_beta_feature")}
+
+    def test_narrow_matching_table_beats_wide_one(self):
+        scores = self.scores(self.catalog())
+        # wide: "code" once (3). narrow: name parts beta, feature (2 x 5),
+        # column words access, code, feature (3 x 3), label (3).
+        self.assertEqual(scores["glf_chart_acct"], 3)
+        self.assertEqual(scores["tbsec_beta_feature"], 22)
+
+    def test_same_label_on_many_columns_counts_once(self):
+        catalog = self.catalog()
+        for column in catalog.tables["dbo.glf_chart_acct"]["columns"]:
+            column["label"] = "access code"
+        self.assertEqual(self.scores(catalog)["glf_chart_acct"], 6)
+
+    def test_different_words_each_count(self):
+        catalog = make_catalog()
+        terms = catalog.question_terms("freight by ship country")
+        # orders: freight, ship, country (ship_country, ship_city, ...)
+        self.assertEqual(catalog.score_table(catalog.tables["public.orders"],
+                                             terms), 9)
 
 
 class Blending(unittest.TestCase):
