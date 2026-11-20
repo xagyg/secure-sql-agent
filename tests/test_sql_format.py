@@ -37,13 +37,52 @@ class SqlFormatTest(unittest.TestCase):
             "SELECT\n"
             "    c.customer_id,\n"
             "    c.company_name\n"
+            "FROM customers c\n"
+            "WHERE c.country = 'Germany' AND c.city = 'Berlin'\n"
+            "LIMIT 100"))
+
+    def test_compact_layout(self):
+        sql = ("SELECT EXTRACT(YEAR FROM o.order_date) AS order_year, "
+               "SUM(od.quantity * od.unit_price * (1 - od.discount)) AS total_sales "
+               "FROM orders o JOIN order_details od ON o.order_id = od.order_id "
+               "GROUP BY EXTRACT(YEAR FROM o.order_date) HAVING COUNT(*) > 1 "
+               "ORDER BY order_year")
+        self.assertEqual(pretty(sql), (
+            "SELECT\n"
+            "    EXTRACT(YEAR FROM o.order_date) AS order_year,\n"
+            "    SUM(od.quantity * od.unit_price * (1 - od.discount)) AS total_sales\n"
+            "FROM orders o\n"
+            "JOIN order_details od ON o.order_id = od.order_id\n"
+            "GROUP BY EXTRACT(YEAR FROM o.order_date)\n"
+            "HAVING COUNT(*) > 1\n"
+            "ORDER BY order_year"))
+
+    def test_compact_long_clause_keeps_sqlglot_layout(self):
+        out = pretty(max_text_width=30)
+        self.assertIn("\nWHERE\n    c.country = 'Germany'\n    AND c.city = 'Berlin'\n", out)
+
+    def test_sqlglot_layout(self):
+        self.assertEqual(pretty(layout="sqlglot"), (
+            "SELECT\n"
+            "    c.customer_id,\n"
+            "    c.company_name\n"
             "FROM customers AS c\n"
             "WHERE\n"
             "    c.country = 'Germany' AND c.city = 'Berlin'\n"
             "LIMIT 100"))
 
+    def test_sql_server_names_kept(self):
+        settings = get_settings().model_copy(deep=True)
+        with mock.patch.object(agent, "active_dialect", return_value="tsql"), \
+                mock.patch.object(agent, "get_settings", return_value=settings):
+            out = agent._pretty_sql("SELECT TOP 5 od.OrderID FROM dbo.[Order Details] od "
+                                    "JOIN dbo.Orders o ON o.OrderID = od.OrderID")
+        self.assertIn("FROM dbo.[Order Details] od\nJOIN dbo.Orders o ON o.OrderID = od.OrderID", out)
+        self.assertIn("TOP 5", out)
+
     def test_options(self):
-        out = pretty(pad=2, indent=2, leading_comma=True, max_text_width=30)
+        out = pretty(pad=2, indent=2, leading_comma=True, max_text_width=30,
+                     layout="sqlglot")
         self.assertIn("\n  c.customer_id\n  , c.company_name\n", out)
         self.assertIn("\n  c.country = 'Germany'\n  AND c.city = 'Berlin'\n", out)
 
@@ -60,6 +99,8 @@ class SqlFormatTest(unittest.TestCase):
             SqlFormat(max_text_width=5)
         with self.assertRaises(ValidationError):
             SqlFormat(colour=True)          # unknown key
+        with self.assertRaises(ValidationError):
+            SqlFormat(layout="fancy")
 
 
 if __name__ == "__main__":
