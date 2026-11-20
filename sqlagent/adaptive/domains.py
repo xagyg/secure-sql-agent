@@ -313,46 +313,20 @@ class DomainResolver:
 
     def resolve(self, question, roles=(), where=None, who=None,
                 previous_domain=None):
-        # The catalog's question words include typo corrections
-        # ("purchsing" -> "purchasing"), so routing and schema search see
-        # the same words.
-        question_terms = getattr(self.catalog, "question_terms", None)
-        q_terms = (question_terms(question) if question_terms
-                   else self._tok(question) - GENERIC_TERMS)
-        # Location names keep words like "records" or "details" that are
-        # generic in a question, so GENERIC_TERMS isn't removed here.
-        where_terms = self._where_terms(where) if where else set()
+        """
+        The Domain of Discourse for a question: score every domain the
+        user can see on What (the question's words), Where (the [where=]
+        tag) and Who (the user's roles, or [who=]), then choose one domain,
+        two close ones (blended), the previous one (a follow-up), or none
+        (the whole schema).
+        """
+        q_terms, where_terms = self._signal_terms(question, where)
         role_set = self._canonical_roles(roles, who)
 
         # Score every authorised table against the question once.
-        table_scores = {
-            name: self.catalog.score_table(table, q_terms)
-            for name, table in self.catalog.tables.items()
-        }
-        where_table_scores = {}
-        if where_terms:
-            where_table_scores = {
-                name: self.catalog.score_table(table, where_terms)
-                for name, table in self.catalog.tables.items()
-            }
-
-        # Where: which location phrases does the tag match? A phrase
-        # that is part of a longer matched phrase is dropped, so
-        # "purchase order entry" counts for Purchasing, not also as
-        # "order entry" for Sales.
-        where_phrases = {}
-        if where_terms:
-            matched = {
-                phrase
-                for domain in self.domains.values()
-                for phrase in set(domain.get("where", ())) | set(domain["aliases"])
-                if self._phrase_matches(phrase, where_terms)
-            }
-            words = {p: set(re.split(r"[_\s]+", p.lower())) for p in matched}
-            where_phrases = {
-                p for p in matched
-                if not any(words[p] < words[q] for q in matched)
-            }
+        table_scores = self._table_scores(q_terms)
+        where_table_scores = self._table_scores(where_terms) if where_terms else {}
+        where_phrases = self._matched_where_phrases(where_terms)
 
         raw = {}
         named_domain = False   # the question names a domain ("in purchasing")
@@ -360,44 +334,120 @@ class DomainResolver:
             tables = self.domain_tables.get(key)
             if not tables:
                 continue   # nothing this user can see in that domain
-
-            # What: explicit mention + the domain's best-matching tables.
-            # Top table counts fully, 2nd half, 3rd a quarter, so a big
-            # domain can't win just by having lots of weak matches.
-            ranked = sorted((table_scores[t] for t in tables), reverse=True)[:3]
-            what = sum(s * w for s, w in zip(ranked, (1.0, 0.5, 0.25)))
-            if any(self._phrase_matches(a, q_terms) for a in domain["aliases"]):
-                what += EXPLICIT_DOMAIN_POINTS
-                named_domain = True
-
-            # Where: the longest location phrase this domain owns. If the
-            # tag matched no phrase anywhere, fall back to the tables it
-            # names (e.g. "[where=shippers]").
-            where_score = 0.0
-            if where_phrases:
-                own = where_phrases & (set(domain.get("where", ())) | set(domain["aliases"]))
-                if own:
-                    where_score = WHERE_PHRASE_POINTS * max(self._phrase_len(p) for p in own)
-            elif where_terms:
-                where_score = max((where_table_scores[t] for t in tables), default=0)
-
-            # Who: the strongest affinity among the user's roles.
-            affinities = {r.lower(): v for r, v in domain.get("roles", {}).items()}
-            who_score = max((affinities.get(r, 0.0) for r in role_set), default=0.0)
-
-            raw[key] = (what, where_score, who_score)
+            what, named = self._what_score(domain, tables, q_terms, table_scores)
+            named_domain = named_domain or named
+            where_score = self._where_score(domain, tables, where_terms,
+                                            where_phrases, where_table_scores)
+            raw[key] = (what, where_score, self._who_score(domain, role_set))
 
         if not raw:
             return DomainDecision(signals={})
 
+        scores, present, active = self._rank(raw, previous_domain)
+        decision = DomainDecision(
+            scores=scores, signals=present,
+            labels={k: d["label"] for k, d in self.domains.items()})
+
+        # Strong evidence: a table named in full or by alias (any
+        # authorised table, inside a domain or not), a domain named, or a
+        # matched location.
+        strong = (
+            named_domain
+            or present["where"]
+            or max(table_scores.values(), default=0) >= FULL_NAME_MATCH
+        )
+        self._choose(decision, active, strong, previous_domain, raw)
+        return decision
+
+    # -- the three signals ---------------------------------------------
+
+    def _signal_terms(self, question, where):
+        """(question terms, [where=] terms). The catalog's question words
+        include typo corrections ("purchsing" -> "purchasing"), so routing
+        and schema search see the same words. Location names keep words
+        like "records" or "details" that are generic in a question, so
+        GENERIC_TERMS isn't removed from the where terms."""
+        question_terms = getattr(self.catalog, "question_terms", None)
+        q_terms = (question_terms(question) if question_terms
+                   else self._tok(question) - GENERIC_TERMS)
+        where_terms = self._where_terms(where) if where else set()
+        return q_terms, where_terms
+
+    def _table_scores(self, terms):
+        """{table: score} for every authorised table against `terms`."""
+        return {
+            name: self.catalog.score_table(table, terms)
+            for name, table in self.catalog.tables.items()
+        }
+
+    def _matched_where_phrases(self, where_terms):
+        """
+        The location phrases the [where=] tag matches. A phrase that is
+        part of a longer matched phrase is dropped, so "purchase order
+        entry" counts for Purchasing, not also as "order entry" for Sales.
+        """
+        if not where_terms:
+            return {}
+        matched = {
+            phrase
+            for domain in self.domains.values()
+            for phrase in set(domain.get("where", ())) | set(domain["aliases"])
+            if self._phrase_matches(phrase, where_terms)
+        }
+        words = {p: set(re.split(r"[_\s]+", p.lower())) for p in matched}
+        return {
+            p for p in matched
+            if not any(words[p] < words[q] for q in matched)
+        }
+
+    def _what_score(self, domain, tables, q_terms, table_scores):
+        """
+        (What score, whether the question names the domain): the domain's
+        best-matching tables plus an explicit mention. Top table counts
+        fully, 2nd half, 3rd a quarter, so a big domain can't win just by
+        having lots of weak matches.
+        """
+        ranked = sorted((table_scores[t] for t in tables), reverse=True)[:3]
+        what = sum(s * w for s, w in zip(ranked, (1.0, 0.5, 0.25)))
+        named = any(self._phrase_matches(a, q_terms) for a in domain["aliases"])
+        if named:
+            what += EXPLICIT_DOMAIN_POINTS
+        return what, named
+
+    def _where_score(self, domain, tables, where_terms, where_phrases,
+                     where_table_scores):
+        """The longest location phrase this domain owns. If the tag
+        matched no phrase anywhere, fall back to the tables it names
+        (e.g. "[where=shippers]")."""
+        if where_phrases:
+            own = where_phrases & (set(domain.get("where", ())) | set(domain["aliases"]))
+            if own:
+                return WHERE_PHRASE_POINTS * max(self._phrase_len(p) for p in own)
+            return 0.0
+        if where_terms:
+            return max((where_table_scores[t] for t in tables), default=0)
+        return 0.0
+
+    @staticmethod
+    def _who_score(domain, role_set):
+        """The strongest affinity among the user's roles."""
+        affinities = {r.lower(): v for r, v in domain.get("roles", {}).items()}
+        return max((affinities.get(r, 0.0) for r in role_set), default=0.0)
+
+    # -- ranking and the decision --------------------------------------
+
+    def _rank(self, raw, previous_domain):
+        """
+        Normalise the raw (what, where, who) scores and weight the signals
+        that are present. Returns (DomainScores best first, which signals
+        were present, the sum of their weights - 0 when none was).
+        """
         max_what = max(v[0] for v in raw.values())
         max_where = max(v[1] for v in raw.values())
-        has_who = any(v[2] > 0 for v in raw.values())
-
         present = {
             "what": max_what > 0,
             "where": max_where > 0,
-            "who": has_who,
+            "who": any(v[2] > 0 for v in raw.values()),
         }
         weights = {"what": WEIGHT_WHAT, "where": WEIGHT_WHERE, "who": WEIGHT_WHO}
         active = sum(w for k, w in weights.items() if present[k])
@@ -423,19 +473,10 @@ class DomainResolver:
             scores.append(s)
 
         scores.sort(key=lambda s: s.total, reverse=True)
-        decision = DomainDecision(
-            scores=scores, signals=present,
-            labels={k: d["label"] for k, d in self.domains.items()})
+        return scores, present, active
 
-        # Strong evidence: a table named in full or by alias (any
-        # authorised table, inside a domain or not), a domain named, or a
-        # matched location.
-        strong = (
-            named_domain
-            or present["where"]
-            or max(table_scores.values(), default=0) >= FULL_NAME_MATCH
-        )
-
+    def _choose(self, decision, active, strong, previous_domain, raw):
+        """Set decision.domains and decision.mode from its ranked scores."""
         if not active or (WEAK_EVIDENCE_FOLLOW_UP and not strong
                           and previous_domain in raw):
             # No signal at all ("now by month"), or only weak evidence
@@ -446,11 +487,12 @@ class DomainResolver:
                 decision.mode = "follow_up"
                 if active:
                     decision.signals["weak_evidence"] = True
-            return decision
+            return
 
+        scores = decision.scores
         best = scores[0]
         if best.total < MIN_DOMAIN_SCORE:
-            return decision   # too weak: whole UoD, as before
+            return   # too weak: the whole schema
 
         if self.blend and len(scores) > 1 \
                 and best.total - scores[1].total < BLEND_MARGIN \
@@ -463,8 +505,6 @@ class DomainResolver:
         else:
             decision.domains = [best.key]
             decision.mode = "single"
-
-        return decision
 
     # -- schema scope --------------------------------------------------
 
