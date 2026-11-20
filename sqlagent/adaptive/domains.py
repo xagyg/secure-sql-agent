@@ -25,12 +25,15 @@
 # Everything here is deterministic. The LLM never chooses the domain.
 
 import fnmatch
+import logging
 import re
 from dataclasses import dataclass, field
 
-from sqlagent.controls.security_utils import full_table_name
+from sqlagent.controls.security_utils import full_table_name, is_pattern
 from sqlagent.adaptive.text_match import FULL_NAME_MATCH, GENERIC_TERMS, phrase_matches, tokenize
 from sqlagent.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -102,12 +105,6 @@ BLEND = _ROUTING.blend                         # off: always the top domain only
 # affects ROUTING only - never authorisation, which always comes from the
 # authenticated SecurityContext. Turn off in any real deployment.
 ALLOW_WHO_TAG = _ROUTING.allow_who_tag
-
-def _is_pattern(name):
-    """True for a domain table entry with wildcards ("sales.*",
-    "production.product*"), matched like sources.include."""
-    return any(ch in name for ch in "*?[")
-
 
 _TAG_PATTERN = re.compile(r"\[\s*(where|who)\s*=\s*([^\]\[]{1,80})\]", re.IGNORECASE)
 # "[explain]": explain this question's result even when explanations are
@@ -240,7 +237,7 @@ class DomainResolver:
         def resolve(names, key, what):
             found = set()
             for table in names:
-                if _is_pattern(table):
+                if is_pattern(table):
                     # "sales.*": every authorised table that matches.
                     # Matched against the filtered catalog, so a pattern
                     # can never reach a table the role can't see.
@@ -252,15 +249,15 @@ class DomainResolver:
                     if matches:
                         found |= matches
                     else:
-                        print(f"[domain] {key}: {what} pattern '{pattern}' "
-                              "matches no available table - skipped")
+                        logger.info(f"[domain] {key}: {what} pattern '{pattern}' "
+                                    "matches no available table - skipped")
                     continue
                 match = self.catalog.resolve_table_name(table)
                 if match:
                     found.add(match)
                 else:
-                    print(f"[domain] {key}: {what} '{full_table_name(table)}' "
-                          "not available - skipped")
+                    logger.info(f"[domain] {key}: {what} '{full_table_name(table)}' "
+                                "not available - skipped")
             return found
 
         self.domain_tables = {}
@@ -271,7 +268,7 @@ class DomainResolver:
                 domain.get("fallback_tables", ()), key, "fallback table")
 
         usable = [k for k, t in self.domain_tables.items() if t]
-        print(f"[domain] {len(usable)} domain(s) available: {', '.join(usable) or 'none'}")
+        logger.info(f"[domain] {len(usable)} domain(s) available: {', '.join(usable) or 'none'}")
 
     # -- matching helpers ----------------------------------------------
 

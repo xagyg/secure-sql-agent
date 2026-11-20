@@ -59,7 +59,8 @@ def read_hierarchy(table, key, parent, connection_factory=None):
     (security_policy.build_context). Read once per user, at sign-in.
     Internal: the identifiers come from the security policy, not a user.
     """
-    from sqlagent.controls.row_scope import ident, table_expr
+    from sqlagent.controls.row_scope import table_expr
+    from sqlagent.controls.security_utils import ident
 
     engine = active_engine()
     query = exp.select(
@@ -90,17 +91,6 @@ def read_foreign_keys(connection_factory=None):
     return list(keys.values())
 
 
-def execute_sql(sql):
-    """
-    Execute a read-only SQL query and return the rows.
-
-    See execute_sql_with_sources() for the column provenance used by the
-    result policy.
-    """
-    rows, _sources = execute_sql_with_sources(sql)
-    return rows
-
-
 def execute_sql_with_sources(sql):
     """
     Execute a read-only SQL query.
@@ -111,7 +101,7 @@ def execute_sql_with_sources(sql):
 
     This is the final structural safety boundary before the database.
     The AI execution path performs the additional authorisation checks
-    in validate_agent_sql().
+    in sql_policy.prepare_sql().
 
     The connecting user (connection.user in config/settings/databases.yaml)
     should be a dedicated, least-privileged database login with

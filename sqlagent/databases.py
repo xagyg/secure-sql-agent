@@ -35,8 +35,8 @@
 # left over in a PowerShell window can't connect one database's security
 # policy to another database.
 
+import logging
 import os
-import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -51,6 +51,8 @@ from sqlagent.config_files import (
 )
 from sqlagent.execution.engines import get_engine
 from sqlagent.settings import reject_secret_keys, settings_dir
+
+logger = logging.getLogger(__name__)
 
 
 DATABASES_FILE = CONFIG_DIR / "settings" / "databases.yaml"
@@ -304,5 +306,5 @@ def load_database_profile(name=None, path=None):
 def active_database():
     """The database this process runs against, read once and printed."""
     profile = load_database_profile()
-    print(f"[database] {profile.describe()}")
+    logger.info(f"[database] {profile.describe()}")
     return profile

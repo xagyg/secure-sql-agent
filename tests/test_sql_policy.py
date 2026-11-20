@@ -59,22 +59,64 @@ class PrepareSql(unittest.TestCase):
         p = self.prepare("SELECT company_name FROM customers LIMIT 5")
         self.assertTrue(p.sql.endswith("LIMIT 5"))
 
-    def test_union_run_as_written(self):
+    def test_union_gets_row_limit(self):
         sql = "SELECT company_name FROM suppliers UNION SELECT company_name FROM customers"
         p = self.prepare(sql)
         self.assertIsNone(p.failure_reason)
-        self.assertEqual(p.sql, sql)
-        self.assertFalse(p.rewritten)
+        self.assertEqual(p.sql, f"{sql} LIMIT {MAX_ROWS}")
+        self.assertTrue(p.rewritten)
+
+    def test_union_star_expanded_in_every_branch(self):
+        # Unexpanded, SELECT * in a UNION returned restricted columns and
+        # only the result policy's name rule removed them.
+        p = self.prepare("SELECT * FROM customers UNION ALL SELECT c.* FROM customers c")
+        self.assertIsNone(p.failure_reason)
+        self.assertNotIn("*", p.sql)
+        for column in ("fax", "address"):
+            self.assertNotIn(column, p.sql)
+        self.assertIn("customers.company_name", p.sql)
+        self.assertIn("c.company_name", p.sql)
+        self.assertTrue(p.sql.endswith(f"LIMIT {MAX_ROWS}"))
+
+    def test_union_restricted_column_still_blocked(self):
+        # Not stripped from one branch (that would misalign the UNION).
+        p = self.prepare("SELECT company_name, fax FROM customers "
+                         "UNION SELECT company_name, fax FROM suppliers")
+        self.assertEqual(p.withheld, [])
+        self.assertIn("not authorised", p.failure_reason)
+
+    def test_column_named_like_a_joined_table_is_a_column(self):
+        # customers.region beside the region table: a column, not a
+        # whole-row reference to region.
+        p = self.prepare("SELECT region, region_description FROM customers, region")
+        self.assertIsNone(p.failure_reason)
+
+    def test_whole_row_reference_still_blocked(self):
+        p = self.prepare("SELECT c FROM customers c")
+        self.assertIn("Whole-row", p.failure_reason)
 
     def test_unauthorised_table(self):
-        self.assertIn("not authorised", self.prepare("SELECT * FROM territories").failure_reason)
+        reason = self.prepare("SELECT * FROM territories").failure_reason
+        self.assertIn("not authorised", reason)
+        self.assertEqual(reason.code, sql_policy.TABLE_NOT_AUTHORISED)
+        self.assertEqual(reason.table, "public.territories")
+
+    def test_restricted_column_reason_code(self):
+        reason = self.prepare("SELECT company_name FROM customers WHERE fax = '1'").failure_reason
+        self.assertEqual(reason.code, sql_policy.COLUMN_NOT_AUTHORISED)
 
     def test_write_and_multiple_statements(self):
-        self.assertIn("read-only", self.prepare("DELETE FROM customers").failure_reason)
-        self.assertIn("Exactly one", self.prepare("SELECT 1; SELECT 2").failure_reason)
+        reason = self.prepare("DELETE FROM customers").failure_reason
+        self.assertIn("read-only", reason)
+        self.assertEqual(reason.code, sql_policy.READ_ONLY)
+        reason = self.prepare("SELECT 1; SELECT 2").failure_reason
+        self.assertIn("Exactly one", reason)
+        self.assertEqual(reason.code, sql_policy.SINGLE_STATEMENT)
 
     def test_unparseable(self):
-        self.assertIn("could not be parsed", self.prepare("SELECT FROM WHERE (").failure_reason)
+        reason = self.prepare("SELECT FROM WHERE (").failure_reason
+        self.assertIn("could not be parsed", reason)
+        self.assertEqual(reason.code, sql_policy.UNPARSEABLE)
 
     def test_parsed_once_plus_final_check(self):
         # One parse to transform, one to check the exact final text.

@@ -17,10 +17,10 @@
 #      tables and every column are in the loaded catalog.
 #   4. Fallback schema and Domains of Discourse, from the semantic model.
 #
-# The vocabulary that used to be defined here (TABLE_ALIASES, COLUMN_ALIASES,
-# DEFAULT_FALLBACK_TABLES) now lives in config/databases/<database>/semantic/
-# (see semantic_model.py).
+# The vocabulary (table and column aliases, fallback tables) lives in
+# config/databases/<database>/semantic/ (see semantic_model.py).
 
+import logging
 import re
 from contextlib import closing
 
@@ -49,6 +49,8 @@ from sqlagent.adaptive.text_match import (
     words,
 )
 from sqlagent.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # Words that never decide whether a phrase names a table ("bill of
@@ -88,16 +90,16 @@ def _warn_no_fuzzy():
     """Say once that typo correction is on but can't run."""
     global _warned_no_fuzzy
     _warned_no_fuzzy = True
-    print("[schema] Typo correction is enabled but rapidfuzz is not "
-          "installed - matching stays exact (pip install -r requirements.txt)")
+    logger.info("[schema] Typo correction is enabled but rapidfuzz is not "
+                "installed - matching stays exact (pip install -r requirements.txt)")
 
 
 def _warn_no_wordfreq():
     """Say once that the common-word check is on but can't run."""
     global _warned_no_wordfreq
     _warned_no_wordfreq = True
-    print("[schema] Typo correction: wordfreq is not installed, so real "
-          "English words may be 'corrected' (pip install -r requirements.txt)")
+    logger.info("[schema] Typo correction: wordfreq is not installed, so real "
+                "English words may be 'corrected' (pip install -r requirements.txt)")
 
 
 class EmptyCatalogError(RuntimeError):
@@ -165,7 +167,6 @@ class SchemaCatalog:
 
         self.fallback_schema = ""
         self.fallback_table_names = set()
-        self.last_schema = ""
         self.domain_resolver = None
         # Typo-correction vocabulary, built on first use from the loaded
         # tables and domains (see question_terms). Reset by refresh().
@@ -233,8 +234,8 @@ class SchemaCatalog:
         if hubs:
             shown = ", ".join(hubs[:10])
             more = f" and {len(hubs) - 10} more" if len(hubs) > 10 else ""
-            print(f"[schema] {len(hubs)} hub table(s), not walked back from: "
-                  f"{shown}{more}")
+            logger.info(f"[schema] {len(hubs)} hub table(s), not walked back from: "
+                        f"{shown}{more}")
 
     def _empty_reason(self):
         """Why no tables loaded, as a hint for whoever reads the startup log."""
@@ -290,20 +291,20 @@ class SchemaCatalog:
         for key, spec in semantic.tables.items():
             table = self.get_table(key)
             if table is None:
-                print(f"[schema] Semantic table '{key}' not available - skipped")
+                logger.info(f"[schema] Semantic table '{key}' not available - skipped")
                 continue
             tables_done += bool(spec.label or spec.aliases or spec.description)
             for column_name in spec.columns:
                 if self._find_column(table, column_name) is None:
-                    print(f"[schema] Column alias '{key}.{column_name}' "
-                          "not available - skipped")
+                    logger.info(f"[schema] Column alias '{key}.{column_name}' "
+                                "not available - skipped")
                 else:
                     columns_done += 1
 
         terms_done = self._attach_terms()
 
-        print(f"[schema] Semantic model attached: {tables_done} table(s), "
-              f"{columns_done} column(s), {terms_done} term(s)")
+        logger.info(f"[schema] Semantic model attached: {tables_done} table(s), "
+                    f"{columns_done} column(s), {terms_done} term(s)")
 
     def _attach_terms(self):
         """
@@ -327,31 +328,31 @@ class SchemaCatalog:
             # The same name can be on several tables, so the log names both.
             label = f"'{term.name}' on {term.table}"
             if table is None:
-                print(f"[schema] Term {label}: table not available - skipped")
+                logger.info(f"[schema] Term {label}: table not available - skipped")
                 continue
 
             if term.column:
                 column = self._find_column(table, term.column)
                 if column is None:
-                    print(f"[schema] Term {label}: column "
-                          f"'{term.column}' not available - skipped")
+                    logger.info(f"[schema] Term {label}: column "
+                                f"'{term.column}' not available - skipped")
                     continue
                 definition = f"{column['name']} is true"
             else:
                 try:
                     condition = sqlglot.parse_one(term.predicate, read=active_dialect())
                 except Exception:
-                    print(f"[schema] Term {label}: predicate can't be "
-                          "parsed - skipped")
+                    logger.info(f"[schema] Term {label}: predicate can't be "
+                                "parsed - skipped")
                     continue
                 problem = self._predicate_problem(condition, table, exp)
                 if problem:
-                    print(f"[schema] Term {label}: {problem} - skipped")
+                    logger.info(f"[schema] Term {label}: {problem} - skipped")
                     continue
                 missing = self._predicate_missing_columns(condition, table, exp)
                 if missing:
-                    print(f"[schema] Term {label}: column(s) "
-                          f"{', '.join(sorted(set(missing)))} not available - skipped")
+                    logger.info(f"[schema] Term {label}: column(s) "
+                                f"{', '.join(sorted(set(missing)))} not available - skipped")
                     continue
                 definition = condition.sql(dialect=active_dialect())
 
@@ -425,11 +426,11 @@ class SchemaCatalog:
                 selected.add(match)
             else:
                 # Missing from the DB, or not authorised for this role.
-                print(f"[schema] Fallback table '{full_table_name(table)}' "
-                      "not available - skipped")
+                logger.info(f"[schema] Fallback table '{full_table_name(table)}' "
+                            "not available - skipped")
 
         self.fallback_table_names = selected
-        print(f"[schema] Fallback schema built from {len(selected)} table(s)")
+        logger.info(f"[schema] Fallback schema built from {len(selected)} table(s)")
         return self._format_context(selected) if selected else ""
 
     @property
@@ -495,8 +496,8 @@ class SchemaCatalog:
                 })
 
         if not_discovered:
-            print(f"[schema] {len(not_discovered)} table(s)/view(s) outside "
-                  "the semantic model's sources - not loaded")
+            logger.info(f"[schema] {len(not_discovered)} table(s)/view(s) outside "
+                        "the semantic model's sources - not loaded")
 
         self._check_denied_columns(seen_columns)
         return tables
@@ -512,9 +513,9 @@ class SchemaCatalog:
         for full_name, columns in seen_columns.items():
             for denied in get_denied_columns(self.security, full_name):
                 if denied.lower() not in columns:
-                    print(f"[security] WARNING: denied column "
-                          f"'{full_name}.{denied}' does not exist - check "
-                          "the security policy for a typo")
+                    logger.info(f"[security] WARNING: denied column "
+                                f"'{full_name}.{denied}' does not exist - check "
+                                "the security policy for a typo")
 
     def _load_foreign_keys(self):
         # The engine returns each foreign key's columns in order, so a
@@ -605,7 +606,7 @@ class SchemaCatalog:
                 # Database keys are skipped quietly (there can be
                 # hundreds); a declared one is worth a log line.
                 if candidate["source"] == "declared":
-                    print(f"[schema] Relationship {label} not available - skipped")
+                    logger.info(f"[schema] Relationship {label} not available - skipped")
                 continue
 
             relationship = dict(
@@ -629,8 +630,8 @@ class SchemaCatalog:
             declared += relationship["source"] == "declared"
 
         if self.semantic.relationships:
-            print(f"[schema] Declared relationships in use: {declared} of "
-                  f"{len(self.semantic.relationships)}")
+            logger.info(f"[schema] Declared relationships in use: {declared} of "
+                        f"{len(self.semantic.relationships)}")
         return relationships
 
     # ------------------------------------------------------------------
@@ -744,11 +745,11 @@ class SchemaCatalog:
                 same_first_letter=config.same_first_letter,
                 common_word_zipf=config.common_word_zipf)
             for word, (fixed, score) in corrections.items():
-                print(f"[schema] Typo correction: {word} -> {fixed} ({score})")
+                logger.info(f"[schema] Typo correction: {word} -> {fixed} ({score})")
                 terms |= tokenize(fixed)
             for word, tied in ambiguous.items():
-                print(f"[schema] Typo correction: {word} is ambiguous "
-                      f"({', '.join(tied)}) - not corrected")
+                logger.info(f"[schema] Typo correction: {word} is ambiguous "
+                            f"({', '.join(tied)}) - not corrected")
 
         self._last_terms = (question, frozenset(terms))
         return terms
@@ -896,20 +897,20 @@ class SchemaCatalog:
                     else:
                         kept.append((score, t))
                 if shared:
-                    print("[schema] Named outside the domain only by words "
-                          f"the domain also uses, not added: {', '.join(shared)}")
+                    logger.info("[schema] Named outside the domain only by words "
+                                f"the domain also uses, not added: {', '.join(shared)}")
                 outside = kept
             if outside:
                 names = ", ".join(t["name"] for _, t in outside)
                 outside_mode = self._retrieval_setting("named_outside_domain")
                 if outside_mode == "note":
-                    print(f"[schema] Named outside the domain, not added: {names}")
+                    logger.info(f"[schema] Named outside the domain, not added: {names}")
                 elif outside_mode == "add":
-                    print(f"[schema] Named outside the domain, added "
-                          f"(no relationship walk): {names}")
+                    logger.info(f"[schema] Named outside the domain, added "
+                                f"(no relationship walk): {names}")
                     unwalked = {f"{t['schema']}.{t['name']}" for _, t in outside}
                 else:
-                    print(f"[schema] Named outside the domain, added: {names}")
+                    logger.info(f"[schema] Named outside the domain, added: {names}")
                     matches = sorted(matches + outside, key=lambda m: m[0],
                                      reverse=True)
 
@@ -935,9 +936,9 @@ class SchemaCatalog:
                 other = next(((s, t) for s, t in matches
                               if full(t) not in hubs and (s, t) not in named), None)
                 if other is not None:
-                    print(f"[schema] Only a hub is named "
-                          f"({', '.join(t['name'] for _, t in named)}) - "
-                          f"also using the best other match: {other[1]['name']}")
+                    logger.info(f"[schema] Only a hub is named "
+                                f"({', '.join(t['name'] for _, t in named)}) - "
+                                f"also using the best other match: {other[1]['name']}")
                     named.append(other)
             matches = named
 
@@ -952,7 +953,7 @@ class SchemaCatalog:
                 # Nothing in the domain matched the words (e.g. "show me
                 # Nancy's details"), but we do know the area: use the
                 # domain's fallback tables rather than the global list.
-                print("[schema] No table match in domain - using fallback tables")
+                logger.info("[schema] No table match in domain - using fallback tables")
                 tables = set(fallback_names) | unwalked
                 return self._format_context(
                     tables | self._link_tables(unwalked, tables,
@@ -988,9 +989,9 @@ class SchemaCatalog:
             weak = [f"{t['schema']}.{t['name']}" for _, t in matches]
             weak = weak[:limit] if limit else weak
             base = set(fallback_names)
-            print("[schema] Weak table match - fallback tables plus "
-                  + ", ".join(t.split(".")[-1] for t in weak)
-                  + " (no relationship walk)")
+            logger.info("[schema] Weak table match - fallback tables plus "
+                        + ", ".join(t.split(".")[-1] for t in weak)
+                        + " (no relationship walk)")
             added = (set(weak) - base) | unwalked
             links = self._link_tables(added, base | added,
                                       matched=base | set(weak), terms=terms)
@@ -1078,11 +1079,6 @@ class SchemaCatalog:
             covered = covered or owner.split(".")[-1]
         return covered
 
-    def _named_apart(self, table, terms, domain_words, question=""):
-        """True if a phrase naming this outside table isn't covered by any
-        single domain table (see _covered_by)."""
-        return self._covered_by(table, terms, domain_words, question) is None
-
     def _link_tables(self, added, present, matched=(), terms=()):
         """
         Tables that join a table added without a relationship walk
@@ -1143,8 +1139,8 @@ class SchemaCatalog:
         joined_names = ", ".join(sorted(t.split(".")[-1] for t in added))
         limit = self._retrieval_setting("link_tables_max")
         if not limit or len(links) <= limit:
-            print(f"[schema] Link table(s) added to join {joined_names}: "
-                  + ", ".join(sorted(t.split(".")[-1] for t in links)))
+            logger.info(f"[schema] Link table(s) added to join {joined_names}: "
+                        + ", ".join(sorted(t.split(".")[-1] for t in links)))
             return links
 
         terms = set(terms)
@@ -1163,8 +1159,8 @@ class SchemaCatalog:
                     f"dropped: {listed(ranked[limit:])}")
         else:
             kept = ", ".join(sorted(t.split(".")[-1] for t in ranked[:limit]))
-        print(f"[schema] Link table(s) added to join {joined_names} "
-              f"({limit} of {len(ranked)}): {kept}")
+        logger.info(f"[schema] Link table(s) added to join {joined_names} "
+                    f"({limit} of {len(ranked)}): {kept}")
         return set(ranked[:limit])
 
     def discover_schema(self, question, scope=None, anchors=None):
@@ -1180,10 +1176,9 @@ class SchemaCatalog:
                columns read at startup (e.g. "show me Nancy's information"
                names a person, not a table, so nothing matches by keyword)
 
-        Step 2 used to be "the last schema discovered". The catalog is
-        shared by every API session, so that meant one visitor's previous
-        question decided what the next visitor's question could see, and
-        usually left out the table that was needed.
+        Step 2 is deliberately not "the last schema discovered": the
+        catalog is shared by every API session, so one visitor's previous
+        question would decide what the next visitor's could see.
         """
         schema = self.get_context(
             question,
@@ -1194,10 +1189,9 @@ class SchemaCatalog:
         )
 
         if schema and schema.strip():
-            self.last_schema = schema
             return schema
 
-        print(
+        logger.info(
             "[schema] No relevant schema found - "
             "using fallback schema"
         )
@@ -1578,7 +1572,7 @@ class SchemaCatalog:
 
     def get_fallback_schema(self):
         if not self.fallback_schema:
-            print(
+            logger.info(
                 "[schema] Fallback schema is empty - check fallback_tables "
                 "and that the catalog loaded"
             )

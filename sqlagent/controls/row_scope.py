@@ -36,12 +36,10 @@
 # before execution, and the correction and explanation steps see the
 # query as the model wrote it.
 
-import re
-
 import sqlglot
 from sqlglot import exp
 
-from sqlagent.controls.security_utils import full_table_name
+from sqlagent.controls.security_utils import full_table_name, ident
 
 
 # Alias of the table inside each filtered wrapper, and prefix of the
@@ -49,8 +47,6 @@ from sqlagent.controls.security_utils import full_table_name
 # underscore keeps them clear of anything the model writes.
 INNER_ALIAS = "_t"
 VIA_ALIAS = "_s"
-
-_PLAIN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 
 class RowScopeError(ValueError):
@@ -60,11 +56,6 @@ class RowScopeError(ValueError):
 # ---------------------------------------------------------------------------
 # Building expressions
 # ---------------------------------------------------------------------------
-
-def ident(name):
-    """An identifier, quoted only when it can't be written plainly."""
-    return exp.Identifier(this=name, quoted=not _PLAIN.fullmatch(name))
-
 
 def table_expr(full_name, alias=None):
     """exp.Table for "schema.table" (names as the database spells them)."""

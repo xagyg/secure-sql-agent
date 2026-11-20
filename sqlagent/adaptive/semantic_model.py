@@ -42,6 +42,7 @@
 #   - No file at all means an empty model: discovery only, no vocabulary.
 
 import fnmatch
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -58,6 +59,8 @@ from sqlagent.config_files import (
 )
 from sqlagent.controls.security_utils import full_table_name
 from sqlagent.databases import DatabaseConfigError, active_database
+
+logger = logging.getLogger(__name__)
 
 
 # Discover everything (the behaviour before the semantic model existed).
@@ -389,8 +392,8 @@ def load_semantic_model(path=None):
     path = Path(path)
 
     if not path.exists():
-        print(f"[semantic] No semantic model at {path} - "
-              "discovering every table, no business vocabulary")
+        logger.info(f"[semantic] No semantic model at {path} - "
+                    "discovering every table, no business vocabulary")
         return SemanticModel.empty()
 
     files = _files(path)
@@ -474,9 +477,9 @@ def load_semantic_model(path=None):
     model.role_aliases = role_aliases
     model.function_aliases = function_aliases
 
-    print(f"[semantic] Loaded {len(files)} file(s) from {path}: "
-          f"{len(tables)} table(s), {len(model.relationships)} relationship(s), "
-          f"{len(terms)} term(s), {len(domains)} domain(s)")
+    logger.info(f"[semantic] Loaded {len(files)} file(s) from {path}: "
+                f"{len(tables)} table(s), {len(model.relationships)} relationship(s), "
+                f"{len(terms)} term(s), {len(domains)} domain(s)")
     return model
 
 

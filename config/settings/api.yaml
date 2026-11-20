@@ -49,3 +49,8 @@ max_slot_hold: 150
 max_sessions: 2000
 
 audit_log: audit.log              # [DEMO_AUDIT_LOG]
+
+# Shown when the demo is switched off (demo_enabled.flag is missing).
+unavailable_message: >-
+  The demo is not currently available.
+  Contact bradlongphd@gmail.com to enable the demo.

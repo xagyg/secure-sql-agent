@@ -17,7 +17,6 @@ from pathlib import Path
 from unittest import mock
 
 import sqlglot
-from sqlglot import exp
 
 import sqlagent.databases as databases
 from sqlagent.databases import DatabaseConfigError, load_database_profile
@@ -217,6 +216,8 @@ class Text(unittest.TestCase):
             "SELECT a FROM t ORDER BY a OFFSET 5 ROWS")
         self.assertEqual(ENGINE.strip_row_limit("SELECT TOP 5 a FROM t", 100),
                          "SELECT TOP 5 a FROM t")
+        self.assertEqual(ENGINE.strip_row_limit("SELECT TOP 100 PERCENT a FROM t", 100),
+                         "SELECT TOP 100 PERCENT a FROM t")
 
     def test_quote_name(self):
         self.assertEqual(ENGINE.quote_name("CompanyName"), "CompanyName")
@@ -396,6 +397,13 @@ class Pipeline(unittest.TestCase):
         r = self.prepare("SELECT CompanyName FROM dbo.Customers")
         self.assertIsNone(r.failure_reason)
         self.assertEqual(r.sql, "SELECT TOP 100 CompanyName FROM dbo.Customers")
+
+    def test_union_star_expanded_and_limited(self):
+        r = self.prepare("SELECT * FROM dbo.Customers UNION SELECT * FROM dbo.Customers")
+        self.assertIsNone(r.failure_reason)
+        self.assertNotIn("Phone", r.sql)
+        self.assertTrue(r.sql.startswith("SELECT TOP 100 "))
+        self.assertEqual(ENGINE.strip_row_limit(r.sql, 100)[:9], "SELECT * ")
 
     def test_existing_top_kept(self):
         r = self.prepare("SELECT TOP 5 CompanyName FROM dbo.Customers ORDER BY CompanyName")

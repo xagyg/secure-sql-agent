@@ -4,7 +4,7 @@
 # Result-level security: removes restricted columns from query results
 # before they reach the explanation model, and caps the result size.
 # Defence in depth - authorisation happens before execution (see
-# sql_policy.py). Split out of agent_controls.py.
+# sql_policy.py).
 
 import json
 
@@ -50,15 +50,14 @@ def restricted_result_columns(columns, security, sources=None):
     column to the table column(s) it was read from, or None for a computed
     value. With sources, a column is removed only when it comes from a
     table on which it is denied, so suppliers.phone is kept while
-    customers.phone is removed. Previously every column NAMED like a
-    denied column was removed, whatever its table, which emptied e.g.
-    "SELECT phone FROM suppliers" and the explanation then said the
-    supplier didn't exist.
+    customers.phone is removed. (Removing every column NAMED like a
+    denied column would empty "SELECT phone FROM suppliers", and the
+    explanation would then say the supplier didn't exist.)
 
     A column with no known source - a computed value, a UNION column (for
     which PostgreSQL reports no table), or no sources at all - falls back
-    to the old name-only rule, so unknown provenance fails closed.
-    validate_agent_sql() has already blocked restricted columns used
+    to the name-only rule, so unknown provenance fails closed.
+    sql_policy.prepare_sql() has already blocked restricted columns used
     inside expressions; this is the backstop.
     """
     removed = set()

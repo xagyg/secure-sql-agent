@@ -3,11 +3,11 @@
 #
 # Conversation history for the SQL-generation prompt.
 #
-# Each turn used to carry the explanation model's full prose answer. That
-# was the noisiest part of the prompt: chatty wording, restated numbers and
-# (for big results) long lists, all of which the model could copy into SQL
-# or anchor on. Each turn now carries a short, deterministic summary of the
-# result instead: row count, columns and a few sample rows, capped in size.
+# Each turn carries a short, deterministic summary of its result - row
+# count, columns and a few sample rows, capped in size - not the
+# explanation model's prose answer. The prose was the noisiest part of the
+# prompt: chatty wording, restated numbers and (for big results) long
+# lists, all of which the model could copy into SQL or anchor on.
 #
 # By default only the most recent turn includes its SQL (sql_turns=1). It
 # already holds every filter built up so far ("now only those in Germany"),

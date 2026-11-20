@@ -285,11 +285,3 @@ class SqlServerEngine(Engine):
         text = re.sub(r"^\(\s*'[0-9A-Z]{5}',\s*[\"']", "", text.strip())
         text = re.sub(r"\s*\(\d+\)\s*(?:\(SQL\w+\))?[\"']?\)?\s*$", "", text)
         return text.strip()
-
-    def strip_row_limit(self, sql, max_rows):
-        """sqlglot renders the agent's row cap as "TOP n", or as "FETCH
-        FIRST n ROWS ONLY" after an OFFSET."""
-        sql = re.sub(rf"\bTOP\s*\(?\s*{max_rows}\s*\)?\s+", "", sql,
-                     flags=re.IGNORECASE)
-        return re.sub(rf"\s*\bFETCH\s+(?:FIRST|NEXT)\s+{max_rows}\s+ROWS?\s+ONLY\b",
-                      "", sql, flags=re.IGNORECASE)

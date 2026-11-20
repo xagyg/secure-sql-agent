@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 
-import re
-import json
 import base64
+import json
+import logging
+import re
 from functools import lru_cache
 
 import httpx
@@ -14,6 +15,8 @@ from sqlagent.databases import active_database
 from sqlagent.controls.security_utils import full_table_name
 from sqlagent.execution.engines import active_dialect, active_engine
 from sqlagent.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +221,13 @@ def ask_ollama(messages):
         response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
                                       options=OLLAMA_OPTIONS or None)
     except _RETRYABLE_ERRORS as ex:
-        print(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
+        logger.info(f"\n[llm] Ollama connection failed ({type(ex).__name__}); retrying once...")
         response = ollama_client.chat(model=OLLAMA_MODEL, messages=messages,
                                       options=OLLAMA_OPTIONS or None)
     if _LLM.log_tokens:
         report = token_report(response, _LLM.num_ctx, estimated_tokens(messages))
         if report:
-            print(f"[llm] {report}")
+            logger.info(f"[llm] {report}")
     return response.message.content
 
 
@@ -341,7 +344,7 @@ def examples_for_question(examples, question, schema, limit):
     if _LLM.verbose:
         detail = ": " + "; ".join(f"{examples[i].question} ({scores[i]})"
                                   for i in chosen)
-    print(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
+    logger.info(f"[llm] SQL examples: {limit} of {len(examples)}{detail}")
     return [examples[i] for i in chosen]
 
 
@@ -362,8 +365,8 @@ def generate_sql(question, schema, history, allowed_tables=None):
     engine_rules = active_engine().prompt_rules
     examples = examples_for_role(db.sql_examples, allowed_tables)
     if len(examples) < len(db.sql_examples):
-        print(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
-              "(the rest use tables this role can't see)")
+        logger.info(f"[llm] SQL examples: {len(examples)} of {len(db.sql_examples)} "
+                    "(the rest use tables this role can't see)")
     examples = examples_for_question(examples, question, schema,
                                      _LLM.sql_examples_max)
     sql_examples = _format_examples(examples)
@@ -426,7 +429,7 @@ Reply with the SQL only.
 """
 
     if _LLM.log_tokens:
-        print(prompt_breakdown(system_prompt, schema=schema,
+        logger.info(prompt_breakdown(system_prompt, schema=schema,
                                examples=sql_examples, history=history_text))
 
     return clean_sql(ask_ollama([
@@ -478,7 +481,7 @@ IMPORTANT:
 
 
 # Statement keywords that mean the model produced something other than a
-# query. These are passed through UNCHANGED so validate_agent_sql() can
+# query. These are passed through UNCHANGED so sql_policy.prepare_sql() can
 # reject them with a proper "read-only" policy block, instead of being
 # silently discarded or turned into an HTTP 500.
 _STATEMENT_START = re.compile(
@@ -506,10 +509,9 @@ def clean_sql(text):
     what the model actually produced:
 
       * A response that already starts with a statement keyword
-        (SELECT, WITH, DELETE, ...) is returned as-is. Previously
-        everything before the first SELECT was cut off, which silently
-        turned "DELETE ... WHERE id IN (SELECT ...)" into a broken
-        fragment and broke every query beginning with WITH.
+        (SELECT, WITH, DELETE, ...) is returned as-is. Cutting to the
+        first SELECT would turn "DELETE ... WHERE id IN (SELECT ...)"
+        into a harmless-looking fragment and break every WITH query.
       * Prose followed by SQL is trimmed to where the SQL starts.
       * Anything else is returned unchanged rather than raising, so the
         validator produces the user-facing result instead of an HTTP 500.
@@ -545,8 +547,7 @@ def classify_model_output(text):
       "unclear"      - a data question too vague for one query
                        (UNCLEAR_QUESTION_SENTINEL).
       "no_sql"       - anything else, e.g. the model answered or declined
-                       in prose. Previously this fell through to the parser
-                       and surfaced as "couldn't be validated".
+                       in prose (rather than surfacing as a parse failure).
 
     A marker counts when it is the whole reply, or a line of its own
     (ignoring quotes, backticks and punctuation). A marker line wins over
@@ -558,9 +559,9 @@ def classify_model_output(text):
     and its SQL is not trusted to answer the question. The agent then
     picks the user-facing message itself (a read-only marker without
     write intent becomes "restricted" when the question names a
-    restricted column, otherwise "unclear"). Previously the SQL
-    won, failed to parse, and the user got "couldn't produce a valid
-    query". Two DIFFERENT markers in one reply give "no_sql" rather than
+    restricted column, otherwise "unclear"), rather than letting the SQL
+    win, fail to parse and report "couldn't produce a valid query". Two
+    DIFFERENT markers in one reply give "no_sql" rather than
     a guess. A marker mentioned mid-sentence doesn't count.
     """
     found = set()
@@ -634,9 +635,10 @@ def explain_results(question, sql, results, withheld=(), row_cap=None):
     Send SQL results back to Ollama and ask for a natural-language answer.
 
     The row count and the columns actually present are computed here and
-    stated in the prompt, rather than left for the model to infer: it
-    previously miscounted (reading a supplier_id of 27 as "27 suppliers")
-    and described columns from the SQL that weren't in the results.
+    stated in the prompt, rather than left for the model to infer: left
+    to itself it miscounts (reading a supplier_id of 27 as "27
+    suppliers") and describes columns from the SQL that aren't in the
+    results.
     withheld lists result columns removed by the security policy. At most
     llm.explain_rows rows (and explain_result_chars characters of them)
     are shown; the full count is stated twice, before and after them.

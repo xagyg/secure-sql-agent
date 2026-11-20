@@ -1,9 +1,7 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# PostgreSQL, through psycopg2. Moved here unchanged from
-# sql_execution.py, schema_catalog.py, sql_diagnostics.py and agent.py
-# when the engine interface (base.py) was introduced.
+# PostgreSQL, through psycopg2 (see base.py for the engine interface).
 
 import re
 
@@ -257,12 +255,3 @@ class PostgresEngine(Engine):
             "",
             error_text,
         ).strip()
-
-    def strip_row_limit(self, sql, max_rows):
-        """Postgres renders the agent's row cap as "LIMIT n"."""
-        return re.sub(
-            rf"\bLIMIT\s+{max_rows}\b\s*",
-            "",
-            sql,
-            flags=re.IGNORECASE,
-        )

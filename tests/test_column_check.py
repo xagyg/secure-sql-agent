@@ -18,7 +18,7 @@ from sqlagent import agent
 from sqlagent.execution.engines.postgres import PostgresEngine
 from sqlagent.execution.engines.sqlserver import SqlServerEngine
 from sqlagent.execution.sql_diagnostics import (
-    UnknownColumnError, find_unknown_columns, missing_column_hint)
+    find_unknown_columns, missing_column_hint)
 from tests.test_missing_column_hint import odoo_catalog
 
 

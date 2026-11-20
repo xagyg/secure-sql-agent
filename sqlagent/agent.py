@@ -1,23 +1,13 @@
 # Copyright (c) 2026 Brad Long
 # Author: Brad Long
 #
-# Changes for PostgreSQL / API use:
-#   - the artificial-limit stripping regex now matches Postgres's
-#     "LIMIT n" instead of SQL Server's "TOP n"
-#   - every exit point now returns a dict ({"answer", "blocked", "sql"})
-#     in addition to the existing print() calls, so a caller other than
-#     the REPL (e.g. an HTTP API) can get the result back directly,
-#     instead of scraping stdout or reading conversation_history after
-#     the fact. The REPL's own printed output is unchanged.
-#   - results now also carry a "reason" ("policy" | "error" | None) so a
-#     caller can tell a guardrail stopping a request apart from a
-#     technical failure. Only "policy" results have blocked=True.
-#   - policy results also carry "rule" / "rule_label" (see BLOCK_RULES in
-#     messages.py): a stable code plus a short, generic label that
-#     is safe to show in the UI. Detailed reasons stay in the console.
+# The agent pipeline (run_agent): route the question, generate SQL, apply
+# the controls, execute, explain. Every exit returns a result dict (see
+# run_agent's docstring) so the REPL and the API get the same answer; the
+# console log is printed as it goes.
 
-
-import re
+import logging
+from dataclasses import dataclass
 
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
@@ -37,7 +27,12 @@ from sqlagent.controls.question_policy import (
     mentions_denied_column,
 )
 from sqlagent.controls.result_policy import apply_result_policy
-from sqlagent.controls.sql_policy import MAX_ROWS, prepare_sql
+from sqlagent.controls.sql_policy import (
+    MAX_ROWS,
+    TABLE_NOT_AUTHORISED,
+    UNPARSEABLE,
+    prepare_sql,
+)
 from sqlagent.adaptive.history import format_results_table, summarise_result
 from sqlagent.adaptive.llm import (
     CORRECTION_SQL_CHARS,
@@ -70,27 +65,54 @@ from sqlagent.execution.sql_execution import execute_sql_with_sources
 from sqlagent.settings import get_settings
 from sqlagent.adaptive.text_match import tokenize
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
+# Each step of the pipeline returns its normal value (the SQL, the rows,
+# ...) and ends the request by raising _Finished with the result dict the
+# caller gets. _run_pipeline() catches it once.
 
-def _validation_reason_kind(reason):
-    """
-    Classify a validate_agent_sql() failure.
+class _Finished(Exception):
+    """The request is over: `result` is the dict run_agent() returns."""
 
-    A query the parser couldn't read is a technical failure, not a
-    guardrail firing, so it is reported as "error". Everything else
-    (restricted table/column, non read-only, multiple statements) is
-    a policy decision.
+    def __init__(self, result):
+        super().__init__(result.get("answer"))
+        self.result = result
+
+
+@dataclass
+class _Retry:
     """
-    if "could not be parsed" in reason.lower():
-        return "error"
-    return "policy"
+    A first query stopped in a way that gets one rewrite (see
+    _prepare_sql):
+
+        kind    "table" (a table outside the role's schema) or "parse"
+                (SQL the parser couldn't read, or a subquery in FROM)
+        reason  the Reason it was stopped for
+        hint    the correction hint, when not the default for its kind
+        action  what the log says the model is asked to do
+    """
+    kind: str
+    reason: object
+    hint: str | None = None
+    action: str | None = None
+
+
+def _is_unparseable(reason):
+    """
+    True when a prepare_sql() failure is SQL the parser couldn't read: a
+    technical failure, not a guardrail firing, so it is reported as
+    "error". Everything else (restricted table/column, not read-only,
+    several statements) is a policy decision.
+    """
+    return getattr(reason, "code", None) == UNPARSEABLE
 
 
 def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
-            label=None, outcome=None, row_count=None):
+            label=None, outcome=None, row_count=None, domain=None):
     """
     The dict run_agent() returns (see its docstring). rule_label is taken
     from BLOCK_RULES unless label is given.
@@ -104,6 +126,7 @@ def _result(answer, sql=None, *, blocked=False, reason=None, rule=None,
         "rule": rule,
         "rule_label": label,
         "sql": sql,
+        "domain": domain,
         "outcome": outcome,
         "row_count": row_count,
     }
@@ -113,8 +136,17 @@ def _policy_block(rule, sql=None):
     """A guardrail stopped the request: log and return the rule's
     generic message."""
     message = rule_message(rule)
-    print(f"\n[answer] {message}")
+    logger.info(f"\n[answer] {message}")
     return _result(message, sql, blocked=True, reason="policy", rule=rule)
+
+
+def _restricted_if_named(question, security, sql=None):
+    """The "restricted" block when the question names a column this role
+    is denied, else None."""
+    if mentions_denied_column(question, security):
+        logger.info("\n[security] Question refers to a restricted column.")
+        return _policy_block("restricted_data", sql)
+    return None
 
 
 def _not_available(question, security, sql=None, corrected=False):
@@ -124,14 +156,14 @@ def _not_available(question, security, sql=None, corrected=False):
     question names a column this role is denied, otherwise "not
     available".
     """
-    if mentions_denied_column(question, security):
-        print("\n[security] Question refers to a restricted column.")
-        return _policy_block("restricted_data", sql)
+    restricted = _restricted_if_named(question, security, sql)
+    if restricted:
+        return restricted
     if corrected:
-        print("\n[agent] Correction: the requested data isn't in the "
-              "authorised schema.")
+        logger.info("\n[agent] Correction: the requested data isn't in the "
+                    "authorised schema.")
     else:
-        print("\n[security] Requested data isn't in the authorised schema.")
+        logger.info("\n[security] Requested data isn't in the authorised schema.")
     return _policy_block("not_available", sql)
 
 
@@ -141,16 +173,16 @@ def _error(message, sql=None):
 
 
 def _validation_failure(reason, sql):
-    """Build the result dict for a validate_agent_sql() failure."""
-    print(f"\n[security] {reason}")
+    """Build the result dict for a prepare_sql() failure."""
+    logger.info(f"\n[security] {reason}")
 
     rule = block_rule(reason)
 
-    if _validation_reason_kind(reason) == "policy":
+    if not _is_unparseable(reason):
         return _policy_block(rule, sql)
 
     message = rule_message(rule)
-    print(f"\n[answer] {message}")
+    logger.info(f"\n[answer] {message}")
     return _error(message, sql)
 
 
@@ -160,49 +192,46 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
     each change. Used for the first query and for a corrected one, so
     both get exactly the same checks.
 
-    Returns (sql, withheld, failure): failure is a result dict when
-    validation stopped the query, else None. Errors from the rewrite
-    step are raised for the caller to report. With table_retry (the
-    first attempt only), a query stopped ONLY because it reads a table
-    outside the role's schema gives failure = {"retry_table": name,
-    "reason": ...} instead, for _retry_unavailable_table(), and one the
-    parser couldn't read gives {"retry_parse": True, "reason": ...}, for
-    _retry_unparseable().
+    Returns (sql, withheld, retry). Raises _Finished when validation
+    stopped the query; errors from the rewrite step are raised for the
+    caller to report. retry is None, except with table_retry (the first
+    attempt only), when a query stopped because it reads a table outside
+    the role's schema, can't be parsed, or has a subquery in FROM gets a
+    _Retry instead of _Finished (see _prepare_with_retries).
     """
     prepared = prepare_sql(sql, security, catalog)
 
     if prepared.withheld:
-        print(f"\n[security] Restricted column(s) withheld: "
-              f"{', '.join(prepared.withheld)}")
-        print("\n[sql after withholding]")
-        print(prepared.stripped_sql)
+        logger.info(f"\n[security] Restricted column(s) withheld: "
+                    f"{', '.join(prepared.withheld)}")
+        logger.info("\n[sql after withholding]")
+        logger.info(prepared.stripped_sql)
 
     if prepared.rewritten:
-        print("\n[sql after rewrite]")
-        print(prepared.sql)
+        logger.info("\n[sql after rewrite]")
+        logger.info(prepared.sql)
 
-    failure = None
-    if prepared.failure_reason:
-        table = _unauthorised_table(prepared.failure_reason) if table_retry else None
-        if table:
-            print(f"\n[security] {prepared.failure_reason}")
-            failure = {"retry_table": table, "reason": prepared.failure_reason}
-        elif table_retry and _validation_reason_kind(prepared.failure_reason) == "error":
-            print(f"\n[security] {prepared.failure_reason}")
-            failure = {"retry_parse": True, "reason": prepared.failure_reason}
+    reason = prepared.failure_reason
+    retry = None
+    if reason:
+        if table_retry and getattr(reason, "code", None) == TABLE_NOT_AUTHORISED:
+            logger.info(f"\n[security] {reason}")
+            retry = _Retry("table", reason)
+        elif table_retry and _is_unparseable(reason):
+            logger.info(f"\n[security] {reason}")
+            retry = _Retry("parse", reason)
         elif table_retry and has_derived_table(sql):
             # A subquery in FROM / JOIN (or a WITH): its columns can't be
             # tied to a real table, so the policy rejects the query. Not
             # a security issue - one rewrite without them.
-            print(f"\n[sql] {prepared.failure_reason} (a subquery in FROM "
-                  "or JOIN, which can't be checked)")
-            failure = {"retry_parse": True, "reason": prepared.failure_reason,
-                       "hint": _DERIVED_TABLE_HINT,
-                       "action": "rewrite it without subqueries in FROM"}
+            logger.info(f"\n[sql] {reason} (a subquery in FROM "
+                        "or JOIN, which can't be checked)")
+            retry = _Retry("parse", reason, hint=_DERIVED_TABLE_HINT,
+                           action="rewrite it without subqueries in FROM")
         else:
-            failure = _validation_failure(prepared.failure_reason, prepared.sql)
+            raise _Finished(_validation_failure(reason, prepared.sql))
 
-    return prepared.sql, prepared.withheld, failure
+    return prepared.sql, prepared.withheld, retry
 
 
 # ---------------------------------------------------------------------------
@@ -225,32 +254,63 @@ def _prepare_sql(sql, security, catalog, table_retry=False):
 # message is the same generic "not available / may be restricted" either
 # way, so it doesn't confirm the table exists.
 
-_UNAUTHORISED_TABLE = re.compile(r"^Table '([^']+)' is not authorised\.$")
+def _rewrite_once(question, schema, sql, error, hint, security, catalog,
+                  on_same_sql):
+    """
+    Ask the model for one rewrite of `sql` that failed with `error`, then
+    prepare it like any other query. Returns (sql, withheld) ready to
+    run; raises _Finished for not available, an error, a rewrite that
+    fails validation, or on_same_sql() when the model sends the same SQL
+    back.
+    """
+    try:
+        corrected = correct_sql(question, schema, sql, error, hint)
+    except Exception as ex:
+        logger.warning(f"\n[CORRECTION ERROR] {ex}")
+        raise _Finished(_error("I couldn't correct that query.", sql)) from ex
+
+    logger.info("\n[corrected sql]")
+    logger.info(corrected)
+
+    if classify_model_output(corrected) == "not_available":
+        raise _Finished(_not_available(question, security, sql, corrected=True))
+
+    if _normalise_sql(corrected) == _normalise_sql(sql):
+        logger.info("\n[agent] Correction produced the same SQL. Stopping.")
+        raise _Finished(on_same_sql())
+
+    sql, withheld, _ = _prepare_or_finish(corrected, security, catalog)
+    return sql, withheld
 
 
-def _unauthorised_table(reason):
-    """The table a "Table 'x' is not authorised." reason names, or None
-    (any other validation failure is never retried)."""
-    match = _UNAUTHORISED_TABLE.match(reason.strip())
-    return match.group(1) if match else None
+def _prepare_or_finish(sql, security, catalog, table_retry=False):
+    """_prepare_sql(), with an error in the rewrite step (e.g. a SELECT *
+    that can't be expanded) ending the request as a technical error."""
+    try:
+        return _prepare_sql(sql, security, catalog, table_retry=table_retry)
+    except _Finished:
+        raise
+    except Exception as ex:
+        logger.warning(f"\n[error] {ex}")
+        message = "I couldn't safely prepare the query for execution."
+        logger.info(f"\n[answer] {message}")
+        raise _Finished(_error(message, sql)) from ex
 
 
-def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
+def _retry_unavailable_table(question, schema, sql, retry, security, catalog):
     """
     A query stopped for reading a table outside the role's schema. A real
     table the role can't see ends it as "not available", with no retry;
-    an invented name gets one rewrite. Returns (sql, withheld, failure)
-    from _prepare_sql() on the rewrite, or a finished result dict
-    (blocked / not available / error).
+    an invented name gets one rewrite. Returns (sql, withheld) for the
+    rewrite; raises _Finished otherwise (blocked / not available / error).
     """
-    table = failure["retry_table"]
-    reason = failure["reason"]
-    bare = table.split(".")[-1]
+    reason = retry.reason
+    bare = reason.table.split(".")[-1]
 
     if bare.strip('"[]`').lower() in catalog.database_table_names:
-        print(f"\n[security] {bare} is a table this role can't see; "
-              "not retried.")
-        return _not_available(question, security, sql)
+        logger.info(f"\n[security] {bare} is a table this role can't see; "
+                    "not retried.")
+        raise _Finished(_not_available(question, security, sql))
 
     # An invented name: suggest the closest tables ("order details" ->
     # order_details). Only tables the role can see, so the hint never
@@ -259,7 +319,7 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
                if not security.tables or t in security.tables]
     closest = similar_tables(bare, visible)
     if closest:
-        print(f"\n[sql] Closest table(s) to {bare}: {', '.join(closest)}")
+        logger.info(f"\n[sql] Closest table(s) to {bare}: {', '.join(closest)}")
 
     hint = (
         "TABLE NOT AVAILABLE\n"
@@ -270,31 +330,11 @@ def _retry_unavailable_table(question, schema, sql, failure, security, catalog):
         "data that isn't in them, return exactly DATA_NOT_AVAILABLE - do not\n"
         "answer it from a table that means something else.\n"
     )
-    print(f"\n[agent] Asking Ollama to rewrite it without {bare}...")
-    try:
-        corrected = correct_sql(question, schema, sql,
-                                f"Table {bare} is not available.", hint)
-    except Exception as ex:
-        print(f"\n[CORRECTION ERROR] {ex}")
-        return _error("I couldn't correct that query.", sql)
-
-    print("\n[corrected sql]")
-    print(corrected)
-
-    if classify_model_output(corrected) == "not_available":
-        return _not_available(question, security, sql, corrected=True)
-
-    if _normalise_sql(corrected) == _normalise_sql(sql):
-        print("\n[agent] Correction produced the same SQL. Stopping.")
-        return _policy_block(block_rule(reason), sql)
-
-    try:
-        return _prepare_sql(corrected, security, catalog)
-    except Exception as ex:
-        print(f"\n[error] {ex}")
-        message = "I couldn't safely prepare the query for execution."
-        print(f"\n[answer] {message}")
-        return _error(message, corrected)
+    logger.info(f"\n[agent] Asking Ollama to rewrite it without {bare}...")
+    return _rewrite_once(
+        question, schema, sql, f"Table {bare} is not available.", hint,
+        security, catalog,
+        on_same_sql=lambda: _policy_block(block_rule(reason), sql))
 
 
 # ---------------------------------------------------------------------------
@@ -316,14 +356,13 @@ _DERIVED_TABLE_HINT = (
 )
 
 
-def _retry_unparseable(question, schema, sql, failure, security, catalog):
+def _retry_unparseable(question, schema, sql, retry, security, catalog):
     """
-    One rewrite of a query the parser couldn't read, or (failure["hint"])
-    one with a subquery in FROM. Returns (sql, withheld, failure) from
-    _prepare_sql() on the rewrite, or a finished result dict (not
-    available / error).
+    One rewrite of a query the parser couldn't read, or (retry.hint) one
+    with a subquery in FROM. Returns (sql, withheld) for the rewrite;
+    raises _Finished otherwise (not available / error).
     """
-    hint = failure.get("hint") or (
+    hint = retry.hint or (
         "SQL COULD NOT BE PARSED\n"
         "- The query is not valid SQL. Write ONE SELECT statement with a\n"
         "  single FROM clause. Put any lookup it needs from another table\n"
@@ -332,31 +371,11 @@ def _retry_unparseable(question, schema, sql, failure, security, catalog):
         "  after the WHERE. WITH (CTEs) and subqueries in FROM are not\n"
         "  allowed.\n"
     )
-    print(f"\n[agent] Asking Ollama to {failure.get('action', 'rewrite it as valid SQL')}...")
-    try:
-        corrected = correct_sql(question, schema, _sql_for_correction(sql, sql),
-                                _sanitize_sql_error_for_llm(failure["reason"]), hint)
-    except Exception as ex:
-        print(f"\n[CORRECTION ERROR] {ex}")
-        return _error("I couldn't correct that query.", sql)
-
-    print("\n[corrected sql]")
-    print(corrected)
-
-    if classify_model_output(corrected) == "not_available":
-        return _not_available(question, security, sql, corrected=True)
-
-    if _normalise_sql(corrected) == _normalise_sql(sql):
-        print("\n[agent] Correction produced the same SQL. Stopping.")
-        return _validation_failure(failure["reason"], sql)
-
-    try:
-        return _prepare_sql(corrected, security, catalog)
-    except Exception as ex:
-        print(f"\n[error] {ex}")
-        message = "I couldn't safely prepare the query for execution."
-        print(f"\n[answer] {message}")
-        return _error(message, corrected)
+    logger.info(f"\n[agent] Asking Ollama to {retry.action or 'rewrite it as valid SQL'}...")
+    return _rewrite_once(
+        question, schema, sql, _sanitize_sql_error_for_llm(retry.reason),
+        hint, security, catalog,
+        on_same_sql=lambda: _validation_failure(retry.reason, sql))
 
 
 def _check_before_running(sql, catalog):
@@ -373,8 +392,8 @@ def _check_before_running(sql, catalog):
     """
     placeholders = find_placeholders(sql)
     if placeholders:
-        print(f"\n[sql] Pre-run check: unfilled placeholder "
-              f"{', '.join(placeholders)}")
+        logger.info(f"\n[sql] Pre-run check: unfilled placeholder "
+                    f"{', '.join(placeholders)}")
         raise PlaceholderError(placeholders)
     if not get_settings().query.check_columns:
         return
@@ -383,7 +402,7 @@ def _check_before_running(sql, catalog):
         names = ", ".join(
             f"{qualifier}.{column}" if qualifier else column
             for column, qualifier, _ in unknown)
-        print(f"\n[sql] Pre-run check: not in the schema - {names}")
+        logger.info(f"\n[sql] Pre-run check: not in the schema - {names}")
         raise UnknownColumnError(unknown)
 
 
@@ -422,8 +441,8 @@ def _sql_for_correction(sql, generated_sql):
     """
     if len(sql) > CORRECTION_SQL_CHARS and generated_sql \
             and len(generated_sql) < len(sql):
-        print(f"\n[agent] The prepared SQL is long ({len(sql)} characters) - "
-              "showing the model its own SQL for the correction")
+        logger.info(f"\n[agent] The prepared SQL is long ({len(sql)} characters) - "
+                    "showing the model its own SQL for the correction")
         return generated_sql
     return sql
 
@@ -530,17 +549,15 @@ def run_agent(question, catalog, history, security, explain=True):
     question = context.question
 
     if context.where or context.who:
-        print(f"\n[context] where={context.where!r} who={context.who!r}")
+        logger.info(f"\n[context] where={context.where!r} who={context.who!r}")
     if context.explain and not explain:
         # [explain] turns the explanation on for this question only.
-        print("\n[context] [explain]: explaining this result")
+        logger.info("\n[context] [explain]: explaining this result")
         explain = True
 
     if not question:
-        result = _result("Please add a question to go with the context tag.",
-                         outcome="no_question")
-        result["domain"] = None
-        return result
+        return _result("Please add a question to go with the context tag.",
+                       outcome="no_question")
 
     # ---------------------------------------------------------
     # A question about the database itself ("What does Northwind
@@ -548,13 +565,11 @@ def run_agent(question, catalog, history, security, explain=True):
     # call, no SQL.
     # ---------------------------------------------------------
     if is_overview_question(question):
-        print("\n[agent] Question about the database itself; "
-              "listing the available areas.")
+        logger.info("\n[agent] Question about the database itself; "
+                    "listing the available areas.")
         message = overview_message(_available_areas(catalog))
-        print(f"\n[answer] {message}")
-        result = _result(message, outcome="overview")
-        result["domain"] = None
-        return result
+        logger.info(f"\n[answer] {message}")
+        return _result(message, outcome="overview")
 
     # ---------------------------------------------------------
     # Something this database doesn't record (semantic model
@@ -565,12 +580,10 @@ def run_agent(question, catalog, history, security, explain=True):
     missing = catalog.semantic.not_recorded_match(tokenize(question))
     if missing:
         name, phrase, description = missing
-        print(f"\n[semantic] Not recorded in this database: {name} "
-              f"(the question says \"{phrase}\")"
-              + (f" - {description}" if description else ""))
-        result = _policy_block("not_available")
-        result["domain"] = None
-        return result
+        logger.info(f"\n[semantic] Not recorded in this database: {name} "
+                    f"(the question says \"{phrase}\")"
+                    + (f" - {description}" if description else ""))
+        return _policy_block("not_available")
 
     resolver = catalog.domain_resolver
     previous_domain = history[-1].get("domain") if history else None
@@ -591,9 +604,9 @@ def run_agent(question, catalog, history, security, explain=True):
         who=context.who,
         previous_domain=previous_domain,
     )
-    print(f"\n[domain] {decision.summary()}")
+    logger.info(f"\n[domain] {decision.summary()}")
 
-    print("\n[agent] Generating SQL...")
+    logger.info("\n[agent] Generating SQL...")
 
     # A follow-up - only weak evidence ("What is Thomas's full name?") or
     # none at all ("What information do you have about Jose?") - starts
@@ -606,8 +619,8 @@ def run_agent(question, catalog, history, security, explain=True):
         anchors = catalog.tables_in_sql(anchor_turn.get("sql"))
         if anchors:
             names = ", ".join(sorted(anchors))
-            print(f"\n[schema] Follow-up - starting from the previous "
-                  f"query's tables: {names}")
+            logger.info(f"\n[schema] Follow-up - starting from the previous "
+                        f"query's tables: {names}")
 
     # ---------------------------------------------------------
     # The follow-up asks for something restricted on the table the
@@ -617,8 +630,8 @@ def run_agent(question, catalog, history, security, explain=True):
     # ship_address) and report "not found" instead.
     # ---------------------------------------------------------
     if anchors and follow_up_asks_restricted(question, security, catalog, anchors):
-        print("\n[security] Follow-up asks for a column restricted on "
-              "the conversation's table.")
+        logger.info("\n[security] Follow-up asks for a column restricted on "
+                    "the conversation's table.")
         result = _policy_block("restricted_data")
         result["domain"] = decision.label
         return result
@@ -626,8 +639,8 @@ def run_agent(question, catalog, history, security, explain=True):
     schema = catalog.discover_schema(
         question, scope=resolver.scope(decision), anchors=anchors or None)
 
-    print(f"\n[schema] Retrieved context: {len(schema.splitlines())} lines, "
-          f"{catalog.context_summary(schema)}")
+    logger.info(f"\n[schema] Retrieved context: {len(schema.splitlines())} lines, "
+                f"{catalog.context_summary(schema)}")
 
     result = _run_pipeline(
         question, catalog, history, security, schema,
@@ -654,13 +667,13 @@ def _execute(sql, security):
     """
     scoped_sql = apply_row_scope(sql, security.row_filters, active_dialect())
     if scoped_sql != sql:
-        print("\n[security] Row scope applied:")
-        print(scoped_sql)
+        logger.info("\n[security] Row scope applied:")
+        logger.info(scoped_sql)
     results, sources = execute_sql_with_sources(scoped_sql)
     results, removed = apply_result_policy(results, security, sources)
 
     if removed:
-        print(f"\n[security] Result column(s) withheld: {', '.join(removed)}")
+        logger.info(f"\n[security] Result column(s) withheld: {', '.join(removed)}")
 
     return results, removed
 
@@ -674,40 +687,41 @@ def _all_withheld(results):
 def _run_pipeline(question, catalog, history, security, schema, domain_key,
                   explain=True):
     """
-    Generate, control, execute and explain - unchanged by domains. Each
-    step returns a finished result dict when it ends the request.
+    Generate, control, execute and explain - unchanged by domains. A step
+    that ends the request raises _Finished with its result.
     """
     sql = generate_sql(question, schema, history, allowed_tables=catalog.tables)
     generated_sql = sql   # as the model wrote it, before any rewriting
 
-    print("\n[sql]")
-    print(sql)
+    logger.info("\n[sql]")
+    logger.info(sql)
 
-    finished = _answer_without_sql(question, sql, security, catalog)
-    if finished:
-        return finished
-
-    prepared = _prepare_with_retries(question, schema, sql, security, catalog)
-    if isinstance(prepared, dict):
-        return prepared
-    sql, withheld = prepared
-
-    ran = _execute_with_correction(question, schema, sql, generated_sql,
-                                   withheld, security, catalog)
-    if isinstance(ran, dict):
-        return ran
-    sql, results, withheld = ran
-
-    return _answer_from_results(question, sql, results, withheld, history,
-                                domain_key, explain)
+    try:
+        _stop_unless_sql(question, sql, security, catalog)
+        sql, withheld = _prepare_with_retries(question, schema, sql,
+                                              security, catalog)
+        sql, results, withheld = _execute_with_correction(
+            question, schema, sql, generated_sql, withheld, security, catalog)
+        return _answer_from_results(question, sql, results, withheld,
+                                    history, domain_key, explain)
+    except _Finished as finished:
+        return finished.result
 
 
 # ---------------------------------------------------------------------------
 # Step 1: did the model return a query at all?
 # ---------------------------------------------------------------------------
+def _stop_unless_sql(question, sql, security, catalog):
+    """Raise _Finished with the answer for a reply that isn't SQL (a
+    marker or prose); return when it is SQL and the pipeline goes on."""
+    finished = _answer_without_sql(question, sql, security, catalog)
+    if finished:
+        raise _Finished(finished)
+
+
 def _answer_without_sql(question, sql, security, catalog):
     """The result for a reply that isn't SQL (a marker or prose), or None
-    when it is SQL and the pipeline goes on."""
+    when it is SQL."""
     output_kind = classify_model_output(sql)
 
     if output_kind == "write_request" and not looks_like_write_request(question):
@@ -717,17 +731,17 @@ def _answer_without_sql(question, sql, security, catalog):
         # does Northwind have?"). The marker says nothing about which,
         # so it is NOT reported as "not available / may be restricted":
         # that blamed security for a vague question.
-        print("\n[agent] Write marker without write intent; "
-              "treating as an unclear question.")
+        logger.info("\n[agent] Write marker without write intent; "
+                    "treating as an unclear question.")
         output_kind = "unclear"
 
     if output_kind == "unclear":
-        if mentions_denied_column(question, security):
-            print("\n[security] Question refers to a restricted column.")
-            return _policy_block("restricted_data")
-        print("\n[agent] Question too vague to answer with one query.")
+        restricted = _restricted_if_named(question, security)
+        if restricted:
+            return restricted
+        logger.info("\n[agent] Question too vague to answer with one query.")
         message = clarify_message(_available_areas(catalog))
-        print(f"\n[answer] {message}")
+        logger.info(f"\n[answer] {message}")
         return _result(message, outcome="unclear")
 
     if output_kind == "not_available":
@@ -738,19 +752,19 @@ def _answer_without_sql(question, sql, security, catalog):
         # write SQL. Report it as the same read-only policy block the
         # validator would give a DELETE/UPDATE, rather than as a
         # parse failure ("couldn't be validated").
-        print("\n[security] Request to modify data; read-only access.")
+        logger.info("\n[security] Request to modify data; read-only access.")
         return _policy_block("read_only")
 
     if output_kind == "off_topic":
-        print("\n[agent] Not a data question.")
+        logger.info("\n[agent] Not a data question.")
         message = off_topic_message()
-        print(f"\n[answer] {message}")
+        logger.info(f"\n[answer] {message}")
         return _result(message, outcome="off_topic")
 
     if output_kind == "no_sql":
-        print("\n[agent] Model did not return a SQL statement.")
+        logger.info("\n[agent] Model did not return a SQL statement.")
         message = no_query_message()
-        print(f"\n[answer] {message}")
+        logger.info(f"\n[answer] {message}")
         return _error(message)
 
     return None
@@ -761,34 +775,15 @@ def _answer_without_sql(question, sql, security, catalog):
 # one rewrite for an invented table name and one for SQL that won't parse
 # ---------------------------------------------------------------------------
 def _prepare_with_retries(question, schema, sql, security, catalog):
-    """(sql, withheld) ready to run, or a finished result dict."""
-    generated_sql = sql
-    try:
-        sql, withheld, failure = _prepare_sql(sql, security, catalog,
-                                              table_retry=True)
-    except Exception as ex:
-        print(f"\n[error] {ex}")
-        message = "I couldn't safely prepare the query for execution."
-        print(f"\n[answer] {message}")
-        return _error(message, sql)
-
-    if failure and "retry_table" in failure:
-        retried = _retry_unavailable_table(
-            question, schema, generated_sql, failure, security, catalog)
-        if isinstance(retried, dict):
-            return retried
-        sql, withheld, failure = retried
-
-    if failure and "retry_parse" in failure:
-        retried = _retry_unparseable(
-            question, schema, generated_sql, failure, security, catalog)
-        if isinstance(retried, dict):
-            return retried
-        sql, withheld, failure = retried
-
-    if failure:
-        return failure
-    return sql, withheld
+    """(sql, withheld) ready to run; raises _Finished otherwise."""
+    prepared_sql, withheld, retry = _prepare_or_finish(
+        sql, security, catalog, table_retry=True)
+    if retry is None:
+        return prepared_sql, withheld
+    if retry.kind == "table":
+        return _retry_unavailable_table(question, schema, sql, retry,
+                                        security, catalog)
+    return _retry_unparseable(question, schema, sql, retry, security, catalog)
 
 
 # ---------------------------------------------------------------------------
@@ -796,37 +791,35 @@ def _prepare_with_retries(question, schema, sql, security, catalog):
 # ---------------------------------------------------------------------------
 def _execute_with_correction(question, schema, sql, generated_sql, withheld,
                              security, catalog):
-    """(sql that ran, rows, withheld) or a finished result dict."""
-    print("\n[agent] Executing SQL...")
+    """(sql that ran, rows, withheld); raises _Finished otherwise."""
+    logger.info("\n[agent] Executing SQL...")
 
     try:
         _check_before_running(sql, catalog)
         results, removed = _execute(sql, security)
         return sql, results, withheld + removed
     except RowScopeError as ex:
-        print(f"\n[security] Row scope could not be applied: {ex}")
-        return _policy_block("policy", sql)
+        logger.info(f"\n[security] Row scope could not be applied: {ex}")
+        raise _Finished(_policy_block("policy", sql)) from ex
     except Exception as ex:
         failed = ex
 
     if isinstance(failed, (UnknownColumnError, PlaceholderError)):
-        print("[agent] Not run: correcting it first.")
+        logger.info("[agent] Not run: correcting it first.")
     else:
-        print(f"\n[SQL ERROR] {failed}")
+        logger.warning(f"\n[SQL ERROR] {failed}")
 
     correction_hint = _correction_hint(sql, failed, security, catalog)
-    if isinstance(correction_hint, dict):
-        return correction_hint
 
     # A table the SQL reads that the question's schema didn't show (taken
     # from the history, or remembered): the correction sees it too, so a
     # hint such as "Closest columns: GENERAL_REL" has a table to point at.
     schema, added = catalog.tables_missing_from(schema, sql, question)
     if added:
-        print("\n[schema] Added to the correction (used by the SQL, not in "
-              f"the question's schema): {', '.join(sorted(added))}")
+        logger.info("\n[schema] Added to the correction (used by the SQL, not in "
+                    f"the question's schema): {', '.join(sorted(added))}")
 
-    print("\n[agent] Asking Ollama to correct SQL...")
+    logger.info("\n[agent] Asking Ollama to correct SQL...")
 
     try:
         corrected_sql = correct_sql(
@@ -835,52 +828,51 @@ def _execute_with_correction(question, schema, sql, generated_sql, withheld,
             _sanitize_sql_error_for_llm(str(failed)), correction_hint
         )
 
-        print("\n[corrected sql]")
-        print(corrected_sql)
+        logger.info("\n[corrected sql]")
+        logger.info(corrected_sql)
 
         # The hint said nothing similar exists and the model agreed:
         # the data isn't in the schema. Same answer as when the first
         # attempt says so (a restricted column is still reported as
         # restricted).
         if classify_model_output(corrected_sql) == "not_available":
-            return _not_available(question, security, sql, corrected=True)
+            raise _Finished(_not_available(question, security, sql, corrected=True))
 
-        # Compare with what the model first wrote, not the prepared
-        # SQL: that has the row limit (and maybe rewrites) added, so the
-        # two never matched and the failing query was run again.
+        # Compare with what the model first wrote as well as the prepared
+        # SQL: that has the row limit (and maybe rewrites) added, so it
+        # alone never matches and the failing query would run again.
         if _normalise_sql(corrected_sql) in {
             _normalise_sql(generated_sql), _normalise_sql(sql)
         }:
-            print("\n[agent] Correction produced the same SQL. Stopping.")
-            return _error("I wasn't able to correct that query.", sql)
+            logger.info("\n[agent] Correction produced the same SQL. Stopping.")
+            raise _Finished(_error("I wasn't able to correct that query.", sql))
 
         # Re-run ALL the checks on the corrected SQL
-        corrected_sql, corrected_withheld, failure = _prepare_sql(
+        corrected_sql, corrected_withheld, _ = _prepare_sql(
             corrected_sql, security, catalog)
         withheld = withheld + corrected_withheld
 
-        if failure:
-            return failure
-
-        print("\n[agent] Executing corrected SQL...")
+        logger.info("\n[agent] Executing corrected SQL...")
 
         _check_before_running(corrected_sql, catalog)
         results, removed = _execute(corrected_sql, security)
         return corrected_sql, results, withheld + removed
 
+    except _Finished:
+        raise
     except RowScopeError as ex:
-        print(f"\n[security] Row scope could not be applied: {ex}")
-        return _policy_block("policy", sql)
+        logger.info(f"\n[security] Row scope could not be applied: {ex}")
+        raise _Finished(_policy_block("policy", sql)) from ex
     except Exception as correction_error:
-        print(f"\n[CORRECTION ERROR] {correction_error}")
-        return _error("I couldn't correct that query.", sql)
+        logger.warning(f"\n[CORRECTION ERROR] {correction_error}")
+        raise _Finished(_error("I couldn't correct that query.", sql)) from correction_error
 
 
 def _correction_hint(sql, ex, security, catalog):
     """
     The hint for correct_sql() about why `sql` failed with `ex` ("" when
-    there is none), or a finished result dict when the failure itself
-    answers the request (a business word for a restricted column).
+    there is none). Raises _Finished when the failure itself answers the
+    request (a business word for a restricted column).
     """
     if isinstance(ex, PlaceholderError):
         return placeholder_hint(ex.placeholders)
@@ -888,23 +880,23 @@ def _correction_hint(sql, ex, security, catalog):
     correction_hint = ""
     diagnosis = diagnose_sql_error(sql, ex, security, catalog.semantic)
     if diagnosis:
-        print(f"\n[sql] Error type: {diagnosis['error_type']}")
-        print(f"[sql] Invalid column: {diagnosis['column']}")
+        logger.info(f"\n[sql] Error type: {diagnosis['error_type']}")
+        logger.info(f"[sql] Invalid column: {diagnosis['column']}")
 
         if diagnosis.get("tables"):
-            print("[sql] Referenced tables:")
+            logger.info("[sql] Referenced tables:")
             for table in diagnosis["tables"]:
-                print(f"  {table}")
+                logger.info(f"  {table}")
 
         if diagnosis["error_type"] == "invalid_column_alias_denied":
             match = diagnosis["matches"][0]
-            print(
+            logger.info(
                 f"\n[security] Column "
                 f"'{diagnosis['column']}' "
                 f"maps to restricted column "
                 f"'{match['table']}.{match['column']}'."
             )
-            return _policy_block("restricted_data", sql)
+            raise _Finished(_policy_block("restricted_data", sql))
 
         if diagnosis["error_type"] == "invalid_column_alias_authorised":
             match = next(
@@ -925,8 +917,8 @@ def _correction_hint(sql, ex, security, catalog):
             sql, ex, catalog,
             unknown=ex.unknown if isinstance(ex, UnknownColumnError) else None)
         if correction_hint:
-            print("\n[sql] Missing column hint for the correction:")
-            print(correction_hint.rstrip())
+            logger.info("\n[sql] Missing column hint for the correction:")
+            logger.info(correction_hint.rstrip())
 
     # A json/jsonb column used as text or a number: name the columns
     # and how to read them, so the retry fixes the right one instead
@@ -934,8 +926,8 @@ def _correction_hint(sql, ex, security, catalog):
     if not correction_hint:
         correction_hint = json_correction_hint(sql, ex, catalog)
         if correction_hint:
-            print("\n[sql] JSON column hint for the correction:")
-            print(correction_hint.rstrip())
+            logger.info("\n[sql] JSON column hint for the correction:")
+            logger.info(correction_hint.rstrip())
 
     return correction_hint
 
@@ -946,7 +938,7 @@ def _correction_hint(sql, ex, security, catalog):
 def _answer_from_results(question, sql, results, withheld, history,
                          domain_key, explain):
     """Explain (or list) the rows, record the turn, and build the result."""
-    print(f"[agent] {len(results)} row(s) returned.")
+    logger.info(f"[agent] {len(results)} row(s) returned.")
 
     # ---------------------------------------------------------
     # Every returned column was withheld. Don't ask the model to
@@ -955,11 +947,11 @@ def _answer_from_results(question, sql, results, withheld, history,
     # confirms nor denies that the record exists.
     # ---------------------------------------------------------
     if _all_withheld(results):
-        print("\n[security] Every result column was withheld.")
+        logger.info("\n[security] Every result column was withheld.")
         return _policy_block("not_found_or_restricted", sql)
 
     if explain and results:
-        print("\n[agent] Asking Ollama to interpret the results...")
+        logger.info("\n[agent] Asking Ollama to interpret the results...")
 
     # Remove the artificial row cap (MAX_ROWS) from the SQL supplied to
     # the explanation model so that it doesn't incorrectly attribute the
@@ -972,20 +964,20 @@ def _answer_from_results(question, sql, results, withheld, history,
         # empty result, the model padded it with troubleshooting advice
         # ("check the country code") that didn't apply.
         explanation = NO_ROWS_ANSWER
-        print("\n[answer]")
+        logger.info("\n[answer]")
     elif explain:
         explanation = explain_results(
             question, explanation_sql, results, withheld=sorted(set(withheld)),
             row_cap=MAX_ROWS,
         )
-        print("\n[answer]")
+        logger.info("\n[answer]")
     else:
         # explain=False (main.py --no-explain): the rows themselves, built
         # by code. Everything that protects the result - withheld columns,
         # the result policy - already ran in _execute().
         explanation = _results_without_explanation(results, withheld)
-        print("\n[answer] (explanation skipped)")
-    print(explanation)
+        logger.info("\n[answer] (explanation skipped)")
+    logger.info(explanation)
 
     history.append({
         "question": question,
