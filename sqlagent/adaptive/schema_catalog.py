@@ -1457,18 +1457,24 @@ class SchemaCatalog:
         """
         score = self.name_score(table, terms)
 
-        # Column matches, by name word and by label or alias.
+        # Column matches, by name word and by label or alias. Each question
+        # word counts once per table, however many columns it appears in,
+        # and so does each matching label or alias: counted per column, a
+        # wide table won on a common word alone (CIA's GLF_CHART_ACCT has 24
+        # *_CODE columns: ~70 points for "code", against ~25 for
+        # TBSEC_BETA_FEATURE on "beta features ... access code").
+        column_words = set()
+        column_names = set()
         for column in table["columns"]:
-            column_tokens = tokenize(column["name"])
-            score += len(terms & column_tokens) * COLUMN_MATCH
+            column_words |= terms & tokenize(column["name"])
 
             names = list(column.get("aliases", ()))
             if column.get("label"):
                 names.append(column["label"])
-            if any(phrase_matches(name, terms) for name in names):
-                score += COLUMN_MATCH
+            column_names.update(
+                name.lower() for name in names if phrase_matches(name, terms))
 
-        return score
+        return score + (len(column_words) + len(column_names)) * COLUMN_MATCH
 
     def name_score(self, table, terms):
         """
