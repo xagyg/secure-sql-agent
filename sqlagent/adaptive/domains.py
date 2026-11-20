@@ -110,6 +110,9 @@ def _is_pattern(name):
 
 
 _TAG_PATTERN = re.compile(r"\[\s*(where|who)\s*=\s*([^\]\[]{1,80})\]", re.IGNORECASE)
+# "[explain]": explain this question's result even when explanations are
+# off (main.py --no-explain). Never sent to the LLM, like the other tags.
+_EXPLAIN_TAG = re.compile(r"\[\s*explain\s*\]", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +124,12 @@ class QuestionContext:
     question: str                 # the question with tags removed
     where: str | None = None
     who: str | None = None
+    explain: bool = False         # [explain]: explain even with --no-explain
 
 
 def parse_context_tags(text):
     """
-    Pull [where=...] and [who=...] tags out of a question.
+    Pull [where=...], [who=...] and [explain] tags out of a question.
 
     Returns a QuestionContext whose .question has the tags removed. The
     tags are only ever used for deterministic matching; they are never
@@ -144,8 +148,11 @@ def parse_context_tags(text):
         elif key == "who" and ALLOW_WHO_TAG:
             who = value
 
+    explain = bool(_EXPLAIN_TAG.search(text))
+    text = _EXPLAIN_TAG.sub(" ", text)
     question = " ".join(_TAG_PATTERN.sub(" ", text).split())
-    return QuestionContext(question=question, where=where, who=who)
+    return QuestionContext(question=question, where=where, who=who,
+                           explain=explain)
 
 
 # ---------------------------------------------------------------------------

@@ -678,6 +678,8 @@ show me the latest one [where=PUR0410]           → Purchasing & Inventory (fun
 what was the last order? [who=accountant]        → Financials
 ```
 
+One more tag isn't about routing: `[explain]` asks for the LLM's explanation of that question's result even when explanations are off (`--no-explain`), e.g. for a few questions in a batch file. An empty result still gets the fixed "no matching records" answer.
+
 Tags are stripped before the question reaches the LLM. `[who=...]` only affects routing, never access, and is controlled by `domains.allow_who_tag` in `config/settings/retrieval.yaml`; turn it off outside the demo. The routing weights and thresholds are in the same file.
 
 Routing changes where the search *starts*, never what the user may *see*: domains are mapped onto the security-filtered catalog and every layer in [Defence in depth](#defence-in-depth) still runs. The chosen domain is printed as a `[domain]` line in the console.

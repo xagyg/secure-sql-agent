@@ -137,12 +137,17 @@ relationships:
   #   note - log it only; the domain's schema is used as is
   named_outside_domain: add
 
-  # Such a table counts as named only when a phrase naming it has a word
-  # the domain doesn't use (in any of its tables' names, labels or
-  # aliases). From Purchasing, "sales order" names sale_order, but "order"
-  # alone - an alias of sale_order, and part of purchase_order's name - is
-  # the domain's word, so sale_order is left out. false: any full name,
-  # label, alias or term match counts, as before.
+  # Such a table is left out when every word of the phrase naming it
+  # belongs to ONE domain table (its name, label or aliases). From
+  # Purchasing, "order" alone - an alias of sale_order, and part of
+  # purchase_order's name - is purchase_order's word, so sale_order is
+  # left out; "sales order" still names it. Words spread over different
+  # domain tables don't count ("stock move" from Accounting, with "stock"
+  # in one table and "move" in another), a phrase of two or more words
+  # typed out in full always names its table ("stock_move", "sales
+  # orders"), and filler words ("of", "and") are ignored. Dropped tables
+  # are logged with the domain table that covered them. false: any full
+  # name, label, alias or term match counts, as before.
   named_outside_domain_distinct: true
 
   # At most this many link tables (see named_outside_domain: add) for one

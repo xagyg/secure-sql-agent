@@ -20,7 +20,7 @@ from tests.fixtures import make_catalog
 
 
 def run(rows, explain, sql="SELECT company_name, country FROM customers",
-        denied=None, sources=None):
+        denied=None, sources=None, question="customers?"):
     catalog = make_catalog()
     security = SecurityContext(user_id="sam", roles={"sales"},
                                tables=set(catalog.tables),
@@ -31,7 +31,7 @@ def run(rows, explain, sql="SELECT company_name, country FROM customers",
          mock.patch.object(agent, "explain_results", return_value="Two customers.") as explain_mock, \
          contextlib.redirect_stdout(io.StringIO()) as out:
         history = []
-        result = agent.run_agent("customers?", catalog, history, security, explain=explain)
+        result = agent.run_agent(question, catalog, history, security, explain=explain)
     return result, explain_mock, out.getvalue(), history
 
 
@@ -68,6 +68,52 @@ class NoExplain(unittest.TestCase):
             sources={"phone": ("public.customers", "phone")})
         self.assertNotIn("030-0074321", result["answer"])
         self.assertNotIn("030-0074321", out)
+
+
+class ExplainTag(unittest.TestCase):
+    """[explain] in a question turns the explanation on for that question,
+    even with --no-explain. It never reaches the LLM or the history."""
+
+    def test_tag_explains_with_no_explain(self):
+        result, explain_mock, out, history = run(
+            ROWS, explain=False, question="customers? [explain]")
+        explain_mock.assert_called_once()
+        self.assertEqual(result["answer"], "Two customers.")
+        self.assertIn("[context] [explain]", out)
+        self.assertNotIn("explanation skipped", out)
+        self.assertEqual(explain_mock.call_args.args[0], "customers?")
+        self.assertEqual(history[0]["question"], "customers?")
+
+    def test_tag_is_case_and_space_insensitive(self):
+        for question in ("[ EXPLAIN ] customers?", "customers? [Explain]"):
+            with self.subTest(question=question):
+                _, explain_mock, _, _ = run(ROWS, explain=False, question=question)
+                explain_mock.assert_called_once()
+
+    def test_without_the_tag_no_explain_still_skips(self):
+        _, explain_mock, out, _ = run(ROWS, explain=False)
+        explain_mock.assert_not_called()
+        self.assertNotIn("Asking Ollama to interpret", out)
+
+    def test_tag_is_harmless_when_already_explaining(self):
+        _, explain_mock, out, _ = run(ROWS, explain=True,
+                                      question="customers? [explain]")
+        explain_mock.assert_called_once()
+        self.assertNotIn("[context] [explain]", out)
+
+    def test_empty_result_still_gets_the_fixed_answer(self):
+        result, explain_mock, _, _ = run([], explain=False,
+                                         question="customers? [explain]")
+        explain_mock.assert_not_called()
+        self.assertEqual(result["answer"], agent.NO_ROWS_ANSWER)
+
+    def test_parsed_with_the_other_tags(self):
+        from sqlagent.adaptive.domains import parse_context_tags
+        context = parse_context_tags("last order? [where=shipping desk] [explain]")
+        self.assertEqual(context.question, "last order?")
+        self.assertEqual(context.where, "shipping desk")
+        self.assertTrue(context.explain)
+        self.assertFalse(parse_context_tags("explain the last order").explain)
 
 
 class NoRows(unittest.TestCase):

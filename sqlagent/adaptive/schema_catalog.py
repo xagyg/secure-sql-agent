@@ -51,6 +51,30 @@ from sqlagent.adaptive.text_match import (
 from sqlagent.settings import get_settings
 
 
+# Words that never decide whether a phrase names a table ("bill of
+# materials", "terms and conditions").
+NAMING_FILLER = frozenset({
+    "a", "an", "the", "of", "and", "or", "for", "to", "in", "on", "at",
+    "by", "with", "from", "per",
+})
+
+
+def typed_in_full(phrase, question):
+    """
+    True if the question has the phrase's words in order, side by side:
+    "stock_move" and "stock moves" for stock_move, "sales orders" for
+    "sales order". Plurals count (tokenize()'s singulars).
+    """
+    wanted = [w for w in re.split(r"[_\s]+", phrase.lower()) if w]
+    if not wanted:
+        return False
+    said = [tokenize(w) | {w} for w in words(question.replace("_", " "))]
+    return any(
+        all(wanted[i] in said[start + i] for i in range(len(wanted)))
+        for start in range(len(said) - len(wanted) + 1)
+    )
+
+
 # json/jsonb columns get JSON_NOTE in the schema shown to the model, unless
 # their description already explains how to read them (_json_note).
 JSON_TYPES = ("json", "jsonb")
@@ -857,16 +881,20 @@ class SchemaCatalog:
                 if f"{table['schema']}.{table['name']}" not in domain_tables
                 and self.name_score(table, terms) >= FULL_NAME_MATCH
             ]
-            # A word the domain also uses ("order" for purchase_order) is
-            # read the domain's way: it doesn't name a table outside it
-            # (sale_order, alias "order"). A word only the outside table
-            # has ("sales" in "sales order") still does.
+            # Words that one domain table already covers ("order" for
+            # purchase_order) are read the domain's way: they don't name a
+            # table outside it (sale_order, alias "order"). A word no
+            # single domain table has ("sales" in "sales order") still
+            # does, and so does a phrase typed out in full ("stock_move").
             if outside and self._retrieval_setting("named_outside_domain_distinct"):
                 domain_words = self._domain_words(domain_tables)
-                kept = [(score, t) for score, t in outside
-                        if self._named_apart(t, terms, domain_words)]
-                shared = [t["name"] for _, t in outside
-                          if all(t is not k for _, k in kept)]
+                kept, shared = [], []
+                for score, t in outside:
+                    covered_by = self._covered_by(t, terms, domain_words, question)
+                    if covered_by:
+                        shared.append(f"{t['name']} (as {covered_by})")
+                    else:
+                        kept.append((score, t))
                 if shared:
                     print("[schema] Named outside the domain only by words "
                           f"the domain also uses, not added: {', '.join(shared)}")
@@ -1000,34 +1028,60 @@ class SchemaCatalog:
 
     def _domain_words(self, domain_tables):
         """
-        Every word form in the names, labels and aliases of a domain's
-        (loaded) tables: what a question word can already mean inside
-        the domain. Column names and aliases don't count.
+        The word forms of each (loaded) domain table's name, label and
+        aliases, one set per table: {"public.purchase_order": {"purchase",
+        "order", "po", ...}, ...}. Column names and aliases don't count,
+        nor do filler words ("of", "and").
         """
-        found = set()
-        for full_name in domain_tables:
+        found = {}
+        for full_name in sorted(domain_tables):
             table = self.tables.get(full_name)
             if table is None:
                 continue
             names = [table["name"], *table.get("aliases", ())]
             if table.get("label"):
                 names.append(table["label"])
+            table_words = set()
             for name in names:
                 for forms in phrase_parts(name):
-                    found |= forms
+                    table_words |= forms
+            found[full_name] = table_words - NAMING_FILLER
         return found
 
-    def _named_apart(self, table, terms, domain_words):
+    def _covered_by(self, table, terms, domain_words, question=""):
         """
-        True if some phrase naming this outside table has a word the
-        domain doesn't use ("sales" in "sales order", seen from
-        Purchasing). False if every naming word is also the domain's
-        ("order" alone): the domain's reading of the word wins.
+        The domain table whose own words cover every phrase naming this
+        outside table, or None if the outside table is named apart.
+
+        A phrase names the table apart when no single domain table has
+        all of its words ("stock move" seen from Accounting, even when
+        "stock" and "move" each appear in some Accounting table), or when
+        it is typed out in full in the question and has two or more words
+        ("stock_move", "sales order"). One-word phrases ("order") are
+        never exempt: that is the ambiguity this check is for. Filler
+        words ("of" in "bill of materials") are ignored.
         """
-        return any(
-            any(not (forms & domain_words) for forms in phrase_parts(phrase))
-            for phrase in self._naming_phrases(table, terms)
-        )
+        covered = None
+        for phrase in self._naming_phrases(table, terms):
+            parts = [forms for forms in phrase_parts(phrase)
+                     if not forms & NAMING_FILLER]
+            if not parts:
+                continue
+            if len(parts) > 1 and typed_in_full(phrase, question):
+                return None
+            owner = next(
+                (name for name, table_words in domain_words.items()
+                 if all(forms & table_words for forms in parts)),
+                None)
+            if owner is None:
+                return None
+            covered = covered or owner.split(".")[-1]
+        return covered
+
+    def _named_apart(self, table, terms, domain_words, question=""):
+        """True if a phrase naming this outside table isn't covered by any
+        single domain table (see _covered_by)."""
+        return self._covered_by(table, terms, domain_words, question) is None
 
     def _link_tables(self, added, present, matched=(), terms=()):
         """

@@ -287,11 +287,13 @@ class RelationshipWalk(_Strict):
     #   add   add it, without walking its relationships
     #   note  log it only; the domain's schema is used as is
     named_outside_domain: Literal["walk", "add", "note"] = "add"
-    # Such a table counts as named only when a phrase naming it has a word
-    # that no table name, label or alias in the domain uses: "sales order"
-    # names sale_order from Purchasing, but "order" alone (an alias of
-    # sale_order, and part of purchase_order) is the domain's word, so
-    # the domain's reading wins. Off: any full-name match counts.
+    # Such a table is left out when every word of the phrase naming it
+    # belongs to one domain table's name, label or aliases: "order" alone
+    # (an alias of sale_order, and part of purchase_order) is read as
+    # purchase_order from Purchasing, but "sales order" names sale_order.
+    # Words spread over several domain tables don't count, a phrase of two
+    # or more words typed out in full always names its table, and filler
+    # words ("of") are ignored. Off: any full-name match counts.
     named_outside_domain_distinct: bool = True
     # At most this many link tables (named_outside_domain: add) per
     # question, the best matches to the question first, then the
