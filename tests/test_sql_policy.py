@@ -85,6 +85,49 @@ class PrepareSql(unittest.TestCase):
         self.assertEqual(p.withheld, [])
         self.assertIn("not authorised", p.failure_reason)
 
+    # QUALIFY (no such clause in PostgreSQL) becomes a subquery filtered
+    # outside; the row limit and ORDER BY must be outside too, after the
+    # filter, and only once.
+
+    def test_qualify_limit_and_order_after_the_filter(self):
+        p = self.prepare(
+            "SELECT p.product_name, c.category_name, ROW_NUMBER() OVER "
+            "(PARTITION BY c.category_id ORDER BY p.unit_price DESC) AS product_rank "
+            "FROM products p JOIN categories c ON p.category_id = c.category_id "
+            "QUALIFY product_rank <= 3 ORDER BY c.category_name, product_rank")
+        self.assertIsNone(p.failure_reason)
+        self.assertEqual(p.sql.count("LIMIT"), 1)
+        self.assertTrue(p.sql.endswith(
+            ") AS _t WHERE product_rank <= 3 "
+            f"ORDER BY category_name, product_rank LIMIT {MAX_ROWS}"))
+
+    def test_qualify_prepared_again_is_unchanged(self):
+        # A correction or follow-up can feed the prepared SQL back in.
+        sql = self.prepare("SELECT product_name FROM products QUALIFY ROW_NUMBER() "
+                           "OVER (ORDER BY unit_price DESC) <= 5").sql
+        self.assertEqual(self.prepare(sql).sql, sql)
+        self.assertEqual(sql.count("LIMIT"), 1)
+
+    def test_qualify_own_limit_offset_and_unselected_order(self):
+        p = self.prepare("SELECT p.product_name FROM products p QUALIFY ROW_NUMBER() "
+                         "OVER (ORDER BY p.unit_price DESC) <= 3 "
+                         "ORDER BY p.supplier_id, 1 DESC LIMIT 10 OFFSET 5")
+        self.assertIn(", p.supplier_id AS _o1 FROM products AS p) AS _t", p.sql)
+        self.assertTrue(p.sql.endswith(
+            "ORDER BY _o1, product_name DESC LIMIT 10 OFFSET 5"))
+
+    def test_qualify_distinct_keeps_unselected_order_inside(self):
+        p = self.prepare("SELECT DISTINCT p.product_name FROM products p QUALIFY "
+                         "ROW_NUMBER() OVER (ORDER BY p.unit_price) <= 3 "
+                         "ORDER BY p.supplier_id")
+        self.assertIn("ORDER BY p.supplier_id) AS _t", p.sql)
+        self.assertTrue(p.sql.endswith(f"LIMIT {MAX_ROWS}"))
+
+    def test_qualify_restricted_column_still_blocked(self):
+        p = self.prepare("SELECT company_name FROM customers QUALIFY ROW_NUMBER() "
+                         "OVER (ORDER BY fax) <= 3")
+        self.assertIn("not authorised", p.failure_reason)
+
     def test_column_named_like_a_joined_table_is_a_column(self):
         # customers.region beside the region table: a column, not a
         # whole-row reference to region.

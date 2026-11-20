@@ -12,9 +12,11 @@
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.transforms import eliminate_qualify
 
 from sqlagent.controls.security_utils import (
     contains_case_insensitive,
@@ -581,6 +583,104 @@ def apply_query_limits_tree(tree):
 
 
 # ---------------------------------------------------------------------------
+# QUALIFY
+# ---------------------------------------------------------------------------
+# The model sometimes writes QUALIFY (Snowflake / BigQuery: filter on a
+# window function, e.g. QUALIFY ROW_NUMBER() OVER (...) <= 3). PostgreSQL
+# and SQL Server have no QUALIFY, so sqlglot renders it as a subquery
+# filtered outside:
+#
+#     SELECT a, rn FROM (SELECT a, ROW_NUMBER() ... AS rn FROM t
+#                        ORDER BY a LIMIT 100) AS _t WHERE rn <= 3
+#
+# Left to the renderer, that happens after the row limit was added, so the
+# limit (and the ORDER BY) end up INSIDE, before the filter: the database
+# could cap the rows before the top-n filter and drop rows that should be
+# there, and the order isn't guaranteed outside the subquery. QUALIFY runs
+# before ORDER BY and LIMIT, so here the rewrite is done first and both
+# move to the outer query.
+
+
+@lru_cache(maxsize=None)
+def _dialect_has_qualify(dialect):
+    """True when the dialect renders QUALIFY as written."""
+    probe = sqlglot.parse_one("SELECT a FROM t QUALIFY a = 1", read="snowflake")
+    return "QUALIFY" in probe.sql(dialect=dialect).upper()
+
+
+def _outer_order(inner):
+    """
+    The subquery's ORDER BY rewritten for the outer query, by output name.
+    A term that is one of the subquery's columns (sqlglot adds those the
+    QUALIFY filter uses) or a position (ORDER BY 2) is named; any other
+    term is added to the subquery as _o1, _o2, ... and sorted on there.
+    None for a SELECT DISTINCT whose ORDER BY isn't all selected columns:
+    an added column would change which rows are distinct.
+    """
+    selects = inner.selects
+    names = {}
+    for projection in selects:
+        name = projection.alias_or_name
+        names[projection.sql().lower()] = name
+        names[name.lower()] = name
+        if isinstance(projection, exp.Alias):
+            names[projection.this.sql().lower()] = name
+    taken = {p.alias_or_name.lower() for p in selects}
+    ordered, added = [], []
+    for term in inner.args["order"].expressions:
+        key = term.this
+        if isinstance(key, exp.Literal) and not key.is_string \
+                and key.this.isdigit() and 1 <= int(key.this) <= len(selects):
+            name = selects[int(key.this) - 1].alias_or_name
+        else:
+            name = names.get(key.sql().lower())
+        if name is None:
+            n = len(added) + 1
+            while f"_o{n}" in taken:
+                n += 1
+            name = f"_o{n}"
+            taken.add(name)
+            added.append(exp.alias_(key.copy(), name))
+        moved = term.copy()
+        moved.set("this", exp.Column(this=ident(name)))
+        ordered.append(moved)
+    if added and inner.args.get("distinct"):
+        return None
+    if added:
+        inner.set("expressions", list(selects) + added)
+    return exp.Order(expressions=ordered)
+
+
+def eliminate_qualify_tree(tree):
+    """
+    A SELECT with QUALIFY rewritten, for a dialect without QUALIFY, as
+    sqlglot renders it - the query in a subquery, filtered outside - but
+    with the ORDER BY, LIMIT and OFFSET on the outer query (see
+    _outer_order for the one case the ORDER BY stays inside). Returns the (possibly new) tree;
+    anything else is returned unchanged.
+    """
+    if (not isinstance(tree, exp.Select) or not tree.args.get("qualify")
+            or _dialect_has_qualify(active_dialect())):
+        return tree
+    limit, offset = tree.args.get("limit"), tree.args.get("offset")
+    tree.set("limit", None)
+    tree.set("offset", None)
+
+    outer = eliminate_qualify(tree)
+    inner = (outer.args.get("from_") or outer.args.get("from")).this.this
+    if inner.args.get("order"):
+        order = _outer_order(inner)
+        if order is not None:
+            inner.set("order", None)
+            outer.set("order", order)
+    if limit is not None:
+        outer.set("limit", limit)
+    if offset is not None:
+        outer.set("offset", offset)
+    return outer
+
+
+# ---------------------------------------------------------------------------
 # Preparation: parse once, transform the tree, check the final text
 # ---------------------------------------------------------------------------
 
@@ -612,7 +712,8 @@ def prepare_sql(sql, security, catalog):
         parse
           -> drop restricted columns from the SELECT list
           -> validate (structure + authorisation)
-          -> expand SELECT * to authorised columns, add the row limit
+          -> expand SELECT * to authorised columns, rewrite QUALIFY,
+             add the row limit
           -> validate the FINAL TEXT again
 
     The statement is parsed once and every step works on that tree. The
@@ -647,6 +748,7 @@ def prepare_sql(sql, security, catalog):
         return result
 
     rewrite_select_stars_tree(tree, security, catalog)
+    tree = eliminate_qualify_tree(tree)
     apply_query_limits_tree(tree)
     final_sql = tree.sql(dialect=active_dialect())
     if final_sql != result.sql:
