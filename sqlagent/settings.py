@@ -343,8 +343,10 @@ class RetrievalSettings(_Strict):
 
 class SqlFormat(_Strict):
     """How rewritten SQL is laid out in the console log (sqlglot's pretty
-    options). Display only: the SQL that runs is not changed."""
+    options; see sql_display.py). Display only: the SQL that runs is not
+    changed."""
     pretty: bool = True
+    layout: Literal["compact", "sqlglot"] = "compact"
     pad: int = Field(4, ge=0, le=16)
     indent: int = Field(4, ge=0, le=16)
     leading_comma: bool = False

@@ -22,6 +22,11 @@ table_value_chars: 40
 # always shown as it wrote it.
 sql_format:
   pretty: true              # false: one line, as before
+  layout: compact           # compact: closer to hand-written SQL - short
+                            # clauses on one line, JOIN ... ON together,
+                            # no AS on table aliases (see
+                            # sqlagent/sql_display.py); sqlglot: sqlglot's
+                            # own layout
   pad: 4                    # indent of the column list under SELECT
   indent: 4                 # indent of subqueries and WHERE conditions
   leading_comma: false      # true: ", column" at the start of each line

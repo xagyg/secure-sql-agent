@@ -9,8 +9,6 @@
 import logging
 from dataclasses import dataclass
 
-import sqlglot
-
 from sqlagent.controls.messages import (
     WITHHELD_LABEL,
     WITHHELD_NOTE,
@@ -65,6 +63,7 @@ from sqlagent.execution.sql_diagnostics import (
 )
 from sqlagent.execution.sql_execution import execute_sql_with_sources
 from sqlagent.settings import get_settings
+from sqlagent.sql_display import format_sql
 from sqlagent.adaptive.text_match import tokenize
 
 logger = logging.getLogger(__name__)
@@ -107,16 +106,7 @@ def _pretty_sql(sql):
     """SQL laid out one clause per line (repl.yaml sql_format), for the
     console only. What runs, what the model sees and the history keep the
     compact text. Returned as is when it can't be parsed."""
-    fmt = get_settings().repl.sql_format
-    if not fmt.pretty:
-        return sql
-    try:
-        return sqlglot.transpile(
-            sql, read=active_dialect(), write=active_dialect(), pretty=True,
-            pad=fmt.pad, indent=fmt.indent, leading_comma=fmt.leading_comma,
-            max_text_width=fmt.max_text_width)[0]
-    except Exception:
-        return sql
+    return format_sql(sql, active_dialect(), get_settings().repl.sql_format)
 
 
 def _is_unparseable(reason):
